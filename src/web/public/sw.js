@@ -1,7 +1,7 @@
 // Service worker (FR-U6): app-shell caching ONLY — v1 is not offline-first
 // (§2.5): mutations require connectivity; /api is always network-first.
 const SHELL = 'tk-shell-v1';
-const SHELL_ASSETS = ['/', '/manifest.webmanifest', '/favicon.svg'];
+const SHELL_ASSETS = ['/', '/manifest.webmanifest', '/favicon.svg', '/theme-boot.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_ASSETS)).then(() => self.skipWaiting()));
