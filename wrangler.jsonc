@@ -1,0 +1,86 @@
+// TimeKeep Web — Wrangler configuration
+// Create resources first (see README): D1 database, KV namespace, optional R2 bucket.
+// Replace REPLACE_ME ids below, then `wrangler d1 migrations apply timekeep --remote`.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "timekeep-web",
+	"main": "src/worker/index.ts",
+	"compatibility_date": "2025-05-05",
+	"assets": {
+		"directory": "./dist/client",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		// All requests hit the Worker first: /api/* is handled by Hono,
+		// everything else is passed through to Static Assets (SPA fallback).
+		"run_worker_first": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "timekeep",
+			"database_id": "REPLACE_ME",
+			"migrations_dir": "migrations"
+		}
+  ],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "USER_HUB",
+				"class_name": "UserHub"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"UserHub"
+			]
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "REPLACE_ME"
+		}
+	],
+	// Optional: daily logical dumps to R2 (FR-D3). Remove block if unused.
+	"r2_buckets": [
+	],
+	"triggers": {
+		// Daily 03:17 UTC — logical dump, sync_log prune, dump retention prune
+		"crons": [
+			"17 3 * * *"
+		]
+	},
+	"rules": [
+		{
+			"type": "Text",
+			"globs": [
+				"**/*.txt"
+			],
+			"fallthrough": true
+		}
+	],
+	"define": {
+		// CI sets the real deploy SHA; default keeps local dev honest
+		"__BUILD_SHA__": "\"dev\""
+	},
+	"vars": {
+		// KDF iterations (NFR-3: >= 600_000). Workers caps a single PBKDF2 deriveBits
+		// call at 100k — the code chains rounds to reach this total. Each chained
+		// round costs CPU, so free-tier (10 ms CPU) still can't do 600k; Workers
+		// Paid recommended. Lower this only for local dev.
+		"PBKDF2_ITERATIONS": "600000",
+		// Comma-separated origins allowed for state-changing requests (defaults to the request origin).
+		"ALLOWED_ORIGINS": "",
+		// Dev-only: return verification/reset links in API responses when no email provider is configured.
+		"EMAIL_DEV_MODE": "0",
+		"FROM_EMAIL": "TimeKeep <no-reply@timekeep.example.com>"
+		// Secrets (set via `wrangler secret put`): SESSION_SECRET, TURNSTILE_SECRET_KEY,
+		// TURNSTILE_SITE_KEY (public var), RESEND_API_KEY
+	},
+	"observability": {
+		"enabled": true
+	}
+}

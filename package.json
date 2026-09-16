@@ -1,0 +1,38 @@
+{
+  "name": "timekeep-web",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "TimeKeep Web — time tracking & task management on Cloudflare Workers + D1 + Durable Objects",
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite",
+    "dev:worker": "wrangler dev --port 8787",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply timekeep --local",
+    "db:migrate:remote": "wrangler d1 migrations apply timekeep --remote"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.9",
+    "hono": "^4.7.10",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260911.0",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.18.0"
+  },
+  "allowScripts": {
+    "workerd@1.20260911.1": true
+  }
+}
