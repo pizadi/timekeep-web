@@ -3,7 +3,7 @@
 // Exported: the Hono fetch handler, the UserHub DO, and the scheduled cron.
 import { Hono } from 'hono';
 import type { WorkerType } from './env';
-import { securityHeaders, csrfGuard, requireAuth, optionalAuth } from './middleware';
+import { securityHeaders, securityHeadersFor, csrfGuard, requireAuth, optionalAuth } from './middleware';
 import { sha256Hex } from './auth';
 import { authRoutes } from './routes/auth';
 import { meRoutes } from './routes/me';
@@ -37,6 +37,17 @@ app.get('/api/version', (c) => c.json({
 app.get('/api/ws', async (c) => {
   if (c.req.header('upgrade') !== 'websocket')
     return c.json({ error: { code: 'bad_request', message: 'websocket upgrade required' } }, 400);
+  // defense in depth (SameSite=Lax already blocks cross-site cookies): reject
+  // cross-origin upgrade attempts when the browser supplies an Origin
+  const origin = c.req.header('origin');
+  if (origin) {
+    try {
+      if (new URL(origin).host !== new URL(c.req.url).host)
+        return c.json({ error: { code: 'csrf', message: 'cross-origin request blocked' } }, 403);
+    } catch {
+      return c.json({ error: { code: 'csrf', message: 'cross-origin request blocked' } }, 403);
+    }
+  }
   const cookieHeader = c.req.header('cookie') ?? '';
   const match = cookieHeader.match(/(?:^|;\s*)tk_session=([A-Za-z0-9]+)/);
   if (!match) return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
@@ -92,8 +103,10 @@ export default {
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
       return app.fetch(request, env, ctx);
     }
-    // SPA via Static Assets (not_found_handling: single-page-application)
-    return env.ASSETS.fetch(request);
+    // SPA via Static Assets (not_found_handling: single-page-application) — with the
+    // same security headers as the API (CSP/HSTS/XFO/nosniff must cover the HTML shell)
+    const res = await env.ASSETS.fetch(request);
+    return securityHeadersFor(env, res, url);
   },
 
   async scheduled(_event: ScheduledController, env: WorkerType['Bindings'], _ctx: ExecutionContext): Promise<void> {

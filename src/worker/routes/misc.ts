@@ -3,15 +3,20 @@
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitHeavy } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
 import { appendEvents, notifyHub } from '../events';
 import { DEFAULT_SETTINGS } from '../defaults';
 
 export const miscRoutes = new Hono<WorkerType>();
 
+// ---------- public config (pre-auth: Turnstile widget needs the site key) ----------
+miscRoutes.get('/config', (c) => c.json({ turnstile_site_key: c.env.TURNSTILE_SITE_KEY ?? null }));
+
 // ---------- bootstrap ----------
 miscRoutes.get('/bootstrap', requireAuth, async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const userId = c.get('user').id;
   const [projects, tasks, subtasks, deps, settingsRow, hubState] = await Promise.all([
     c.env.DB.prepare(
@@ -135,6 +140,8 @@ miscRoutes.delete('/layout/:projectId', requireAuth, async (c) => {
 
 // ---------- sync delta / polling fallback (FR-N3, FR-N5) ----------
 miscRoutes.get('/sync', requireAuth, async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const since = Number(c.req.query('since') ?? 0);
   const rows = await c.env.DB.prepare(
     `SELECT id, type, payload, created_at FROM sync_log

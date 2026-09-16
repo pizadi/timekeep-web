@@ -10,7 +10,8 @@ export default function AuthView() {
   const [turnstileToken, setTurnstileToken] = useState('');
 
   useEffect(() => {
-    api<{ turnstile_site_key: string | null }>('/settings')
+    // public (pre-auth) config — /settings requires a session
+    api<{ turnstile_site_key: string | null }>('/config')
       .then((r) => setSiteKey(r.turnstile_site_key))
       .catch(() => setSiteKey(null));
   }, []);

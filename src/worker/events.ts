@@ -41,3 +41,9 @@ export function notifyHub(env: Env, userId: string, events: WsEvent[]): void {
   // waitUntil at call sites (or plain ignore) — a lost notify only costs a refetch.
   stub.fetch(req).catch(() => {});
 }
+
+/** Best-effort: close the user's live WebSockets after their sessions were revoked. */
+export function revokeHub(env: Env, userId: string): void {
+  const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
+  stub.fetch(new Request('https://do/revoke', { method: 'POST' })).catch(() => {});
+}

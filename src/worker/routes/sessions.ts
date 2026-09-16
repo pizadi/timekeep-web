@@ -12,7 +12,8 @@ import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';
 
 export const sessionRoutes = new Hono<WorkerType>();
-sessionRoutes.use('*', requireAuth);
+sessionRoutes.use('/sessions', requireAuth);
+sessionRoutes.use('/sessions/*', requireAuth);
 
 const LIST_LIMIT = LIMITS.logPageSize;
 
@@ -66,8 +67,10 @@ sessionRoutes.post('/sessions', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid session payload', parsed.error.flatten());
   const { task_id, started_at, ended_at, note } = parsed.data;
 
-  const task = await c.env.DB.prepare('SELECT id, project_id, name FROM tasks WHERE id = ?1 AND user_id = ?2')
-    .bind(task_id, userId).first<any>();
+  const task = await c.env.DB.prepare(
+    `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
+     WHERE t.id = ?1 AND t.user_id = ?2`
+  ).bind(task_id, userId).first<any>();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   if (task.archived) return jsonError(422, 'archived', 'this project is archived — new sessions are blocked on it');
 

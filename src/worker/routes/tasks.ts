@@ -14,7 +14,11 @@ import { ulid } from '../../shared/ids';
 import { findCyclePath } from '../../shared/validation';
 
 export const taskRoutes = new Hono<WorkerType>();
-taskRoutes.use('*', requireAuth);
+taskRoutes.use('/tasks', requireAuth);
+taskRoutes.use('/tasks/*', requireAuth);
+taskRoutes.use('/subtasks', requireAuth);
+taskRoutes.use('/subtasks/*', requireAuth);
+taskRoutes.use('/projects/*', requireAuth);
 
 async function getProjectOwned(c: any, id: string) {
   const p = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?1 AND user_id = ?2')
@@ -73,6 +77,7 @@ taskRoutes.patch('/tasks/:id', async (c) => {
   const u = parsed.data;
 
   if (u.project_id && u.project_id !== existing.project_id) {
+    await getProjectOwned(c, u.project_id); // the target project must be the user's own
     await assertReparentSafe(c.env, userId, existing.id, u.project_id);
   }
 

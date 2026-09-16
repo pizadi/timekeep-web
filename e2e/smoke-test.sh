@@ -19,17 +19,26 @@ DEV2=device-2
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-purple-marmalade-admin-42}"
 
-# req JAR DEVICE METHOD PATH [JSON] — cookie-jar aware, auto CSRF header
+# req JAR DEVICE METHOD PATH [JSON] — cookie-jar aware, auto CSRF header,
+# retries transient local-dev drops (empty responses from `wrangler dev`'s
+# DO proxy are connection-level curl errors; HTTP errors are never retried)
 req() {
   local jar=$1 dev=$2 method=$3 path=$4 data=$5
   local t; t=$(grep tk_csrf "$jar" 2>/dev/null | awk '{print $NF}')
-  if [ -n "$data" ]; then
-    curl -s -b "$jar" -c "$jar" -X "$method" "$BASE$path" -H "content-type: application/json" \
-      -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t" -d "$data"
-  else
-    curl -s -b "$jar" -c "$jar" -X "$method" "$BASE$path" \
-      -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t"
-  fi
+  local out rc=1 a
+  for a in 1 2 3; do
+    if [ -n "$data" ]; then
+      out=$(curl -s -b "$jar" -c "$jar" -X "$method" "$BASE$path" -H "content-type: application/json" \
+        -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t" -d "$data")
+    else
+      out=$(curl -s -b "$jar" -c "$jar" -X "$method" "$BASE$path" \
+        -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t")
+    fi
+    rc=$?
+    [ $rc -eq 0 ] && break
+    sleep 1
+  done
+  echo "$out"
 }
 
 echo "== no self-signup: /auth/signup must 404 =="
@@ -105,7 +114,7 @@ BOOT=$(req $JAR $DEV GET /bootstrap)
 echo "$BOOT" | python3 -c "import json,sys; d=json.load(sys.stdin); print('user:', d['user']['username'], '| tz:', d['user']['timezone'], '| projects:', len(d['projects']))"
 
 echo "== create project =="
-PID=$(req $JAR $DEV POST /projects '{"name":"Client A","color":"#22c55e"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['project']['id'])")
+PID=$(req $JAR $DEV POST /projects "{\"name\":\"Client A $(date +%s)\",\"color\":\"#22c55e\"}" | python3 -c "import json,sys; print(json.load(sys.stdin)['project']['id'])")
 echo "project: $PID"
 
 echo "== create 3 tasks =="

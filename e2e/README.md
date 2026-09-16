@@ -40,3 +40,6 @@ node e2e/ws-test.mjs
 
 All scripts target `http://127.0.0.1:8787`. `roundtrip-test.mjs` deletes the
 `dana` account — re-run the smoke test afterwards to recreate it.
+
+> Local quirk: `wrangler dev`'s DO proxy sometimes drops a request mid-run
+> (`Network connection lost`) — just re-run the script; production is unaffected.

@@ -8,6 +8,7 @@ import { requireAuth, requireAdmin } from '../middleware';
 import { adminCreateSchema, adminPatchSchema, adminResetSchema } from '../validators';
 import { isValidEmail, passwordProblem } from '../../shared/validation';
 import { hashPassword, isCommonPassword } from '../auth';
+import { revokeHub } from '../events';
 import { ulid } from '../../shared/ids';
 
 export const adminRoutes = new Hono<WorkerType>();
@@ -65,11 +66,12 @@ adminRoutes.patch('/admin/users/:id', async (c) => {
 
   if (parsed.data.active === 0) {
     if (target.role === 'admin') return jsonError(422, 'validation', 'the admin account cannot be deactivated');
-    // deactivation kills every live session; data is never touched
+    // deactivation kills every live session + socket; data is never touched
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE users SET active = 0, updated_at = ?1 WHERE id = ?2').bind(Date.now(), id),
       c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id)
     ]);
+    revokeHub(c.env, id);
   } else {
     await c.env.DB.prepare('UPDATE users SET active = 1, updated_at = ?1 WHERE id = ?2').bind(Date.now(), id).run();
   }
@@ -96,5 +98,6 @@ adminRoutes.post('/admin/users/:id/password', async (c) => {
     ).bind(await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS)), Date.now(), id),
     c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id)
   ]);
+  revokeHub(c.env, id);
   return c.json({ ok: true });
 });

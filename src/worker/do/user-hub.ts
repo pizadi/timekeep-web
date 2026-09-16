@@ -122,6 +122,13 @@ export class UserHub extends DurableObject {
     if (url.pathname === '/state') {
       return Response.json(this.stateSnapshot());
     }
+    if (url.pathname === '/revoke') {
+      // sessions were revoked (deactivation / password reset) — drop live sockets
+      for (const ws of this.ctx.getWebSockets()) {
+        try { ws.close(4001, 'session revoked'); } catch { /* already closing */ }
+      }
+      return Response.json({ ok: true });
+    }
     if (url.pathname === '/notify') {
       const body = await request.json<{ events: WsEvent[] }>().catch(() => null);
       if (body?.events?.length) {
@@ -216,8 +223,8 @@ export class UserHub extends DurableObject {
     }
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.id = ?1`
-    ).bind(taskId).first<any>();
+       WHERE t.id = ?1 AND t.user_id = ?2`
+    ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
 
@@ -291,8 +298,8 @@ export class UserHub extends DurableObject {
       return this.timerStart(taskId, device, 'timer');
     }
     const task = await this.env.DB.prepare(
-      `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?1`
-    ).bind(taskId).first<any>();
+      `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?1 AND t.user_id = ?2`
+    ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
     if (task.id === this.running.task_id) {

@@ -5,11 +5,12 @@
 // The running session is included, clipped to `now` (FR-R6).
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitHeavy } from '../middleware';
 import { dayBounds, weekStartInstant, civilDate, dayStartInstant, minutes } from '../../shared/time';
 
 export const reportRoutes = new Hono<WorkerType>();
-reportRoutes.use('*', requireAuth);
+reportRoutes.use('/reports', requireAuth);
+reportRoutes.use('/reports/*', requireAuth);
 
 // days CTE: ?1 = [["2026-09-01", startMs, endMs], …] (one text parameter —
 // D1's bound-parameter limit never binds regardless of range length).
@@ -21,6 +22,8 @@ const DAYS_CTE = `
   )`;
 
 reportRoutes.get('/reports/summary', async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const userId = c.get('user').id;
   const user = c.get('user');
   const now = Date.now();
@@ -99,6 +102,8 @@ reportRoutes.get('/reports/summary', async (c) => {
 });
 
 reportRoutes.get('/reports/heatmap', async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const userId = c.get('user').id;
   const user = c.get('user');
   const now = Date.now();

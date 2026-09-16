@@ -9,6 +9,7 @@ import {
   requireAuth, setSessionCookie, clearSessionCookie, clientIp,
   rateLimitHit, tooMany, rateRules, verifyTurnstile, issueCsrfCookie
 } from '../middleware';
+import { revokeHub } from '../events';
 
 import { loginSchema, verifyEmailSchema, resetRequestSchema, resetConfirmSchema } from '../validators';
 import { isValidEmail, passwordProblem } from '../../shared/validation';
@@ -162,6 +163,7 @@ authRoutes.post('/auth/reset-confirm', async (c) => {
       .bind(hash, row.user_id),
     c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(row.user_id)
   ]);
+  revokeHub(c.env, row.user_id);
   clearSessionCookie(c);
   return c.json({ ok: true });
 });

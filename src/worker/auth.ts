@@ -106,11 +106,13 @@ export function getEmailSender(env: Env): EmailSender {
       }
     };
   }
-  // Dev fallback: log to console only. If EMAIL_DEV_MODE=1 the API may also surface
-  // the link in its response so a developer can click it without a mailbox.
+  // Dev fallback: log to console only (never a real delivery). The body contains
+  // token links — redact unless EMAIL_DEV_MODE is on (dev-only surfaces links in
+  // API responses too), so tokens never land in retained Worker logs in prod.
   return {
     async send(to, subject, text) {
-      console.log(`[dev-email] to=${to} subject=${subject} body=${text}`);
+      const dev = env.EMAIL_DEV_MODE === '1';
+      console.log(`[dev-email] to=${to} subject=${subject}${dev ? ` body=${text}` : ' (body redacted)'}`);
     }
   };
 }

@@ -2,15 +2,17 @@
 import { Hono } from 'hono';
 import type { WorkerType, UserInfo } from '../env';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, clearSessionCookie } from '../middleware';
 import { profilePatchSchema, passwordChangeSchema } from '../validators';
 import { isValidTimezone } from '../../shared/time';
 import { passwordProblem } from '../../shared/validation';
-import { appendEvents, notifyHub, EventDraft } from '../events';
+import { appendEvents, notifyHub, revokeHub, EventDraft } from '../events';
 import { sha256Hex, hashPassword, verifyPassword, isCommonPassword } from '../auth';
 
 export const meRoutes = new Hono<WorkerType>();
-meRoutes.use('*', requireAuth);
+// scoped — a sub-app use('*') would leak requireAuth onto every /api path
+meRoutes.use('/me', requireAuth);
+meRoutes.use('/me/*', requireAuth);
 
 const publicUser = (u: any): UserInfo => ({
   id: u.id, username: u.username, email: u.email, name: u.name, timezone: u.timezone,
@@ -81,8 +83,7 @@ meRoutes.post('/me/password', async (c) => {
     c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2')
       .bind(user.id, c.get('authSessionId'))
   ]);
-  return c.json({ ok: true });
-});
+  return c.json({ ok: true });});
 
 /** Hard delete: FK cascades remove every user-owned row (FR-A8, NFR-4). */
 meRoutes.delete('/me', async (c) => {
@@ -109,10 +110,10 @@ meRoutes.delete('/me', async (c) => {
     c.env.DB.prepare('DELETE FROM oauth_accounts WHERE user_id = ?1').bind(userId),
     c.env.DB.prepare('DELETE FROM users WHERE id = ?1').bind(userId)
   ]);
+  clearSessionCookie(c);
+  revokeHub(c.env, userId);
   return c.json({ ok: true });
 });
-
-// ---------- active sessions (FR-A6) ----------
 
 meRoutes.get('/me/sessions', async (c) => {
   const rows = await c.env.DB.prepare(

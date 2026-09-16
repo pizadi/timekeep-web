@@ -11,7 +11,8 @@ import { ulid } from '../../shared/ids';
 import { PALETTE } from '../../shared/constants';
 
 export const projectRoutes = new Hono<WorkerType>();
-projectRoutes.use('*', requireAuth);
+projectRoutes.use('/projects', requireAuth);
+projectRoutes.use('/projects/*', requireAuth);
 
 async function getOwned(c: any, id: string) {
   const p = await c.env.DB.prepare(

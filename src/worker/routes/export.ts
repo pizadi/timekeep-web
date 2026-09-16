@@ -4,17 +4,22 @@
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitHeavy } from '../middleware';
 import { importSchema, restoreSchema } from '../validators';
 import { ulid, isUlid } from '../../shared/ids';
 import { EXPORT_SCHEMA_VERSION, LIMITS } from '../../shared/constants';
 
 export const exportRoutes = new Hono<WorkerType>();
-exportRoutes.use('*', requireAuth);
+exportRoutes.use('/export', requireAuth);
+exportRoutes.use('/export/*', requireAuth);
+exportRoutes.use('/import', requireAuth);
+exportRoutes.use('/restore', requireAuth);
 
 // ---------- export (FR-D1) ----------
 
 exportRoutes.get('/export', async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const userId = c.get('user').id;
   const format = c.req.query('format') ?? 'json';
 
@@ -34,17 +39,22 @@ exportRoutes.get('/export', async (c) => {
       const s = v === null || v === undefined ? '' : String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+    // OWASP CSV formula injection: neutralize spreadsheet-active leading chars
+    const csvSafe = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    };
     const lines = ['project,task,start_iso,end_iso,duration_min,source,note'];
     const taskName = new Map((tasks.results as any[]).map((t) => [t.id, t.name]));
     const projName = new Map((projects.results as any[]).map((p) => [p.id, p.name]));
     for (const s of rows) {
       const mins = Math.round(((s.ended_at ?? Date.now()) - s.started_at) / 60000);
       lines.push([
-        esc(projName.get((tasks.results as any[]).find((t: any) => t.id === s.task_id)?.project_id)),
-        esc(taskName.get(s.task_id)),
+        esc(csvSafe(projName.get((tasks.results as any[]).find((t: any) => t.id === s.task_id)?.project_id))),
+        esc(csvSafe(taskName.get(s.task_id))),
         new Date(s.started_at).toISOString(),
         s.ended_at ? new Date(s.ended_at).toISOString() : '',
-        String(mins), esc(s.source), esc(s.note)
+        String(mins), esc(csvSafe(s.source)), esc(csvSafe(s.note))
       ].join(','));
     }
     return new Response(lines.join('\r\n'), {
@@ -81,6 +91,8 @@ function safeJson(s: string): unknown {
 // ---------- import (FR-D2) ----------
 
 exportRoutes.post('/import', async (c) => {
+  const limited = await limitHeavy(c);
+  if (limited) return limited;
   const userId = c.get('user').id;
   const parsed = await importSchema.safeParseAsync(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid import payload', parsed.error.flatten());

@@ -9,7 +9,10 @@ import { requireAuth } from '../middleware';
 import { pomoStartSchema, ulidish } from '../validators';
 
 export const timerRoutes = new Hono<WorkerType>();
-timerRoutes.use('*', requireAuth);
+timerRoutes.use('/timer', requireAuth);
+timerRoutes.use('/timer/*', requireAuth);
+timerRoutes.use('/pomo', requireAuth);
+timerRoutes.use('/pomo/*', requireAuth);
 
 async function callHub(c: any, path: string, body?: unknown, method = 'POST'): Promise<Response> {
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(c.get('user').id));

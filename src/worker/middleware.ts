@@ -11,30 +11,36 @@ import {
   SESSION_COOKIE, CSRF_COOKIE, CSRF_HEADER, SESSION_TTL_MS, SESSION_ROTATE_BEFORE_MS
 } from '../shared/constants';
 
+const CSP_BODY = (turnstileOn: boolean) =>
+  [
+    "default-src 'self'",
+    "script-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
+    "font-src 'self'",
+    turnstileOn ? "frame-src https://challenges.cloudflare.com" : '',
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "object-src 'none'"
+  ].filter(Boolean).join('; ');
+
+/** Applies the full header set to any response — used for API *and* static-asset responses. */
+export function securityHeadersFor(env: Env, res: Response, url: URL): Response {
+  const out = new Response(res.body, res);
+  const turnstileOn = !!env.TURNSTILE_SITE_KEY && !!env.TURNSTILE_SECRET_KEY;
+  out.headers.set('Content-Security-Policy', CSP_BODY(turnstileOn));
+  out.headers.set('X-Content-Type-Options', 'nosniff');
+  out.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  out.headers.set('X-Frame-Options', 'DENY');
+  if (url.protocol === 'https:') out.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  return out;
+}
+
 export const securityHeaders = createMiddleware<WorkerType>(async (c, next) => {
   await next();
-  c.header('X-Content-Type-Options', 'nosniff');
-  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
-  c.header('X-Frame-Options', 'DENY');
-  const turnstileOn = !!c.env.TURNSTILE_SITE_KEY && !!c.env.TURNSTILE_SECRET_KEY;
-  c.header(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      "script-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
-      "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
-      "font-src 'self'",
-      turnstileOn ? "frame-src https://challenges.cloudflare.com" : '',
-      "frame-ancestors 'none'",
-      "base-uri 'none'",
-      "form-action 'self'",
-      "object-src 'none'"
-    ].filter(Boolean).join('; ')
-  );
-  const url = new URL(c.req.url);
-  if (url.protocol === 'https:') c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  c.res = securityHeadersFor(c.env, c.res, new URL(c.req.url));
 });
 
 // ---------- session auth ----------
@@ -242,6 +248,17 @@ export function tooMany(retryAfterS: number) {
     status: 429,
     headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, retryAfterS)) }
   });
+}
+
+/**
+ * Per-user throttle for heavy endpoints (reports, export, import, bootstrap,
+ * sync — NFR-3 `apiUser`). Returns a 429 response when over budget, else null.
+ * Deliberately NOT applied to every request: KV counters are eventually
+ * consistent and chatty small requests would hammer one hot key per user/minute.
+ */
+export async function limitHeavy(c: any): Promise<Response | null> {
+  const rl = await rateLimitHit(c.env, rateRules(c.env).apiUser, c.get('user').id);
+  return rl ? tooMany(rl) : null;
 }
 
 // ---------- Turnstile (FR-A2) ----------
