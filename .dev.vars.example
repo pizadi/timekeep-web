@@ -1,15 +1,18 @@
 # Copy to .dev.vars for local `wrangler dev` (never commit).
 # All of these are OPTIONAL in dev — the app degrades gracefully:
 #  - Turnstile disabled when secret absent
-#  - Email "provider" prints links to the Worker console and (with EMAIL_DEV_MODE=1) returns them in API responses
-SESSION_SECRET=dev-only-change-me-0123456789abcdef
+#  - Email "provider" prints links to the Worker console when EMAIL_DEV_MODE=1
+#    (API responses never carry token links)
 PBKDF2_ITERATIONS=1000
 EMAIL_DEV_MODE=1
 FROM_EMAIL=TimeKeep <dev@localhost>
 # TURNSTILE_SECRET_KEY=0x...
 # TURNSTILE_SITE_KEY=0x...
 # RESEND_API_KEY=re_...
-# Optional local-only rate-limit overrides (tests hammer the login endpoint):
+# Optional local-only rate-limit overrides (tests hammer the login endpoint;
+# token endpoints default to 30/15min — remove RL_TOKEN_IP to test that limit):
 RL_LOGIN_IP=1000
 RL_LOGIN_EMAIL=1000
 RL_SIGNUP_IP=1000
+RL_ADMIN_IP=1000
+RL_TOKEN_IP=1000

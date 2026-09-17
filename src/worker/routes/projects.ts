@@ -2,10 +2,11 @@
 // Every mutation returns the updated entity and emits a sync_log event (FR-N2).
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
+import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { projectCreateSchema, projectPatchSchema, reorderSchema } from '../validators';
-import { assertProjectLimit, RuleError } from '../rules';
+import { assertProjectLimit, RuleError, isUniqueConstraintError } from '../rules';
 import { appendEvents, notifyHub, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { PALETTE } from '../../shared/constants';
@@ -14,7 +15,7 @@ export const projectRoutes = new Hono<WorkerType>();
 projectRoutes.use('/projects', requireAuth);
 projectRoutes.use('/projects/*', requireAuth);
 
-async function getOwned(c: any, id: string) {
+async function getOwned(c: Context<WorkerType>, id: string) {
   const p = await c.env.DB.prepare(
     'SELECT * FROM projects WHERE id = ?1 AND user_id = ?2'
   ).bind(id, c.get('user').id).first();
@@ -48,7 +49,7 @@ projectRoutes.post('/projects', async (c) => {
        VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)`
     ).bind(id, c.get('user').id, parsed.data.name, color, (posRow?.p ?? -1) + 1, now).run();
   } catch (e: any) {
-    if (String(e?.message ?? '').includes('UNIQUE')) // UNIQUE(user_id, name)
+    if (isUniqueConstraintError(e)) // UNIQUE(user_id, name)
       return jsonError(422, 'duplicate', 'a project with this name already exists');
     throw e;
   }
@@ -56,7 +57,7 @@ projectRoutes.post('/projects', async (c) => {
   const project = await getOwned(c, id);
   const drafts: EventDraft[] = [{ type: 'project.created', actor: c.get('deviceId'), data: { project } }];
   const evs = await appendEvents(c.env, c.get('user').id, drafts);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ project, events: evs }, 201);
 });
 
@@ -79,14 +80,14 @@ projectRoutes.patch('/projects/:id', async (c) => {
   try {
     await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
   } catch (e: any) {
-    if (String(e?.message ?? '').includes('UNIQUE'))
+    if (isUniqueConstraintError(e))
       return jsonError(422, 'duplicate', 'a project with this name already exists');
     throw e;
   }
   const project = await getOwned(c, existing.id);
   const evs = await appendEvents(c.env, c.get('user').id,
     [{ type: 'project.updated', actor: c.get('deviceId'), data: { project } }]);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ project, events: evs });
 });
 
@@ -98,10 +99,13 @@ projectRoutes.post('/projects/reorder', async (c) => {
     c.env.DB.prepare('UPDATE projects SET position = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4')
       .bind(i, now, id, c.get('user').id)
   );
-  if (stmts.length) await c.env.DB.batch(stmts);
+  // chunked like import/layout — stay under D1 batch statement limits
+  for (let i = 0; i < stmts.length; i += 50) {
+    await c.env.DB.batch(stmts.slice(i, i + 50));
+  }
   const evs = await appendEvents(c.env, c.get('user').id,
     [{ type: 'project.updated', actor: c.get('deviceId'), data: { reordered: parsed.data.ids } }]);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ ok: true, events: evs });
 });
 
@@ -112,31 +116,38 @@ projectRoutes.post('/projects/reorder', async (c) => {
 projectRoutes.delete('/projects/:id', async (c) => {
   const project = await getOwned(c, c.req.param('id'));
   const userId = c.get('user').id;
-  const tasks = await c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1 AND user_id = ?2')
-    .bind(project.id, userId).all();
-  const taskIds = tasks.results.map((t: any) => t.id);
-  const subtasks = taskIds.length
-    ? (await c.env.DB.prepare('SELECT * FROM subtasks WHERE user_id = ?1').bind(userId).all()).results
-      .filter((s: any) => taskIds.includes(s.task_id))
-    : [];
-  const deps = taskIds.length
-    ? (await c.env.DB.prepare('SELECT * FROM task_dependencies WHERE user_id = ?1').bind(userId).all()).results
-      .filter((d: any) => taskIds.includes(d.task_id) || taskIds.includes(d.depends_on_id))
-    : [];
-  const sessions = taskIds.length
-    ? (await c.env.DB.prepare(
-      `SELECT s.* FROM time_sessions s JOIN tasks t ON t.id = s.task_id
-       WHERE t.project_id = ?1 AND s.user_id = ?2`
-    ).bind(project.id, userId).all()).results
-    : [];
 
-  await c.env.DB.prepare('DELETE FROM projects WHERE id = ?1 AND user_id = ?2')
-    .bind(project.id, userId).run(); // cascades
+  // One transactional batch: scoped SQL (no whole-table loads filtered in JS)
+  // plus the delete observe one consistent snapshot, so rows created
+  // concurrently can't be cascade-deleted while missing from the undo payload.
+  const [tasks, subtasks, deps, sessions, ,] = await c.env.DB.batch([
+    c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1 AND user_id = ?2')
+      .bind(project.id, userId),
+    c.env.DB.prepare(
+      `SELECT sb.* FROM subtasks sb
+       WHERE sb.user_id = ?1 AND sb.task_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`
+    ).bind(userId, project.id),
+    c.env.DB.prepare(
+      `SELECT td.* FROM task_dependencies td
+       WHERE td.user_id = ?1 AND (td.task_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)
+          OR td.depends_on_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1))`
+    ).bind(userId, project.id),
+    c.env.DB.prepare(
+      `SELECT s.* FROM time_sessions s
+       WHERE s.user_id = ?1 AND s.task_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`
+    ).bind(userId, project.id),
+    c.env.DB.prepare('DELETE FROM projects WHERE id = ?1 AND user_id = ?2')
+      .bind(project.id, userId) // cascades
+  ]);
 
   const evs = await appendEvents(c.env, userId, [{
     type: 'project.deleted', actor: c.get('deviceId'),
-    data: { project, tasks: tasks.results, subtasks, dependencies: deps, sessions }
+    data: { project, tasks: tasks.results, subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results }
   }]);
-  notifyHub(c.env, userId, evs);
-  return c.json({ deleted: true, undo: { project, tasks: tasks.results, subtasks, dependencies: deps, sessions }, events: evs });
+  notifyHub(c.env, userId, evs, c.executionCtx);
+  return c.json({
+    deleted: true,
+    undo: { project, tasks: tasks.results, subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results },
+    events: evs
+  });
 });

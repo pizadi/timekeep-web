@@ -2,7 +2,8 @@
 import { z } from 'zod';
 import { HEX_COLOR_RE, LIMITS, POMODORO_LIMITS } from '../shared/constants';
 
-export const ulidish = z.string().regex(/^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/, 'invalid id');
+// Uppercase-only, matching isUlid() in shared/ids.ts (ids are generated uppercase).
+export const ulidish = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'invalid id');
 
 // Login identifier: username (canonical) or legacy email. Lowercased.
 export const loginSchema = z.object({
@@ -82,10 +83,14 @@ export const subtaskPatchSchema = z.object({
 
 export const depCreateSchema = z.object({ depends_on_id: ulidish });
 
+// Manual sessions are always closed intervals: an open-ended (ended_at NULL) row
+// is the *running* session, owned exclusively by the timer authority (UserHub DO);
+// allowing null here would collide with the partial unique index
+// idx_sessions_running.
 export const sessionCreateSchema = z.object({
   task_id: ulidish,
   started_at: z.number().int(),
-  ended_at: z.number().int().nullable(),
+  ended_at: z.number().int(),
   note: z.string().max(LIMITS.noteMax).optional().default(''),
   source: z.enum(['manual']).optional().default('manual')
 });
@@ -93,7 +98,7 @@ export const sessionCreateSchema = z.object({
 export const sessionPatchSchema = z.object({
   task_id: ulidish.optional(),
   started_at: z.number().int().optional(),
-  ended_at: z.number().int().nullable().optional(),
+  ended_at: z.number().int().optional(),
   note: z.string().max(LIMITS.noteMax).optional()
 });
 
@@ -130,12 +135,24 @@ export const importSchema = z.object({
   })
 });
 
+// Undo payloads (FR-T4) are produced by delete routes, so the caps here must
+// cover the *largest possible legitimate delete*: a project with 5000 tasks,
+// up to 100 subtasks each, and 200k sessions. The total-row guard uses
+// LIMITS.restoreMaxRows, sized to cover those maxima combined.
+const RESTORE_COLLECTION_MAX = LIMITS.subtasksPerTask * LIMITS.tasksPerUser;
+
 export const restoreSchema = z.object({
   projects: z.array(z.any()).max(LIMITS.projectsActive).default([]),
-  tasks: z.array(z.any()).max(2000).default([]),
-  subtasks: z.array(z.any()).max(5000).default([]),
-  dependencies: z.array(z.any()).max(5000).default([]),
-  sessions: z.array(z.any()).max(5000).default([])
+  tasks: z.array(z.any()).max(LIMITS.tasksPerUser).default([]),
+  subtasks: z.array(z.any()).max(RESTORE_COLLECTION_MAX).default([]),
+  dependencies: z.array(z.any()).max(RESTORE_COLLECTION_MAX).default([]),
+  sessions: z.array(z.any()).max(LIMITS.sessionsPerUser).default([])
+}).superRefine((d, ctx) => {
+  const total = d.projects.length + d.tasks.length + d.subtasks.length
+    + d.dependencies.length + d.sessions.length;
+  if (total > LIMITS.restoreMaxRows) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `restore payload exceeds ${LIMITS.restoreMaxRows} total rows` });
+  }
 });
 
 export const pomoStartSchema = z.object({ task_id: ulidish.optional() });

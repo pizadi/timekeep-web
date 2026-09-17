@@ -2,10 +2,9 @@
 // notifications, security (active sessions FR-A6), danger zone (export FR-D1,
 // delete account FR-A8).
 import { useEffect, useState } from 'react';
-import { store, useStore, pushToast } from '../lib/store';
+import { store, useStore, pushToast, go } from '../lib/store';
 import { api } from '../lib/api';
 import { applyTheme, ThemePref } from '../lib/theme';
-import { go } from '../App';
 
 interface AuthSessionRow { id: string; user_agent: string; ip: string; created_at: number; last_seen_at: number; current: boolean }
 interface AdminUserRow {
@@ -14,9 +13,9 @@ interface AdminUserRow {
   email_verified_at: number | null; created_at: number;
 }
 
+// Theme is applied through the imported applyTheme().
 export default function SettingsView({ onClose, currentTheme }: {
   onClose: () => void;
-  applyTheme: (p: ThemePref, persist?: boolean) => void;
   currentTheme: ThemePref;
 }) {
   const user = useStore((s) => s.user)!;
@@ -321,4 +320,3 @@ function supportedTimezones(): string[] {
   } catch { return ['UTC']; }
 }
 
-export { go };

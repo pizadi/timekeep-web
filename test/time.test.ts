@@ -3,7 +3,7 @@
 // (spring-forward), plus midnight clipping (FR-R1 AC).
 import { describe, it, expect } from 'vitest';
 import {
-  dayStartInstant, bucketByDay, civilDate, weekStartInstant, zoneOffsetMs, dayBounds
+  dayStartInstant, bucketByDay, civilDate, weekStartInstant, zoneOffsetMs, dayBounds, addDaysCivil
 } from '../src/shared/time';
 
 const TEHRAN = 'Asia/Tehran';
@@ -90,5 +90,16 @@ describe('timezone engine (NFR-6)', () => {
       '2026-10-01', '2026-10-01', 'UTC', now
     );
     expect(mins(buckets[0]!.ms)).toBe(60);
+  });
+
+  it('day-end via addDaysCivil+dayStartInstant is DST-correct', () => {
+    // The old `+ 86_400_000` bound was off by an hour on 23/25-hour days.
+    // Exclusive end of 2026-03-08 (23h) must equal the start of 2026-03-09.
+    const d = dayStartInstant('2026-03-08', NEW_YORK);
+    const end = dayStartInstant(addDaysCivil('2026-03-08', 1), NEW_YORK);
+    expect((end - d) / 3600_000).toBe(23);
+    const dF = dayStartInstant('2026-11-01', NEW_YORK);
+    const endF = dayStartInstant(addDaysCivil('2026-11-01', 1), NEW_YORK);
+    expect((endF - dF) / 3600_000).toBe(25);
   });
 });

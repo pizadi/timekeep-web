@@ -8,7 +8,10 @@ export const LIMITS = {
   nameMax: 120,
   noteMax: 2_000,
   logPageSize: 200,
-  restoreMaxRows: 20_000
+  // Total-row cap for /restore (undo). Sized to cover the largest possible
+  // legitimate delete payload: 200 projects + 5000 tasks + 500k subtasks
+  // (100/task) + 500k dependencies + 200k sessions.
+  restoreMaxRows: 1_250_000
 } as const;
 
 export const POMODORO_DEFAULTS = {
@@ -51,7 +54,8 @@ export const EVENT_TYPES = [
   'project.created', 'project.updated', 'project.deleted',
   'dependency.created', 'dependency.deleted',
   'pomodoro.phase',
-  'settings.updated'
+  'settings.updated',
+  'import.completed'
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

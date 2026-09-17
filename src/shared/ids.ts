@@ -26,10 +26,11 @@ function randomBytes(n: number): number[] {
 export function ulid(now: number = Date.now()): string {
   let rand: number[];
   if (now === lastTime) {
-    // increment previous randomness by 1 (80-bit little-endian-ish counter)
+    // increment the 80-bit randomness as a base-32 counter (least-significant
+    // symbol first), with carry — symbols saturate at 31, never exceed the alphabet
     rand = lastRand.slice();
     for (let i = rand.length - 1; i >= 0; i--) {
-      if (rand[i]! < 32) { rand[i] = rand[i]! + 1; break; }
+      if (rand[i]! < 31) { rand[i] = rand[i]! + 1; break; }
       rand[i] = 0;
     }
   } else {
@@ -41,6 +42,7 @@ export function ulid(now: number = Date.now()): string {
 }
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** Uppercase-only to match ids produced by ulid(); see validators.ulidish. */
 export function isUlid(s: string): boolean {
   return ULID_RE.test(s);
 }

@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
-import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput, tzOf } from '../lib/time';
+import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput } from '../lib/time';
+import { addDaysCivil, dayStartInstant } from '../../shared/time';
 
 interface LogRow {
   id: string; task_id: string; started_at: number; ended_at: number | null;
@@ -23,18 +24,28 @@ export default function LogView() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
+  const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [editing, setEditing] = useState<Partial<LogRow> | 'new' | null>(null);
+
+  // debounce the note filter — a request per keystroke would trip the
+  // per-user rate limit while typing
+  useEffect(() => {
+    const t = setTimeout(() => setQ(qInput), 300);
+    return () => clearTimeout(t);
+  }, [qInput]);
 
   const load = useCallback(async (reset: boolean) => {
     const params = new URLSearchParams();
     if (projectId) params.set('project_id', projectId);
     if (taskId) params.set('task_id', taskId);
     if (q) params.set('q', q);
-    if (from) params.set('from', String(fromLocalInput(`${from}T00:00`, tz)));
-    if (to) params.set('to', String(fromLocalInput(`${to}T00:00`, tz) + 86_400_000));
+    // civil-day boundaries via the shared day engine (DST-correct on
+    // 23/25-hour days, unlike a fixed +24h)
+    if (from) params.set('from', String(dayStartInstant(from, tz)));
+    if (to) params.set('to', String(dayStartInstant(addDaysCivil(to, 1), tz)));
     if (!reset && cursor) params.set('cursor', cursor);
     try {
       const res = await api<{ sessions: LogRow[]; next_cursor: string | null }>(`/sessions?${params}`);
@@ -44,9 +55,39 @@ export default function LogView() {
   }, [projectId, taskId, q, from, to, cursor, tz]);
 
   useEffect(() => { void load(true); }, [projectId, taskId, q, from, to, reportsVersion]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
 
-  const taskById = (id: string) => tasks.find((t) => t.id === id);
+  // heatmap drill-down (FR-R3): "click a day to inspect its sessions"
+  useEffect(() => {
+    const onFocusDay = (e: Event) => {
+      const day = (e as CustomEvent<string>).detail;
+      if (typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        setFrom(day);
+        setTo(day);
+      }
+    };
+    window.addEventListener('tk:focus-day', onFocusDay);
+    return () => window.removeEventListener('tk:focus-day', onFocusDay);
+  }, []);
+
+  // recovery "Discard (opens editor)" (FR-S3) — prefilled editor request from TimerBar
+  useEffect(() => {
+    const onEditSession = (e: Event) => {
+      const d = (e as CustomEvent).detail ?? {};
+      setEditing({
+        id: d.id,
+        task_id: d.task_id,
+        started_at: d.started_at,
+        ended_at: d.ended_at,
+        source: 'timer',
+        note: '',
+        task_name: '',
+        project_name: '',
+        project_color: ''
+      });
+    };
+    window.addEventListener('tk:edit-session', onEditSession);
+    return () => window.removeEventListener('tk:edit-session', onEditSession);
+  }, []);
 
   async function del(row: LogRow) {
     try {
@@ -85,7 +126,7 @@ export default function LogView() {
           </label>
           <label className="field" style={{ width: 170, marginBottom: 0 }}>
             <span>Note search</span>
-            <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contains…" />
+            <input className="input" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="contains…" />
           </label>
           <div className="spacer" />
           <button className="btn primary" onClick={() => setEditing('new')}>＋ Manual session</button>
@@ -147,7 +188,7 @@ export default function LogView() {
           initial={editing === 'new' ? null : editing}
           tz={tz}
           defaultTaskId={taskId || undefined}
-          suggestEnd={editing !== 'new' ? undefined : Date.now()}
+          suggestEnd={editing === 'new' ? Date.now() : undefined}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); void load(true); store.bumpReports(); }}
         />
@@ -173,20 +214,53 @@ function SessionEditor({
   const selectedTaskId = useStore((s) => s.selectedTaskId);
 
   const [taskId, setTaskId] = useState(initial?.task_id ?? defaultTaskId ?? selectedTaskId ?? tasks[0]?.id ?? '');
+  const [taskText, setTaskText] = useState(
+    initial?.task_id ? (tasks.find((t) => t.id === initial.task_id)?.name ?? '') : ''
+  );
   const [start, setStart] = useState(toLocalInput(initial?.started_at ?? Date.now() - 3600_000, tz));
-  const [end, setEnd] = useState(initial?.ended_at ? toLocalInput(initial.ended_at, tz) : (suggestEnd ? toLocalInput(suggestEnd, tz) : toLocalInput(Date.now(), tz)));
-  const [hasEnd, setHasEnd] = useState(initial?.ended_at != null || !initial);
+  // manual sessions are closed intervals: open-ended rows collide with the
+  // running-session unique index
+  const [end, setEnd] = useState(initial?.ended_at
+    ? toLocalInput(initial.ended_at, tz)
+    : toLocalInput(suggestEnd ?? Date.now(), tz));
   const [note, setNote] = useState(initial?.note ?? '');
   const [error, setError] = useState<{ message: string; conflicts?: any[] } | null>(null);
 
   const isEdit = !!initial?.id;
 
+  const filteredTasks = tasks; // picker is searchable below rather than pre-filtered
+
+  /** Resolve typed text → task id: exact (case-insensitive), then unique contains. */
+  const resolveTask = (text: string): string | null => {
+    const t = text.trim().toLowerCase();
+    if (!t) return null;
+    const exact = filteredTasks.find((x) => x.name.toLowerCase() === t);
+    if (exact) return exact.id;
+    const hits = filteredTasks.filter((x) => x.name.toLowerCase().includes(t));
+    return hits.length === 1 ? hits[0]!.id : null;
+  };
+
   async function save() {
     setError(null);
+    // never save against a silently-stale task: typed text that matches
+    // nothing is an error, not "keep the previous selection"
+    let finalTaskId = taskId;
+    if (taskText.trim().toLowerCase() !== (tasks.find((t) => t.id === taskId)?.name ?? '').toLowerCase()) {
+      const resolved = resolveTask(taskText);
+      if (!resolved) {
+        setError({ message: 'Pick a task from the list — no exact or unique match for that name' });
+        return;
+      }
+      finalTaskId = resolved;
+    }
+    if (!finalTaskId) {
+      setError({ message: 'Pick a task from the list' });
+      return;
+    }
     const body = {
-      task_id: taskId,
+      task_id: finalTaskId,
       started_at: fromLocalInput(start, tz),
-      ended_at: hasEnd ? fromLocalInput(end, tz) : null,
+      ended_at: fromLocalInput(end, tz),
       note
     };
     try {
@@ -200,19 +274,17 @@ function SessionEditor({
     }
   }
 
-  const projectOf = (tid: string) => tasks.find((t) => t.id === tid)?.project_id;
-  const filteredTasks = tasks; // picker is searchable below rather than pre-filtered
-
   return (
     <div className="modal-overlay" role="dialog" aria-label="Session editor" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>{isEdit ? 'Edit session' : 'Add manual session'}</h3>
         <label className="field">
           <span>Task</span>
-          <input className="input" list="tk-task-picker" value={taskName(taskId, filteredTasks)}
+          <input className="input" list="tk-task-picker" value={taskText}
             onChange={(e) => {
-              const hit = filteredTasks.find((t) => t.name.toLowerCase() === e.target.value.toLowerCase());
-              if (hit) setTaskId(hit.id);
+              setTaskText(e.target.value);
+              const hit = resolveTask(e.target.value);
+              if (hit) setTaskId(hit);
             }} placeholder="Type to search…" />
           <datalist id="tk-task-picker">
             {projects.map((p) => (
@@ -231,11 +303,8 @@ function SessionEditor({
           </label>
           <label className="field">
             <span>End</span>
-            <input className="input" type="datetime-local" value={end} disabled={!hasEnd}
+            <input className="input" type="datetime-local" value={end}
               onChange={(e) => setEnd(e.target.value)} />
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5, color: 'var(--muted)', marginTop: 4 }}>
-              <input type="checkbox" checked={hasEnd} onChange={(e) => setHasEnd(e.target.checked)} /> has end
-            </label>
           </label>
         </div>
         <label className="field">
@@ -264,9 +333,3 @@ function SessionEditor({
     </div>
   );
 }
-
-function taskName(id: string, tasks: any[]): string {
-  return tasks.find((t) => t.id === id)?.name ?? '';
-}
-
-export { tzOf };

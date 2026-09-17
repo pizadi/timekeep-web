@@ -2,17 +2,17 @@
 // recovery banner (FR-S3) + Web Notifications (FR-Nt1).
 import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
-import { api, ApiError, nowMs } from '../lib/api';
+import { api, ApiError, nowMs, serverOffsetMs } from '../lib/api';
 import { fmtHMS } from '../lib/time';
 
 export default function TimerBar() {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
-  const user = useStore((s) => s.user);
   const pomo = useStore((s) => s.pomo);
   const serverNow = useStore((s) => s.serverNow);
   const [elapsed, setElapsed] = useState(0);
   const [recovering, setRecovering] = useState(false);
+  const promptedRef = useRef(false);
 
   const task = running ? tasks.find((t) => t.id === running.task_id) : null;
 
@@ -25,6 +25,14 @@ export default function TimerBar() {
     const iv = setInterval(compute, 1000);
     return () => clearInterval(iv);
   }, [running, serverNow]);
+
+  // FR-S3: a timer that was already running when this tab loaded gets a one-time
+  // recovery prompt
+  useEffect(() => {
+    if (!running || promptedRef.current) return;
+    promptedRef.current = true;
+    if (running.started_at < Date.now() - 5000) setRecovering(true);
+  }, [running]);
 
   // tab title + favicon badge = web tray icon (FR-U5)
   useEffect(() => {
@@ -53,17 +61,35 @@ export default function TimerBar() {
       };
       const msg = msgs[phase] ?? phase;
       pushToast('info', msg);
-      notifyIfPermitted(msg);
-      if (phase === 'decide' || phase === 'ready') notifyIfPermitted(msg);
+      notifyIfPermitted(msg); // exactly one notification per phase change
     }
     prevPhase.current = phase;
   }, [pomo?.phase]);
 
   async function stop() {
     try {
-      const res = await api<{ session: any }>('/timer/stop', { method: 'POST' });
+      await api('/timer/stop', { method: 'POST' });
       store.setRunning(null);
-      void res;
+    } catch (e: any) { pushToast('error', e.message); }
+  }
+
+  async function discardAndEdit() {
+    setRecovering(false);
+    if (!running) return;
+    const grace = (store.get().settings?.grace_min ?? 15) * 60_000;
+    try {
+      const res = await api<{ session: { id: string; task_id: string; started_at: number } }>('/timer/stop', { method: 'POST' });
+      store.setRunning(null);
+      // open the session editor with a suggested end of "now − grace" (FR-S3 AC)
+      store.navigateToView('log');
+      window.dispatchEvent(new CustomEvent('tk:edit-session', {
+        detail: {
+          id: res.session?.id,
+          task_id: res.session?.task_id,
+          started_at: res.session?.started_at ?? running.started_at,
+          ended_at: Date.now() - grace
+        }
+      }));
     } catch (e: any) { pushToast('error', e.message); }
   }
 
@@ -79,7 +105,12 @@ export default function TimerBar() {
         <div className="spacer" />
         <button className="btn stop" onClick={stop}>■ Stop</button>
       </div>
-      {recovering && <RecoveryPrompt onClose={() => setRecovering(false)} />}
+      {recovering && (
+        <RecoveryPrompt
+          onClose={() => setRecovering(false)}
+          onDiscard={discardAndEdit}
+        />
+      )}
     </>
   );
 }
@@ -90,11 +121,16 @@ function PomodoroRing() {
   const serverNow = useStore((s) => s.serverNow);
   if (!pomo || pomo.phase === 'idle') return null;
   const goal = Math.max(1, pomo.focus_goal_ms);
-  const live = pomo.phase === 'break' || pomo.phase === 'ready'
-    ? goal
-    : Math.min(goal, pomo.focus_ms_live);
+  // focus_ms_live / break_ms_left are DO-clock snapshots taken at the last
+  // phase event. Advance them by the time since the snapshot
+  // (server-corrected), so the ring/labels tick every second with serverNow.
+  const snapshotClientMs = (pomo.server_now ?? serverNow) - serverOffsetMs;
+  const sinceSnapshot = Math.max(0, serverNow - snapshotClientMs);
+  const focusLive = Math.min(goal, pomo.focus_ms_live + sinceSnapshot);
+  const breakLeft = Math.max(0, (pomo.break_ms_left ?? 0) - sinceSnapshot);
+  const live = pomo.phase === 'break' || pomo.phase === 'ready' ? goal : focusLive;
   const frac = pomo.phase === 'break'
-    ? 1 - Math.max(0, pomo.break_ms_left ?? 0) / Math.max(1, pomo.break_ms_total)
+    ? 1 - breakLeft / Math.max(1, pomo.break_ms_total)
     : live / goal;
   const color = pomo.phase === 'break' ? 'var(--ok)' : pomo.phase === 'decide' ? 'var(--warn)' : 'var(--accent)';
   const R = 13, C = 2 * Math.PI * R;
@@ -122,12 +158,12 @@ function PomodoroRing() {
       </svg>
       <span className="sub" style={{ fontSize: 12, color: 'var(--muted)' }}>
         {pomo.phase === 'break'
-          ? `break ${Math.ceil((pomo.break_ms_left ?? 0) / 1000 / 60)}m`
+          ? `break ${Math.ceil(breakLeft / 1000 / 60)}m`
           : pomo.phase === 'decide'
             ? 'goal!'
             : pomo.phase === 'ready'
               ? 'ready'
-              : `${Math.floor(Math.min(pomo.focus_ms_live, goal) / 60000)}/${Math.round(goal / 60000)}m`}
+              : `${Math.floor(focusLive / 60000)}/${Math.round(goal / 60000)}m`}
       </span>
       {pomo.phase === 'decide' && (
         <>
@@ -138,13 +174,15 @@ function PomodoroRing() {
       {(pomo.phase === 'break' || pomo.phase === 'focus' || pomo.phase === 'ready') && (
         <button className="btn ghost small" onClick={skip} aria-label="Skip pomodoro phase">skip</button>
       )}
-      <span hidden>{serverNow}</span>
     </span>
   );
 }
 
 /** Recovery banner shown after boot when a timer was already running (FR-S3). */
-export function RecoveryPrompt({ onClose }: { onClose: () => void }) {
+export function RecoveryPrompt({ onClose, onDiscard }: {
+  onClose: () => void;
+  onDiscard: () => void;
+}) {
   const running = useStore((s) => s.running);
   const settings = useStore((s) => s.settings);
   const tasks = useStore((s) => s.tasks);
@@ -161,7 +199,7 @@ export function RecoveryPrompt({ onClose }: { onClose: () => void }) {
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="btn primary" onClick={onClose}>Keep</button>
-          <button className="btn" onClick={onClose}>Discard (opens editor)</button>
+          <button className="btn" onClick={onDiscard}>Discard (opens editor)</button>
         </div>
         <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>
           Discard suggests an end time of “now − {grace / 60000} min” in the session editor (configurable in Settings).

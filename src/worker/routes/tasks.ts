@@ -2,6 +2,7 @@
 // (cycle-checked, FR-M4). Deleting returns the undo payload (FR-T4).
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
+import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { taskCreateSchema, taskPatchSchema, subtaskCreateSchema, subtaskPatchSchema, depCreateSchema } from '../validators';
@@ -20,7 +21,7 @@ taskRoutes.use('/subtasks', requireAuth);
 taskRoutes.use('/subtasks/*', requireAuth);
 taskRoutes.use('/projects/*', requireAuth);
 
-async function getProjectOwned(c: any, id: string) {
+async function getProjectOwned(c: Context<WorkerType>, id: string) {
   const p = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?1 AND user_id = ?2')
     .bind(id, c.get('user').id).first();
   if (!p) throw new RuleError(404, 'not_found', 'project not found');
@@ -63,7 +64,7 @@ taskRoutes.post('/projects/:id/tasks', async (c) => {
   const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?1').bind(id).first();
   const evs = await appendEvents(c.env, c.get('user').id,
     [{ type: 'task.created', actor: c.get('deviceId'), data: { task } }]);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ task, events: evs }, 201);
 });
 
@@ -77,8 +78,11 @@ taskRoutes.patch('/tasks/:id', async (c) => {
   const u = parsed.data;
 
   if (u.project_id && u.project_id !== existing.project_id) {
-    await getProjectOwned(c, u.project_id); // the target project must be the user's own
+    const targetProject = (await getProjectOwned(c, u.project_id)) as { archived: number };
     await assertReparentSafe(c.env, userId, existing.id, u.project_id);
+    // parity with task/session creation: no (re-)entry into archived projects
+    if (targetProject.archived)
+      return jsonError(422, 'archived', 'this project is archived — restore it to add tasks');
   }
 
   const sets: string[] = [];
@@ -97,7 +101,7 @@ taskRoutes.patch('/tasks/:id', async (c) => {
   // "done" changes affect map badges + charts legend → task.updated covers both (FR-N2)
   const evs = await appendEvents(c.env, userId,
     [{ type: 'task.updated', actor: c.get('deviceId'), data: { task } }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ task, events: evs });
 });
 
@@ -107,20 +111,23 @@ taskRoutes.delete('/tasks/:id', async (c) => {
     .bind(c.req.param('id'), userId).first<any>();
   if (!task) return jsonError(404, 'not_found', 'task not found');
 
-  const subtasks = await c.env.DB.prepare('SELECT * FROM subtasks WHERE task_id = ?1').bind(task.id).all();
-  const deps = await c.env.DB.prepare(
-    `SELECT * FROM task_dependencies WHERE user_id = ?1 AND (task_id = ?2 OR depends_on_id = ?2)`
-  ).bind(userId, task.id).all();
-  const sessions = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE task_id = ?1').bind(task.id).all();
-
-  await c.env.DB.prepare('DELETE FROM tasks WHERE id = ?1 AND user_id = ?2')
-    .bind(task.id, userId).run(); // cascades to subtasks/deps/sessions
+  // One transactional batch: the reads (undo payload) and the delete observe a
+  // consistent snapshot, so rows created concurrently can't vanish from the
+  // payload while still being cascade-deleted.
+  const [subtasks, deps, sessions, ,] = await c.env.DB.batch([
+    c.env.DB.prepare('SELECT * FROM subtasks WHERE task_id = ?1').bind(task.id),
+    c.env.DB.prepare(
+      `SELECT * FROM task_dependencies WHERE user_id = ?1 AND (task_id = ?2 OR depends_on_id = ?2)`
+    ).bind(userId, task.id),
+    c.env.DB.prepare('SELECT * FROM time_sessions WHERE task_id = ?1').bind(task.id),
+    c.env.DB.prepare('DELETE FROM tasks WHERE id = ?1 AND user_id = ?2').bind(task.id, userId) // cascades to subtasks/deps/sessions
+  ]);
 
   const evs = await appendEvents(c.env, userId, [{
     type: 'task.deleted', actor: c.get('deviceId'),
     data: { task, subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results }
   }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({
     deleted: true,
     undo: { tasks: [task], subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results },
@@ -151,7 +158,7 @@ taskRoutes.post('/tasks/:id/subtasks', async (c) => {
   const subtask = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1').bind(id).first();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'subtask.created', actor: c.get('deviceId'), data: { subtask, task_id: parent.id } }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ subtask, events: evs }, 201);
 });
 
@@ -178,7 +185,7 @@ taskRoutes.patch('/subtasks/:id', async (c) => {
   const type = u.done !== undefined && u.done !== !!existing.done ? 'subtask.toggled' : 'subtask.updated';
   const evs = await appendEvents(c.env, userId,
     [{ type, actor: c.get('deviceId'), data: { subtask } }] as EventDraft[]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ subtask, events: evs });
 });
 
@@ -190,7 +197,7 @@ taskRoutes.delete('/subtasks/:id', async (c) => {
   await c.env.DB.prepare('DELETE FROM subtasks WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId).run();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'subtask.deleted', actor: c.get('deviceId'), data: { subtask: existing } }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ deleted: true, undo: { subtasks: [existing] }, events: evs });
 });
 
@@ -212,7 +219,7 @@ taskRoutes.post('/tasks/:id/deps', async (c) => {
   const dep = await createDependency(c.env, userId, c.req.param('id'), parsed.data.depends_on_id);
   const evs = await appendEvents(c.env, userId,
     [{ type: 'dependency.created', actor: c.get('deviceId'), data: { dependency: dep } }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ dependency: dep, events: evs }, 201);
 });
 
@@ -229,6 +236,6 @@ taskRoutes.delete('/tasks/:id/deps/:depId', async (c) => {
   ).bind(taskId, depId, userId).run();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'dependency.deleted', actor: c.get('deviceId'), data: { dependency: existing } }]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ deleted: true, undo: { dependencies: [existing] }, events: evs });
 });

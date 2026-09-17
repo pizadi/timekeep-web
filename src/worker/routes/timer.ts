@@ -4,6 +4,7 @@
 // active_timers mirror if the DO is unavailable (FR-S3 recovery path).
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
+import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { pomoStartSchema, ulidish } from '../validators';
@@ -14,7 +15,7 @@ timerRoutes.use('/timer/*', requireAuth);
 timerRoutes.use('/pomo', requireAuth);
 timerRoutes.use('/pomo/*', requireAuth);
 
-async function callHub(c: any, path: string, body?: unknown, method = 'POST'): Promise<Response> {
+async function callHub(c: Context<WorkerType>, path: string, body?: unknown, method = 'POST'): Promise<Response> {
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(c.get('user').id));
   const url = `https://do${path}`;
   const req = body === undefined
@@ -27,7 +28,7 @@ async function callHub(c: any, path: string, body?: unknown, method = 'POST'): P
   return stub.fetch(req);
 }
 
-async function timerFallback(c: any) {
+async function timerFallback(c: Context<WorkerType>) {
   // D1 mirror: authoritative enough to render the recovery banner if the DO is cold.
   const row = await c.env.DB.prepare(
     `SELECT s.id, s.task_id, s.started_at, s.source, t.name AS task_name, p.name AS project_name
@@ -100,7 +101,7 @@ timerRoutes.post('/pomo/skip', async (c) => {
   return forward(c, res);
 });
 
-function forward(c: any, res: Response): Response {
+function forward(c: Context<WorkerType>, res: Response): Response {
   // Preserve the DO's JSON envelope (errors included) — it owns the semantics.
   const status = res.status;
   return new Response(res.body, {

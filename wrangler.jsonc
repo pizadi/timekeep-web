@@ -74,10 +74,11 @@
 		"PBKDF2_ITERATIONS": "600000",
 		// Comma-separated origins allowed for state-changing requests (defaults to the request origin).
 		"ALLOWED_ORIGINS": "",
-		// Dev-only: return verification/reset links in API responses when no email provider is configured.
+		// Dev-only: log verification/reset links to the Worker console when no email
+		// provider is configured. API responses never carry live token links.
 		"EMAIL_DEV_MODE": "0",
 		"FROM_EMAIL": "TimeKeep <no-reply@timekeep.example.com>"
-		// Secrets (set via `wrangler secret put`): SESSION_SECRET, TURNSTILE_SECRET_KEY,
+		// Secrets (set via `wrangler secret put`): TURNSTILE_SECRET_KEY,
 		// TURNSTILE_SITE_KEY (public var), RESEND_API_KEY
 	},
 	"observability": {

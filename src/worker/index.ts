@@ -35,7 +35,8 @@ app.get('/api/version', (c) => c.json({
 // (§5.6: "WebSocket upgrades re-verify the session"); the DO itself is only
 // reachable from this Worker (internal fetch), never from the public internet.
 app.get('/api/ws', async (c) => {
-  if (c.req.header('upgrade') !== 'websocket')
+  // HTTP tokens are case-insensitive — compare lowercased
+  if (c.req.header('upgrade')?.toLowerCase() !== 'websocket')
     return c.json({ error: { code: 'bad_request', message: 'websocket upgrade required' } }, 400);
   // defense in depth (SameSite=Lax already blocks cross-site cookies): reject
   // cross-origin upgrade attempts when the browser supplies an Origin

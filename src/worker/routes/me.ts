@@ -51,7 +51,7 @@ meRoutes.patch('/me', async (c) => {
   // timezone/theme changes sync to other devices (FR-A7 AC, FR-U1)
   const drafts: EventDraft[] = [{ type: 'settings.updated', actor: c.get('deviceId'), data: { profile: u } }];
   const evs = await appendEvents(c.env, c.get('user').id, drafts);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
 
   const fresh = await c.env.DB.prepare(
     `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,

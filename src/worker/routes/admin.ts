@@ -4,10 +4,11 @@
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, requireAdmin } from '../middleware';
+import { requireAuth, requireAdmin, rateLimitHit, rateRules, tooMany, clientIp } from '../middleware';
 import { adminCreateSchema, adminPatchSchema, adminResetSchema } from '../validators';
 import { isValidEmail, passwordProblem } from '../../shared/validation';
 import { hashPassword, isCommonPassword } from '../auth';
+import { isUniqueConstraintError } from '../rules';
 import { revokeHub } from '../events';
 import { ulid } from '../../shared/ids';
 
@@ -15,6 +16,14 @@ export const adminRoutes = new Hono<WorkerType>();
 // scoped to /admin/* — a sub-app use('*') would leak requireAdmin onto every
 // /api path mounted after this one (Hono merges sub-app middleware globally)
 adminRoutes.use('/admin/*', requireAuth, requireAdmin);
+
+
+// Admin mutations pay a full PBKDF2 (600k iterations in prod) — IP-keyed
+// and env-overridable.
+async function limitAdmin(c: any): Promise<Response | null> {
+  const rl = await rateLimitHit(c.env, rateRules(c.env).adminIp, clientIp(c) ?? 'unknown');
+  return rl ? tooMany(rl) : null;
+}
 
 adminRoutes.get('/admin/users', async (c) => {
   const rows = await c.env.DB.prepare(
@@ -27,6 +36,8 @@ adminRoutes.get('/admin/users', async (c) => {
 });
 
 adminRoutes.post('/admin/users', async (c) => {
+  const limited = await limitAdmin(c);
+  if (limited) return limited;
   const parsed = adminCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload', parsed.error.flatten());
   const { username, name, email, password } = parsed.data;
@@ -47,7 +58,7 @@ adminRoutes.post('/admin/users', async (c) => {
     ).bind(id, email ?? username, username,
       await hashPassword(password, Number(c.env.PBKDF2_ITERATIONS)), name, now).run();
   } catch (e: any) {
-    if (String(e?.message ?? '').toUpperCase().includes('UNIQUE'))
+    if (isUniqueConstraintError(e))
       return jsonError(409, 'conflict', 'that username or email is already taken');
     throw e;
   }
@@ -57,6 +68,8 @@ adminRoutes.post('/admin/users', async (c) => {
 });
 
 adminRoutes.patch('/admin/users/:id', async (c) => {
+  const limited = await limitAdmin(c);
+  if (limited) return limited;
   const id = c.req.param('id');
   const parsed = adminPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
@@ -79,6 +92,8 @@ adminRoutes.patch('/admin/users/:id', async (c) => {
 });
 
 adminRoutes.post('/admin/users/:id/password', async (c) => {
+  const limited = await limitAdmin(c);
+  if (limited) return limited;
   const id = c.req.param('id');
   const parsed = adminResetSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');

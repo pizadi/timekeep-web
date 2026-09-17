@@ -3,6 +3,7 @@
 // KV-backed rate limiting, and optional Turnstile verification.
 
 import { createMiddleware } from 'hono/factory';
+import type { Context } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { WorkerType, Env } from './env';
 import { jsonError } from './env';
@@ -15,6 +16,9 @@ const CSP_BODY = (turnstileOn: boolean) =>
   [
     "default-src 'self'",
     "script-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
+    // 'unsafe-inline' is a documented trade-off: React inline styles need it.
+    // Tightening requires extracted styles or nonce-based CSS — revisit if the
+    // stylesheet grows beyond inline style attributes.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
@@ -45,19 +49,21 @@ export const securityHeaders = createMiddleware<WorkerType>(async (c, next) => {
 
 // ---------- session auth ----------
 
+type Ctx = Context<WorkerType>;
+
 interface SessionRow {
   id: string; user_id: string; token_hash: string;
   expires_at: number; last_seen_at: number;
 }
 
-async function loadSession(c: any): Promise<{ session: SessionRow } | null> {
+async function loadSession(c: Ctx): Promise<{ session: SessionRow } | null> {
   const token = getCookie(c, SESSION_COOKIE);
   if (!token) return null;
   const hash = await sha256Hex(token);
   const row = await c.env.DB.prepare(
     `SELECT s.id, s.user_id, s.token_hash, s.expires_at, s.last_seen_at
      FROM auth_sessions s WHERE s.token_hash = ?1`
-  ).bind(hash).first() as unknown as SessionRow | null;
+  ).bind(hash).first<SessionRow>();
   if (!row) return null;
   const now = Date.now();
   if (row.expires_at < now) {
@@ -67,7 +73,7 @@ async function loadSession(c: any): Promise<{ session: SessionRow } | null> {
   return { session: row };
 }
 
-async function rotateIfNeeded(c: any, session: SessionRow): Promise<void> {
+async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<void> {
   const now = Date.now();
   const left = session.expires_at - now;
   // Sliding expiry: every authenticated request extends the window; rotate the
@@ -89,7 +95,7 @@ async function rotateIfNeeded(c: any, session: SessionRow): Promise<void> {
   }
 }
 
-export function setSessionCookie(c: any, token: string, expiresAtMs: number): void {
+export function setSessionCookie(c: Ctx, token: string, expiresAtMs: number): void {
   const https = new URL(c.req.url).protocol === 'https:';
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true, secure: https, sameSite: 'Lax', path: '/',
@@ -97,13 +103,16 @@ export function setSessionCookie(c: any, token: string, expiresAtMs: number): vo
   });
 }
 
-export function clearSessionCookie(c: any): void {
+export function clearSessionCookie(c: Ctx): void {
   const https = new URL(c.req.url).protocol === 'https:';
   deleteCookie(c, SESSION_COOKIE, { path: '/', secure: https });
 }
 
-export function clientIp(c: any): string | null {
-  return c.req.header('cf-connecting-ip') ?? null;
+export function clientIp(c: Ctx): string | null {
+  // cf-connecting-ip is absent under `wrangler dev`; x-forwarded-for keeps
+  // per-client buckets distinct where a proxy provides one.
+  const fwd = c.req.header('x-forwarded-for');
+  return c.req.header('cf-connecting-ip') ?? (fwd ? fwd.split(',')[0]!.trim() : null) ?? null;
 }
 
 /**
@@ -116,9 +125,11 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
   const { session } = loaded;
   const now = Date.now();
   if (now - session.last_seen_at > 60_000) {
-    const extend = Math.min(session.expires_at + 0, now + SESSION_TTL_MS); // sliding window
-    await c.env.DB.prepare('UPDATE auth_sessions SET last_seen_at = ?1, expires_at = ?2 WHERE id = ?3')
-      .bind(now, extend, session.id).run();
+    // last-seen heartbeat only: expiry is a fixed 30-day window; renewal happens
+    // via token rotation in the final 7 days (rotateIfNeeded), which issues a
+    // fresh session with a full TTL.
+    await c.env.DB.prepare('UPDATE auth_sessions SET last_seen_at = ?1 WHERE id = ?2')
+      .bind(now, session.id).run();
   }
   const user = await c.env.DB.prepare(
     `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
@@ -138,6 +149,9 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
   c.set('deviceId', c.req.header('x-device-id') ?? 'unknown');
   await rotateIfNeeded(c, session);
   await next();
+  // Re-issue the double-submit cookie if it was lost (browser restart while the
+  // 30-day session cookie persists) so the second CSRF layer resumes.
+  if (!getCookie(c, CSRF_COOKIE)) issueCsrfCookie(c);
 });
 
 /** While must_change_password is set, only these endpoints respond. */
@@ -206,7 +220,7 @@ export function allowedOrigins(env: Env, requestOrigin: string): string[] {
   return [requestOrigin, ...extra];
 }
 
-export function issueCsrfCookie(c: any): string {
+export function issueCsrfCookie(c: Ctx): string {
   const existing = getCookie(c, CSRF_COOKIE);
   if (existing) return existing;
   const token = randomToken(16);
@@ -227,6 +241,9 @@ export function rateRules(env: Partial<Env>): Record<string, RateRule> {
     loginEmail: { name: 'login_email', limit: n(env.RL_LOGIN_EMAIL, 10), windowMs: 15 * 60_000 },
     signupIp: { name: 'signup_ip', limit: n(env.RL_SIGNUP_IP, 5), windowMs: 3600_000 },
     resetEmail: { name: 'reset_email', limit: n(env.RL_RESET_EMAIL, 5), windowMs: 3600_000 },
+    // unauthenticated token endpoints + admin mutations (CPU-heavy PBKDF2) — IP-keyed
+    tokenIp: { name: 'token_ip', limit: n(env.RL_TOKEN_IP, 30), windowMs: 15 * 60_000 },
+    adminIp: { name: 'admin_ip', limit: n(env.RL_ADMIN_IP, 20), windowMs: 15 * 60_000 },
     apiUser: { name: 'api_user', limit: n(env.RL_API_USER, 120), windowMs: 60_000 }
   };
 }
@@ -253,11 +270,28 @@ export function tooMany(retryAfterS: number) {
 /**
  * Per-user throttle for heavy endpoints (reports, export, import, bootstrap,
  * sync — NFR-3 `apiUser`). Returns a 429 response when over budget, else null.
- * Deliberately NOT applied to every request: KV counters are eventually
- * consistent and chatty small requests would hammer one hot key per user/minute.
+ * The counter lives in the user's UserHub DO (single instance per user → the
+ * read-modify-write is atomic, and the hot per-user key does no KV writes).
+ * Falls back to KV when the DO is unavailable.
+ * Deliberately NOT applied to every request: chatty small requests would
+ * round-trip the DO needlessly.
  */
-export async function limitHeavy(c: any): Promise<Response | null> {
-  const rl = await rateLimitHit(c.env, rateRules(c.env).apiUser, c.get('user').id);
+export async function limitHeavy(c: Ctx): Promise<Response | null> {
+  const rule = rateRules(c.env).apiUser;
+  const userId = c.get('user').id;
+  try {
+    const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
+    const res = await stub.fetch(new Request('https://do/ratelimit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: rule.name, limit: rule.limit, windowMs: rule.windowMs })
+    }));
+    if (res.ok) {
+      const out = await res.json() as { limited: boolean; retry_after_s: number };
+      return out.limited ? tooMany(out.retry_after_s) : null;
+    }
+  } catch { /* DO unavailable → KV fallback below */ }
+  const rl = await rateLimitHit(c.env, rule, userId);
   return rl ? tooMany(rl) : null;
 }
 

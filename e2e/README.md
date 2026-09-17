@@ -26,6 +26,8 @@ reuse them. For the login rate limit, set the `RL_*` overrides from
 | `roundtrip-test.mjs` | export → delete-account → import identity round-trip (data survives account deletion + restore) |
 | `undo-test.mjs` | undo/restore round-trip for deleted tasks/sessions |
 | `ws-test.mjs` | cross-device WebSocket fan-out (hello/timer events via the UserHub Durable Object) |
+| `security-probes.mjs` | field exposure, session-revocation, CSRF and rate-limit probes |
+| `regression-check.mjs` | targeted API probes: open-ended manual sessions rejected (422), no ghost timer after task/project delete, no reset links in API responses, resend-verification endpoint, token-endpoint rate limit (429), import cycle/session/limit enforcement + `import.completed` event, cross-user restore rejection |
 
 ## Usage
 
@@ -33,9 +35,11 @@ With `wrangler dev` running in another terminal:
 
 ```bash
 bash e2e/smoke-test.sh        # run this first — it creates the test users
-node e2e/roundtrip-test.mjs
 node e2e/undo-test.mjs
 node e2e/ws-test.mjs
+node e2e/security-probes.mjs
+node e2e/regression-check.mjs
+node e2e/roundtrip-test.mjs   # last — it deletes the dana account
 ```
 
 All scripts target `http://127.0.0.1:8787`. `roundtrip-test.mjs` deletes the

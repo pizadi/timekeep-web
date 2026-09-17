@@ -17,6 +17,11 @@ sessionRoutes.use('/sessions/*', requireAuth);
 
 const LIST_LIMIT = LIMITS.logPageSize;
 
+/** Escape SQL LIKE wildcards so user input matches literally. */
+function escapeLike(input: string): string {
+  return `%${input.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
 sessionRoutes.get('/sessions', async (c) => {
   const userId = c.get('user').id;
   const projectId = c.req.query('project_id');
@@ -31,9 +36,10 @@ sessionRoutes.get('/sessions', async (c) => {
   let n = 1;
   if (taskId) { where.push(`s.task_id = ?${++n}`); binds.push(taskId); }
   if (projectId) { where.push(`t.project_id = ?${++n}`); binds.push(projectId); }
-  if (from !== null) { where.push(`COALESCE(s.ended_at, ?) >= ?${++n}`); binds.push(from); }
+  // running rows (ended_at IS NULL) have no end — the "from" floor never excludes them
+  if (from !== null) { where.push(`(s.ended_at IS NULL OR s.ended_at >= ?${++n})`); binds.push(from); }
   if (to !== null) { where.push(`s.started_at < ?${++n}`); binds.push(to); }
-  if (note) { where.push(`s.note LIKE ?${++n}`); binds.push(`%${note}%`); }
+  if (note) { where.push(`s.note LIKE ?${++n} ESCAPE '\\'`); binds.push(escapeLike(note)); }
   if (cursor) {
     const [sa, id] = cursor.split('_');
     where.push(`(s.started_at < ?${++n} OR (s.started_at = ?${n} AND s.id < ?${++n}))`);
@@ -81,7 +87,7 @@ sessionRoutes.post('/sessions', async (c) => {
   if (nErr) return jsonError(422, 'validation', nErr);
 
   // same-task overlap rejected; conflicts returned so the UI can highlight them (FR-S4 AC)
-  const conflicts = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at ?? now, now);
+  const conflicts = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at, now);
   if (conflicts.length > 0) return new Response(JSON.stringify({
     error: { code: 'overlap', message: 'this session overlaps an existing session on the same task', details: conflicts }
   }), { status: 409, headers: { 'content-type': 'application/json' } });
@@ -100,7 +106,7 @@ sessionRoutes.post('/sessions', async (c) => {
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(id).first();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'session.created', actor: c.get('deviceId'), data: { session } }] as EventDraft[]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs }, 201);
 });
 
@@ -129,7 +135,7 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const nErr = noteProblem(note);
   if (nErr) return jsonError(422, 'validation', nErr);
 
-  const conflicts = await findSameTaskOverlaps(c.env, userId, taskId, started, ended ?? now, now, existing.id);
+  const conflicts = await findSameTaskOverlaps(c.env, userId, taskId, started, ended, now, existing.id);
   if (conflicts.length > 0) throw conflictError(conflicts);
 
   await c.env.DB.prepare(
@@ -140,7 +146,7 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(existing.id).first();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'session.updated', actor: c.get('deviceId'), data: { session } }] as EventDraft[]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs });
 });
 
@@ -154,6 +160,6 @@ sessionRoutes.delete('/sessions/:id', async (c) => {
     .bind(existing.id, userId).run();
   const evs = await appendEvents(c.env, userId,
     [{ type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } }] as EventDraft[]);
-  notifyHub(c.env, userId, evs);
+  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ deleted: true, undo: { sessions: [existing] }, events: evs });
 });

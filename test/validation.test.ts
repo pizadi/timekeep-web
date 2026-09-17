@@ -5,6 +5,8 @@ import {
   findOverlaps, findCyclePath, edgeProblem, passwordProblem, pomoProblem,
   checkSessionTimes, subtaskPositionLimitProblem
 } from '../src/shared/validation';
+import { sessionCreateSchema, sessionPatchSchema, restoreSchema } from '../src/worker/validators';
+import { LIMITS } from '../src/shared/constants';
 
 const NOW = 1_800_000_000_000;
 
@@ -100,3 +102,34 @@ describe('hierarchy limits (FR-T3/FR-T7)', () => {
     expect(subtaskPositionLimitProblem(99)).toBeNull();
   });
 });
+
+describe('manual session schemas', () => {
+  const base = { task_id: '01ARZ3NDEKTSV4RRFFQ69G5FAV', started_at: NOW };
+  it('create schema rejects open-ended (ended_at null) sessions', () => {
+    const r = sessionCreateSchema.safeParse({ ...base, ended_at: null });
+    expect(r.success).toBe(false);
+  });
+  it('create schema accepts closed intervals', () => {
+    const r = sessionCreateSchema.safeParse({ ...base, ended_at: NOW + 1 });
+    expect(r.success).toBe(true);
+  });
+  it('patch schema rejects clearing ended_at back to null', () => {
+    const r = sessionPatchSchema.safeParse({ ended_at: null });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('restore payload caps', () => {
+  const ULID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+  it('accepts an undo payload at the schema per-collection caps', () => {
+    const sessions = Array.from({ length: 5001 }, (_, i) => ({ id: ULID, started_at: i }));
+    const r = restoreSchema.safeParse({ sessions });
+    expect(r.success).toBe(true);
+  });
+  it('rejects payloads over the total-row guard', () => {
+    const row = { id: ULID };
+    const r = restoreSchema.safeParse({
+      subtasks: Array.from({ length: LIMITS.restoreMaxRows }, () => row)
+    });
+    expect(r.success).toBe(false);
+  });});

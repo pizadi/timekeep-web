@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
 import { api, nowMs } from '../lib/api';
+import { rangePreset, fmtDay } from '../lib/time';
 import { Chart, registerables } from 'chart.js';
 import Heatmap from '../components/Heatmap';
-import { fmtDay } from '../lib/time';
 
 Chart.register(...registerables);
 
@@ -26,7 +26,6 @@ export default function DashboardView() {
   const user = useStore((s) => s.user)!;
   const reportsVersion = useStore((s) => s.reportsVersion);
   const running = useStore((s) => s.running);
-  const pomo = useStore((s) => s.pomo);
   const [preset, setPreset] = useState<Preset>(() => (localStorage.getItem('tk.range') as Preset) || '30d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -39,18 +38,10 @@ export default function DashboardView() {
   const charts = useRef<{ bar?: Chart; donut?: Chart }>({});
 
   const range = useMemo(() => {
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: user.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(nowMs());
-    if (preset === 'today') return { from: today, to: today };
-    if (preset === 'week') {
-      const d = new Date(`${today}T12:00:00Z`);
-      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() - user.week_start + 7) % 7));
-      return { from: d.toISOString().slice(0, 10), to: today };
-    }
-    if (preset === 'month') return { from: `${today.slice(0, 7)}-01`, to: today };
     if (preset === 'custom' && customFrom && customTo) return { from: customFrom, to: customTo };
-    const d = new Date(`${today}T12:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - 29);
-    return { from: d.toISOString().slice(0, 10), to: today };
+    // shared preset logic (lib/time); incomplete custom ranges fall back to
+    // the 30-day window
+    return rangePreset(preset === 'custom' ? '30d' : preset, user.timezone, user.week_start);
   }, [preset, customFrom, customTo, user.timezone, user.week_start]);
 
   const load = useCallback(async () => {
@@ -132,11 +123,27 @@ export default function DashboardView() {
     return () => { charts.current.bar?.destroy(); charts.current.donut?.destroy(); };
   }, [summary, colorOf, nameOf, themePref]);
 
-  // running session grows the "today" bar locally (FR-R6, ≥ every 30 s + on stop)
+  // Running session grows the "today" numbers locally (FR-R6, ≥ every 30 s + on
+  // stop). The server aggregates already include the running session clipped to
+  // the fetch instant (summary.server_now) — so only the *tail* since the fetch
+  // may be added; adding the full elapsed would double-count the session.
+  const [boostTick, setBoostTick] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const iv = setInterval(() => setBoostTick((t) => t + 1), 30_000);
+    return () => clearInterval(iv);
+  }, [running]);
+
   const runningBoost = useMemo(() => {
-    if (!running) return 0;
-    return Math.round((nowMs() - running.started_at) / 60000);
-  }, [running, summary]);
+    if (!running || !summary) return 0;
+    void boostTick; // recompute on the 30 s tick (FR-R6 "≥ every 30 s")
+    const fetchedAt = summary.server_now ?? nowMs();
+    const now = nowMs();
+    const tail = running.started_at >= fetchedAt
+      ? now - running.started_at          // started after the fetch: not counted at all yet
+      : Math.max(0, now - fetchedAt);     // counted up to the fetch: add the tail only
+    return Math.round(tail / 60000);
+  }, [running, summary, boostTick]);
 
   const tableSorted = useMemo(() => {
     if (!summary) return [];
@@ -231,7 +238,6 @@ export default function DashboardView() {
           </tbody>
         </table>
       </div>
-      <span hidden>{pomo?.phase}</span>
     </div>
   );
 }

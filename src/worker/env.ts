@@ -18,10 +18,12 @@ export interface Env {
   RL_LOGIN_EMAIL?: string;
   RL_SIGNUP_IP?: string;
   RL_RESET_EMAIL?: string;
+  RL_TOKEN_IP?: string;
+  RL_ADMIN_IP?: string;
   RL_API_USER?: string;
 
   // secrets
-  SESSION_SECRET?: string;
+  // NOTE: no SESSION_SECRET — session tokens are 256-bit random, hashed at rest.
   TURNSTILE_SECRET_KEY?: string;
   RESEND_API_KEY?: string;
 }

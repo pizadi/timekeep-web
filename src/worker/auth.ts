@@ -40,7 +40,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
   if (scheme !== 'pbkdf2' || !iterStr || !saltHex || !hashHex) return false;
   const iterations = Number(iterStr);
   if (!Number.isInteger(iterations) || iterations < 1) return false;
-  const salt = new Uint8Array(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
+  // malformed stored hashes (e.g. odd-length salt hex) verify to `false`,
+  // not crash with a TypeError
+  const saltMatches = saltHex.match(/.{2}/g);
+  if (!saltMatches || saltHex.length % 2 !== 0) return false;
+  const salt = new Uint8Array(saltMatches.map((h) => parseInt(h, 16)));
   const bits = await pbkdf2Chain(password, salt, iterations);
   const a = hex(bits);
   // constant-time-ish compare
@@ -60,9 +64,13 @@ function pbkdf2(password: BufferSource, salt: Uint8Array, iterations: number): P
 }
 
 // The Workers runtime rejects a single PBKDF2 deriveBits call above 100,000
-// iterations. To honor higher configured counts (NFR-3: 600k), chain rounds:
+// iterations. To reach the configured counts (NFR-3: 600k), rounds are chained:
 // each round feeds the previous 32-byte output back in as the password, with
-// the salt fixed. Total work matches a single call with the requested count.
+// the salt fixed. This matches a single 600k call in *work factor* only — it is
+// a chained construction, not literally PBKDF2-600k. That constraint is why the
+// stored format string is used as a label (verified by format, not interop):
+// any future standard-compliant alternative must ship with a new prefix and a
+// verifying fallback for existing hashes.
 const PBKDF2_MAX_ITERATIONS = 100_000;
 
 async function pbkdf2Chain(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {

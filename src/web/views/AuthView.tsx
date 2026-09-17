@@ -1,13 +1,18 @@
 // Login view — the only auth surface. Accounts are created by the admin (no
 // self-signup); password resets go through the admin, or email when configured.
 import { useEffect, useState } from 'react';
-import { store } from '../lib/store';
+import { store, go } from '../lib/store';
 import { api, ApiError } from '../lib/api';
-import { go } from '../App';
 
 export default function AuthView() {
   const [siteKey, setSiteKey] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
+
+  // Turnstile's data-callback references a global by name; assign it once at
+  // module effect time
+  useEffect(() => {
+    (window as any).tkTurnstileCb = (token: string) => setTurnstileToken(token);
+  }, []);
 
   useEffect(() => {
     // public (pre-auth) config — /settings requires a session
@@ -27,8 +32,6 @@ export default function AuthView() {
       document.head.appendChild(s);
     }
   }, [siteKey]);
-
-  (window as any).tkTurnstileCb = (token: string) => setTurnstileToken(token);
 
   return (
     <div className="auth-wrap">

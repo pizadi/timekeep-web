@@ -18,15 +18,17 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 ```
 
 - Full local check: `npm run typecheck && npm test && npm run build`. No lint/format tooling is configured.
-- E2E scripts (`e2e/smoke-test.sh`, `ws-test.mjs`, `roundtrip-test.mjs`, `undo-test.mjs`) target
-  `127.0.0.1:8787` and create their own accounts. They hammer the login endpoint — set
-  `RL_LOGIN_IP`/`RL_LOGIN_EMAIL`/`RL_SIGNUP_IP` overrides from `.dev.vars.example` in `.dev.vars`.
-  Run `smoke-test.sh` first — the other scripts reuse the users it creates.
+- E2E scripts (`e2e/smoke-test.sh`, `ws-test.mjs`, `roundtrip-test.mjs`, `undo-test.mjs`,
+  `security-probes.mjs`, `regression-check.mjs`) target `127.0.0.1:8787` and create their own
+  accounts. They hammer the login endpoint — set `RL_LOGIN_IP`/`RL_LOGIN_EMAIL`/`RL_SIGNUP_IP`
+  overrides from `.dev.vars.example` in `.dev.vars`. Run `smoke-test.sh` first — the other scripts
+  reuse the users it creates; `roundtrip-test.mjs` last (it deletes the `dana` account).
 
 ## Env
 
 - Copy `.dev.vars.example` → `.dev.vars` (gitignored). Everything is optional in dev;
-  `EMAIL_DEV_MODE=1` makes signup/reset return verification links in API responses.
+  `EMAIL_DEV_MODE=1` logs verification/reset links to the Worker console (API responses
+  never carry live token links).
 - Prod uses `PBKDF2_ITERATIONS=600000`; dev lowers it to 1000. Workers caps a single
   PBKDF2 `deriveBits` call at 100k iterations (`pbkdf2Chain` in `src/worker/auth.ts` chains
   rounds to reach the total) — never call `crypto.subtle.deriveBits` with PBKDF2 > 100k directly.
@@ -47,8 +49,10 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - Time: instants are epoch-ms UTC everywhere. Day/week bucketing uses the `Intl`-based engine in
   `src/shared/time.ts` fed into SQL via a `json_each()` day table — don't move aggregation
   client-side; API clients receive report buckets, never raw session rows.
-- Every mutation appends to `sync_log` in the same D1 batch as the entity write, then the DO
-  fans out (`src/worker/events.ts`).
+- Every mutation appends to `sync_log`, then the DO fans out (`src/worker/events.ts`,
+  notify via `ctx.waitUntil`). Batch granularity: the UserHub DO writes entity rows and
+  events in ONE D1 batch; route handlers use two back-to-back batches (entity write, then
+  events) — a crash between them can drop the event, clients recover via the reconcile poll.
 - Every request body is Zod-validated (`src/worker/validators.ts`); ownership checks are always
   `WHERE user_id = ?`.
 - Subtasks are exactly two levels deep (enforced in validators and routes).
@@ -61,3 +65,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   blocks every endpoint except `GET /api/me`, `POST /api/me/password`, `POST /api/auth/logout`.
 - "Remove user" means deactivation (`active=0` + session revocation) — user data is never deleted
   from the admin panel; the admin account cannot be deactivated or self-deleted.
+
+## Commits
+
+- Keep commit messages short: a single subject line (optionally 1–2 body lines).
+- Detailed change notes go in `CHANGELOG.md` (included in the same commit), not in the
+  commit message.

@@ -1,12 +1,15 @@
-// App shell: routing, responsive layout, global keyboard shortcuts (FR-U4),
-// quick-find (FR-T6), toasts, offline banner (FR-N5), recovery banner (FR-S3).
+// App shell: routing (views are URL routes — /, /log, /map, /dashboard), responsive
+// layout, global keyboard shortcuts (FR-U4), quick-find (FR-T6), toasts, offline
+// banner (FR-N5), recovery banner (FR-S3), and the password-reset/verify flows.
 import { useEffect, useState, useCallback } from 'react';
-import { store, useStore, pushToast, dismissToast } from './lib/store';
+import { store, useStore, pushToast, dismissToast, go, pathForView, viewFromPath } from './lib/store';
+import type { AppState } from './lib/store';
 import { api, ApiError } from './lib/api';
-import { fmtHMS } from './lib/time';
 import { applyTheme, currentThemePref } from './lib/theme';
 import AuthView from './views/AuthView';
 import ChangePasswordView from './views/ChangePasswordView';
+import ResetPasswordView from './views/ResetPasswordView';
+import VerifyEmailView from './views/VerifyEmailView';
 import TreeSidebar from './views/TreeSidebar';
 import LogView from './views/LogView';
 import MapView from './views/MapView';
@@ -22,15 +25,13 @@ export default function App() {
   const route = useRoute();
 
   if (!booted) return <div className="auth-wrap"><div className="muted">Loading…</div></div>;
-  if (!authed || isAuthRoute(route)) return <AuthView />;
+  if (route === '/reset') return <ResetPasswordView />;
+  if (route === '/verify') return <VerifyEmailView />;
+  if (!authed || route === '/login') return <AuthView />;
   // forced password change: nothing else in the app is reachable until it's done
   if (user?.must_change_password) return <ChangePasswordView />;
 
-  return <Shell route={route} navigate={go} />;
-}
-
-function isAuthRoute(r: string): boolean {
-  return r === '/login';
+  return <Shell route={route} />;
 }
 
 function useRoute(): string {
@@ -43,12 +44,7 @@ function useRoute(): string {
   return route;
 }
 
-export function go(path: string): void {
-  history.pushState(null, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-}
-
-function Shell({ route, navigate }: { route: string; navigate: (p: string) => void }) {
+function Shell({ route }: { route: string }) {
   const view = useStore((s) => s.view);
   const connection = useStore((s) => s.connection);
   const user = useStore((s) => s.user)!;
@@ -60,6 +56,13 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(route === '/settings');
+
+  // views are routes: URL → store state (back/forward buttons work)
+  useEffect(() => {
+    const v = viewFromPath(route);
+    if (v && v !== store.get().view) store.setView(v);
+    setSettingsOpen(route === '/settings');
+  }, [route]);
 
   // keyboard shortcuts (FR-U4): N, T, F2 handled in TreeSidebar scope; global: 1-4, Ctrl+K, ?, T
   const onKey = useCallback((e: KeyboardEvent) => {
@@ -73,7 +76,7 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
     if (e.key === '?') { setHelpOpen((v) => !v); return; }
     if (e.key >= '1' && e.key <= '4') {
       const views = ['tree', 'log', 'map', 'dashboard'] as const;
-      store.setView(views[Number(e.key) - 1]!);
+      store.navigateToView(views[Number(e.key) - 1]!);
       return;
     }
   }, []);
@@ -94,15 +97,17 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
           <button className="icon-btn" title="Quick find (Ctrl+K)" aria-label="Quick find"
             onClick={() => setQuickFindOpen(true)}>⌕</button>
           <button className="icon-btn" title="Settings" aria-label="Settings"
-            onClick={() => setSettingsOpen(true)}>⚙</button>
+            onClick={() => { setSettingsOpen(true); go('/settings'); }}>⚙</button>
         </div>
         <TreeSidebar onClose={() => setSidebarOpen(false)} />
       </aside>
 
       <div className="main" id="main-content">
         <header className="topbar">
-          <button className="btn ghost" aria-label="Toggle project list"
-            onClick={() => setSidebarOpen((v) => !v)} style={{ display: 'none' }} />
+          {/* mobile-only hamburger: the off-canvas sidebar's only toggle */}
+          <button className="btn ghost sidebar-toggle" aria-label="Toggle project list"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen((v) => !v)}>☰</button>
           <TimerBar />
           <span className={`conn-dot ${connection}`} role="img"
             aria-label={`Connection: ${connection}`} title={`Connection: ${connection}`} />
@@ -126,7 +131,7 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
 
         <nav className="view-tabs" role="tablist" aria-label="Views">
           {(['tree', 'log', 'map', 'dashboard'] as const).map((v, i) => (
-            <button key={v} role="tab" aria-selected={view === v} onClick={() => store.setView(v)}>
+            <button key={v} role="tab" aria-selected={view === v} onClick={() => store.navigateToView(v)}>
               {labelFor(v)} <span aria-hidden> ({i + 1})</span>
             </button>
           ))}
@@ -144,8 +149,7 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
       {settingsOpen && (
         <SettingsView
-          onClose={() => { setSettingsOpen(false); navigate('/'); }}
-          applyTheme={(p) => applyTheme(p, true)}
+          onClose={() => { setSettingsOpen(false); if (route === '/settings') navigateHome(); }}
           currentTheme={currentThemePref()}
         />
       )}
@@ -156,6 +160,10 @@ function Shell({ route, navigate }: { route: string; navigate: (p: string) => vo
 
 function labelFor(v: string): string {
   return v === 'tree' ? 'Tasks' : v === 'log' ? 'Log' : v === 'map' ? 'Map' : 'Dashboard';
+}
+
+function navigateHome(): void {
+  go(pathForView(store.get().view));
 }
 
 function TreeMain() {
@@ -180,7 +188,19 @@ function TreeMain() {
 
 function QuickStart() {
   const tasks = useStore((s) => s.tasks);
-  const recent = tasks.slice(0, 6);
+  const recentIds = useStore((s) => s.recentTaskIds);
+  // most recently *tracked* tasks first (bootstrap supplies the order);
+  // tasks never tracked keep bootstrap (position) order behind them
+  const rank = new Map(recentIds.map((id, i) => [id, i]));
+  const recent = tasks
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => {
+      const ra = rank.get(a.t.id) ?? Number.POSITIVE_INFINITY;
+      const rb = rank.get(b.t.id) ?? Number.POSITIVE_INFINITY;
+      return ra !== rb ? ra - rb : a.i - b.i;
+    })
+    .slice(0, 6)
+    .map(({ t }) => t);
   if (recent.length === 0) return null;
   return (
     <div className="card">
@@ -214,9 +234,9 @@ async function switchTo(taskId: string): Promise<void> {
 
 async function resendVerification(): Promise<void> {
   try {
-    const email = store.get().user?.email ?? '';
-    await api('/auth/reset-request', { method: 'POST', body: { email } });
-    pushToast('info', 'If the address is verified-mailbox-linked, a fresh email is on its way');
+    // dedicated verification-resend endpoint
+    await api('/auth/resend-verification', { method: 'POST' });
+    pushToast('info', 'Verification email sent — check your inbox');
   } catch (e: any) {
     pushToast('error', e.message);
   }
@@ -264,5 +284,3 @@ export function Toasts() {
     </div>
   );
 }
-
-export { fmtHMS };

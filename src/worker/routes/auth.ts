@@ -25,6 +25,9 @@ authRoutes.post('/auth/signup', (c) => jsonError(404, 'not_found', 'unknown API 
 
 // ---------- verify email (FR-A1) ----------
 authRoutes.post('/auth/verify-email', async (c) => {
+  // unauthenticated + does a DB read per call — IP-keyed limit
+  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c) ?? 'unknown');
+  if (rl) return tooMany(rl);
   const parsed = verifyEmailSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid token');
   const hash = await sha256Hex(parsed.data.token);
@@ -38,6 +41,31 @@ authRoutes.post('/auth/verify-email', async (c) => {
       .bind(Date.now(), row.user_id),
     c.env.DB.prepare("DELETE FROM email_tokens WHERE token_hash = ?1").bind(hash)
   ]);
+  return c.json({ ok: true });
+});
+
+// ---------- resend verification email (FR-A1; legacy accounts with a mailbox) ----------
+// Admin-created users are pre-verified and have no mailbox — this endpoint
+// backs the app's verification banner for legacy accounts with a mailbox.
+authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
+  const user = c.get('user');
+  const email = user.email ?? '';
+  if (!email.includes('@') || !isValidEmail(email))
+    return jsonError(422, 'no_email', 'this account has no email address to verify');
+  if (user.email_verified_at) return c.json({ ok: true }); // already verified
+
+  const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
+  if (rl) return tooMany(rl);
+
+  const token = randomToken(32);
+  await c.env.DB.prepare(
+    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'verify', ?3)`
+  ).bind(await sha256Hex(token), user.id, Date.now() + 48 * 3600_000).run();
+  const link = `${appUrl(c)}/verify?token=${token}`;
+  try {
+    await getEmailSender(c.env).send(email, 'Verify your TimeKeep email',
+      `Verify your email address (valid 48 hours):\n${link}`);
+  } catch { /* logged by sender */ }
   return c.json({ ok: true });
 });
 
@@ -134,13 +162,17 @@ authRoutes.post('/auth/reset-request', async (c) => {
       await getEmailSender(c.env).send(email, 'Reset your TimeKeep password',
         `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`);
     } catch { /* logged by sender */ }
-    if (c.env.EMAIL_DEV_MODE === '1' && !c.env.RESEND_API_KEY) devLink = link;
   }
-  // identical response whether or not the account exists (FR-A5 AC)
-  return c.json({ ok: true, ...(devLink ? { dev_reset_url: devLink } : {}) });
+  // identical response whether or not the account exists (FR-A5 AC).
+  // No reset link in the response even under EMAIL_DEV_MODE — the dev console
+  // log is the dev surface; API responses must never carry live tokens.
+  return c.json({ ok: true });
 });
 
 authRoutes.post('/auth/reset-confirm', async (c) => {
+  // unauthenticated + does a DB read per call — IP-keyed limit
+  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c) ?? 'unknown');
+  if (rl) return tooMany(rl);
   const parsed = resetConfirmSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   const pwProblem = passwordProblem(parsed.data.password, isCommonPassword);

@@ -1,13 +1,11 @@
 // Client-side display helpers. Bucketing decisions are the server's (NFR-6);
 // the client uses the profile timezone for display and datetime-local defaults.
+// fmtHMS lives once in shared/time.ts (re-exported here for convenience).
 import { api, nowMs } from './api';
 import { store } from './store';
+import { fmtHMS as fmtHMS_ } from '../../shared/time';
 
-export function fmtHMS(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
+export { fmtHMS_ as fmtHMS };
 
 export function fmtClock(instant: number, tz: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(instant);
@@ -91,10 +89,6 @@ function weekStartCivil(today: string, weekStartDow: number): string {
 
 export function civilOf(instant: number, tz: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(instant);
-}
-
-export async function refreshReportData<T>(path: string): Promise<T> {
-  return api<T>(path);
 }
 
 export const tzOf = () => store.get().user?.timezone ?? 'UTC';

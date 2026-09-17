@@ -92,7 +92,8 @@ export function dayStartInstant(civil: string, tz: string): number {
   return lo;
 }
 
-function addDaysCivil(civil: string, days: number): string {
+/** Add days to a civil date (calendar arithmetic — DST-safe by construction). */
+export function addDaysCivil(civil: string, days: number): string {
   const [y, m, d] = civil.split('-').map(Number);
   const dt = new Date(Date.UTC(y!, m! - 1, d!));
   dt.setUTCDate(dt.getUTCDate() + days);

@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
+import { openPrompt } from '../components/PromptModal';
 
 interface Pos { x: number; y: number }
 const NODE_W = 210, HEADER_H = 30, ROW_H = 19, PAD = 10, PORT_R = 6;
@@ -350,7 +351,8 @@ export default function MapView() {
             onToggleDone={() => { const t = tasks.find((x) => x.id === menu.taskId); if (t) void toggleDone(t); setMenu(null); }}
             onRename={async () => {
               const t = tasks.find((x) => x.id === menu.taskId);
-              const name = window.prompt('Rename task', t?.name ?? '');
+              // non-blocking modal instead of window.prompt
+              const name = await openPrompt({ title: 'Rename task', initialValue: t?.name ?? '', confirmText: 'Rename' });
               if (name?.trim() && t) {
                 try {
                   const res = await api<{ task: any }>(`/tasks/${t.id}`, { method: 'PATCH', body: { name: name.trim() } });
@@ -360,7 +362,7 @@ export default function MapView() {
               setMenu(null);
             }}
             onAddSubtask={async () => {
-              const name = window.prompt('Subtask?');
+              const name = await openPrompt({ title: 'New subtask', placeholder: 'Subtask name', confirmText: 'Create' });
               if (name?.trim()) {
                 try {
                   const res = await api<{ subtask: any }>(`/tasks/${menu.taskId}/subtasks`, { method: 'POST', body: { name: name.trim() } });

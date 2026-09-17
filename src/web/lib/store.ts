@@ -17,6 +17,7 @@ export interface PomoState {
   break_ms_left: number | null; break_ms_total: number;
   server_now?: number;
 }
+
 export interface Settings {
   pomodoro: { focus_min: number; break_min: number; auto_start: boolean };
   grace_min: number;
@@ -26,7 +27,7 @@ export interface Settings {
 }
 export interface UserProfile {
   id: string; username: string; email: string; name: string; timezone: string;
-  week_start: 0 | 1; theme: 'system' | 'light' | 'dark';
+  week_start: number; theme: 'system' | 'light' | 'dark'; // 0–6 since migration 0003
   role: 'user' | 'admin';
   must_change_password: boolean;
   email_verified_at: number | null; created_at: number;
@@ -56,6 +57,7 @@ export interface AppState {
   selectedProjectId: string | null;
   selectedTaskId: string | null;
   view: 'tree' | 'log' | 'map' | 'dashboard';
+  recentTaskIds: string[];      // "Jump back in" — by last tracked activity (FR: L14)
   reportsVersion: number;      // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
   lastEventId: number;
@@ -78,6 +80,7 @@ let state: AppState = {
   selectedProjectId: null,
   selectedTaskId: null,
   view: 'tree',
+  recentTaskIds: [],
   reportsVersion: 0,
   toasts: [],
   lastEventId: 0,
@@ -108,6 +111,7 @@ export const store = {
         tasks: b.tasks,
         subtasks: b.subtasks,
         deps: b.dependencies,
+        recentTaskIds: b.recent_task_ids ?? [],
         running: b.running ?? null,
         pomo: b.pomo ?? null,
         lastEventId: b.last_event_id ?? 0,
@@ -115,7 +119,7 @@ export const store = {
         selectedProjectId: b.projects.find((p: Project) => !p.archived)?.id ?? null
       };
       set({});
-      connectWs();
+      startWsAndSync();
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'password_change_required') {
         // forced password change: /me is the only readable surface — surface the
@@ -148,6 +152,8 @@ export const store = {
     set({ selectedTaskId: id, selectedProjectId: t ? t.project_id : state.selectedProjectId });
   },
   setView(view: AppState['view']) { set({ view }); },
+  /** View switch with URL sync: routes are /, /log, /map, /dashboard. */
+  navigateToView(view: AppState['view']) { set({ view }); go(pathForView(view)); },
 
   setConnection(c: AppState['connection']) { set({ connection: c }); },
   setDevices(n: number) { set({ devices: n }); },
@@ -193,6 +199,9 @@ export const store = {
         patch.tasks = state.tasks.filter((t) => !removedIds.has(t.id));
         patch.subtasks = state.subtasks.filter((s) => !removedIds.has(s.task_id));
         patch.deps = state.deps.filter((dep) => !removedIds.has(dep.task_id) && !removedIds.has(dep.depends_on_id));
+        // the cascade deleted the session rows too — drop a stranded timer
+        if (state.running && removedIds.has(state.running.task_id)) patch.running = null;
+        if (state.pomo && state.pomo.taskId && removedIds.has(state.pomo.taskId)) patch.pomo = null;
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       }
@@ -205,6 +214,9 @@ export const store = {
         patch.subtasks = state.subtasks.filter((s) => s.task_id !== d.task.id);
         patch.deps = state.deps.filter((dep) => dep.task_id !== d.task.id && dep.depends_on_id !== d.task.id);
         if (state.selectedTaskId && ids.has(state.selectedTaskId)) patch.selectedTaskId = null;
+        // the cascade deleted the session rows too — drop a stranded timer
+        if (state.running && ids.has(state.running.task_id)) patch.running = null;
+        if (state.pomo && state.pomo.taskId && ids.has(state.pomo.taskId)) patch.pomo = null;
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       }
@@ -226,6 +238,10 @@ export const store = {
       case 'settings.updated':
         if (d.settings) patch.settings = d.settings;
         if (d.profile) patch.user = state.user ? { ...state.user, ...d.profile } : state.user;
+        break;
+      case 'import.completed':
+        // bulk mutation on another device — re-sync everything
+        void refreshAll();
         break;
       default: break; // unknown event types are ignored gracefully (forward-compat)
     }
@@ -300,17 +316,25 @@ export function dismissToast(id: number): void {
 // ---------- undo helper: deletes return their payload; undo re-inserts identical rows ----------
 
 export function undoableDelete(message: string, undoPayload: unknown): void {
+  // large deletes restore row-by-row collections server-side — give a bigger
+  // window than the default 5 s toast
+  const rows = undoPayload && typeof undoPayload === 'object'
+    ? Object.values(undoPayload as Record<string, unknown[]>)
+      .reduce((a, v) => a + (Array.isArray(v) ? v.length : 0), 0)
+    : 0;
+  const ttl = rows > 1000 ? 20_000 : 5000;
   pushToast('undo', message, async () => {
     await api('/restore', { method: 'POST', body: undoPayload });
     await store.refreshAll();
-  });
+  }, ttl);
 }
 
 export async function refreshAll(): Promise<void> {
   const b = await api<any>('/bootstrap');
   set({
     user: b.user, settings: b.settings, projects: b.projects, tasks: b.tasks,
-    subtasks: b.subtasks, deps: b.dependencies, running: b.running ?? null,
+    subtasks: b.subtasks, deps: b.dependencies, recentTaskIds: b.recent_task_ids ?? [],
+    running: b.running ?? null,
     pomo: b.pomo ?? null, lastEventId: b.last_event_id ?? 0, reportsVersion: state.reportsVersion + 1
   });
 }
@@ -321,22 +345,50 @@ export function useStore<T>(selector: (s: AppState) => T): T {
   return useSyncExternalStore(store.subscribe, () => selector(state));
 }
 
-// ---------- websocket wiring (FR-N1/N5) ----------
+// ---------- URL routing ----------
+
+/** Push a path and notify the router (popstate listener in App). */
+export function go(path: string): void {
+  history.pushState(null, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+export function pathForView(view: AppState['view']): string {
+  return view === 'tree' ? '/' : `/${view}`;
+}
+
+/** URL path → view; null for non-view routes (/login, /reset, /settings…). */
+export function viewFromPath(path: string): AppState['view'] | null {
+  if (path === '/' || path === '') return 'tree';
+  if (path === '/log' || path === '/map' || path === '/dashboard') {
+    return path.slice(1) as AppState['view'];
+  }
+  return null;
+}
+
+// ---------- websocket wiring (FR-N1/N5) + reconciliation polling (FR-N3) ----------
+//
+// Two layers run concurrently:
+//  - the WebSocket is retried with backoff forever — a failed first connect
+//    downgrades to polling only until the next attempt succeeds;
+//  - a low-frequency reconciliation poll runs even while the socket is healthy,
+//    so dropped DO notifications can only make a device stale for one cadence.
 
 let ws: WebSocket | null = null;
 let pollTimer: number | null = null;
+let pollCadence = 0;
 let backoff = 1000;
-let wsFailed = false;
+let wsRetryTimer: number | null = null;
 
 export function connectWs(): void {
-  if (wsFailed) { startPolling(); return; }
+  if (ws) return; // a socket is already open or connecting
   try {
     const socket = new WebSocket(wsUrl());
     ws = socket;
     socket.onopen = () => {
       backoff = 1000;
-      wsFailed = false;
-      stopPolling();
+      // socket healthy — drop to a slow reconcile cadence
+      startPolling(60_000);
       store.setConnection('online');
     };
     socket.onmessage = (m) => {
@@ -350,50 +402,85 @@ export function connectWs(): void {
       } catch { /* malformed frame ignored */ }
     };
     socket.onclose = () => {
-      ws = null;
+      if (ws === socket) ws = null;
       store.setConnection('reconnecting');
-      setTimeout(() => {
-        backoff = Math.min(backoff * 2, 15_000);
-        connectWs();
-      }, backoff);
+      scheduleReconnect();
     };
     socket.onerror = () => {
       try { socket.close(); } catch { /* already closing */ }
     };
-    // if the first connection cannot establish (proxy), fall back to polling (FR-N5)
+    // if this connection cannot establish (proxy), poll while the socket keeps
+    // retrying in the background — no permanent downgrade
     setTimeout(() => {
       if (ws !== socket || socket.readyState !== WebSocket.OPEN) {
-        wsFailed = true;
-        startPolling();
+        startPolling(30_000);
+        scheduleReconnect();
       }
     }, 5000);
   } catch {
-    wsFailed = true;
-    startPolling();
+    startPolling(30_000);
+    scheduleReconnect();
   }
 }
 
-function startPolling(): void {
-  if (pollTimer !== null) return;
-  store.setConnection('offline');
-  const poll = async () => {
-    try {
-      const res = await api<any>(`/sync?since=${state.lastEventId}`);
-      for (const ev of res.events ?? []) store.applyEvent(ev);
-      if (res.running !== undefined && !ws) {
-        // keep the running-timer view correct under polling (30 s cadence, FR-N5 AC)
-        if (JSON.stringify(res.running) !== JSON.stringify(state.running)) store.setRunning(res.running);
-      }
-      if (res.pomo && !ws) store.setPomo(res.pomo);
-      store.setConnection(state.lastEventId === 0 && !(res.events ?? []).length ? 'online' : 'online');
-    } catch {
-      store.setConnection('offline'); // fully offline: mutations blocked with a banner (FR-N5)
-    }
-  };
+function scheduleReconnect(): void {
+  if (wsRetryTimer !== null || ws) return;
+  wsRetryTimer = window.setTimeout(() => {
+    wsRetryTimer = null;
+    backoff = Math.min(backoff * 2, 15_000);
+    connectWs();
+  }, backoff);
+}
+
+function startPolling(cadenceMs: number): void {
+  if (pollTimer !== null && pollCadence === cadenceMs) return;
+  if (pollTimer !== null) clearInterval(pollTimer);
+  pollCadence = cadenceMs;
+  pollTimer = window.setInterval(poll, cadenceMs);
   void poll();
-  pollTimer = window.setInterval(poll, 30_000);
 }
 
 function stopPolling(): void {
   if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+  pollCadence = 0;
+}
+
+const SYNC_PAGE = 500; // server-side limit of GET /api/sync
+
+const poll = async (): Promise<void> => {
+  try {
+    const res = await api<any>(`/sync?since=${state.lastEventId}`);
+    const events = res.events ?? [];
+    for (const ev of events) store.applyEvent(ev);
+    // drain a full page immediately — a burst can exceed the cap and leave
+    // polling clients one page per cadence behind
+    for (let drained = 0; events.length === SYNC_PAGE && drained < 20; drained++) {
+      const more = await api<any>(`/sync?since=${state.lastEventId}`);
+      const list = more.events ?? [];
+      for (const ev of list) store.applyEvent(ev);
+      if (list.length < SYNC_PAGE) break;
+    }
+    if (!ws) {
+      if (res.running !== undefined
+          && JSON.stringify(res.running) !== JSON.stringify(state.running)) store.setRunning(res.running);
+      if (res.pomo) store.setPomo(res.pomo);
+      store.setConnection('online'); // polling path works — not offline
+    }
+  } catch {
+    if (!ws) store.setConnection('offline'); // fully offline: mutations blocked with a banner (FR-N5)
+  }
+};
+
+// Reconcile as soon as the tab becomes visible again — catches anything missed
+// while backgrounded (dropped notifies, suspended timers).
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.booted && state.authed) void poll();
+  });
+}
+
+/** Entry point after boot: start the socket and the reconcile loop together. */
+function startWsAndSync(): void {
+  connectWs();
+  startPolling(60_000);
 }

@@ -18,7 +18,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
   const userId = c.get('user').id;
-  const [projects, tasks, subtasks, deps, settingsRow, hubState] = await Promise.all([
+  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState] = await Promise.all([
     c.env.DB.prepare(
       'SELECT id, name, color, archived, position, created_at, updated_at FROM projects WHERE user_id = ?1 ORDER BY position, created_at'
     ).bind(userId).all(),
@@ -30,6 +30,11 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     ).bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM task_dependencies WHERE user_id = ?1').bind(userId).all(),
     c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
+    // "Jump back in": tasks by recency of tracked work, not position
+    c.env.DB.prepare(
+      `SELECT task_id, MAX(started_at) AS last_start FROM time_sessions
+       WHERE user_id = ?1 GROUP BY task_id ORDER BY last_start DESC LIMIT 6`
+    ).bind(userId).all<{ task_id: string; last_start: number }>(),
     (async () => {
       try {
         const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
@@ -48,6 +53,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     tasks: tasks.results,
     subtasks: subtasks.results,
     dependencies: deps.results,
+    recent_task_ids: recent.results.map((r) => r.task_id),
     running: (hubState as any).session ?? null,
     pomo: (hubState as any).pomo ?? null,
     last_event_id: (hubState as any).last_event_id ?? 0,
@@ -56,7 +62,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   });
 });
 
-function mergeSettings(raw?: string) {
+export function mergeSettings(raw?: string) {
   try {
     return { ...DEFAULT_SETTINGS, ...JSON.parse(raw ?? '{}') };
   } catch {
@@ -98,7 +104,7 @@ miscRoutes.put('/settings', requireAuth, async (c) => {
 
   const evs = await appendEvents(c.env, c.get('user').id,
     [{ type: 'settings.updated', actor: c.get('deviceId'), data: { settings: next } }]);
-  notifyHub(c.env, c.get('user').id, evs);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ settings: next, events: evs });
 });
 
@@ -111,6 +117,8 @@ miscRoutes.get('/layout/:projectId', requireAuth, async (c) => {
   ).bind(c.get('user').id, c.req.param('projectId')).all();
   return c.json({ positions: rows.results });
 });
+
+const CHUNK = 50; // stay under D1 batch statement limits (same as import)
 
 miscRoutes.put('/layout/:projectId', requireAuth, async (c) => {
   const parsed = layoutSchema.safeParse(await c.req.json().catch(() => null));
@@ -125,7 +133,9 @@ miscRoutes.put('/layout/:projectId', requireAuth, async (c) => {
        ON CONFLICT (user_id, task_id) DO UPDATE SET x = excluded.x, y = excluded.y`
     ).bind(userId, p.x, p.y, p.task_id, c.req.param('projectId'))
   );
-  if (stmts.length) await c.env.DB.batch(stmts);
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await c.env.DB.batch(stmts.slice(i, i + CHUNK));
+  }
   return c.json({ ok: true });
 });
 
@@ -176,8 +186,4 @@ miscRoutes.get('/sync', requireAuth, async (c) => {
 });
 
 // ---------- version (NFR-9) ----------
-miscRoutes.get('/version', (c) => c.json({
-  name: 'timekeep-web',
-  version: __BUILD_SHA__,
-  now: Date.now()
-}));
+// GET /api/version is registered in index.ts (unauthenticated).

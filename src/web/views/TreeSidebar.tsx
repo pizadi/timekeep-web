@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { PALETTE } from '../../shared/constants';
+import { openPrompt } from '../components/PromptModal';
 
 export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const projects = useStore((s) => s.projects);
@@ -51,7 +52,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   }, [tasks, selectedTaskId, selectedProjectId, running]);
 
   async function addProject() {
-    const name = window.prompt('Project name?');
+    // non-blocking modal instead of window.prompt
+    const name = await openPrompt({ title: 'New project', placeholder: 'Project name', confirmText: 'Create' });
     if (!name?.trim()) return;
     try {
       const res = await api<{ project: any }>('/projects', { method: 'POST', body: { name: name.trim() } });
@@ -61,7 +63,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   }
 
   async function addTask(projectId: string) {
-    const name = window.prompt('Task name?');
+    const name = await openPrompt({ title: 'New task', placeholder: 'Task name', confirmText: 'Create' });
     if (!name?.trim()) return;
     try {
       const res = await api<{ task: any }>(`/projects/${projectId}/tasks`, { method: 'POST', body: { name: name.trim() } });
@@ -71,7 +73,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   }
 
   async function addSubtask(taskId: string) {
-    const name = window.prompt('Subtask?');
+    const name = await openPrompt({ title: 'New subtask', placeholder: 'Subtask name', confirmText: 'Create' });
     if (!name?.trim()) return;
     try {
       const res = await api<{ subtask: any }>(`/tasks/${taskId}/subtasks`, { method: 'POST', body: { name: name.trim() } });
@@ -135,7 +137,14 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
 
   async function deleteProject(id: string) {
     const p = projects.find((x) => x.id === id);
-    const typed = window.prompt(`Type the project name "${p?.name}" to confirm deletion. This removes its tasks, checklists, dependencies and sessions.`);
+    const typed = await openPrompt({
+      title: `Delete “${p?.name}”?`,
+      message: 'This removes its tasks, checklists, dependencies and sessions. Undo is available for 5 seconds after deletion.',
+      placeholder: p?.name ?? '',
+      confirmText: 'Delete',
+      danger: true,
+      mustType: p?.name ?? ''
+    });
     if (typed === null || typed.trim() !== p?.name) { pushToast('info', 'Deletion cancelled'); return; }
     try {
       const res = await api<{ undo: any }>(`/projects/${id}`, { method: 'DELETE' });
@@ -208,7 +217,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
           >
             <span className="chip" style={{ background: p.color }} aria-hidden />
             {renaming?.kind === 'project' && renaming.id === p.id ? (
-              <RenameInput initial={p.name} onCommit={(v) => rename('project', p.id, v)} />
+              <RenameInput initial={p.name} onCommit={(v) => rename('project', p.id, v)} onCancel={() => setRenaming(null)} />
             ) : (
               <span className="grow" title={p.name}>{p.name}</span>
             )}
@@ -250,7 +259,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                     onClick={(e) => e.stopPropagation()}
                     onChange={() => toggleTaskDone(t)} />
                   {renaming?.kind === 'task' && renaming.id === t.id ? (
-                    <RenameInput initial={t.name} onCommit={(v) => rename('task', t.id, v)} />
+                    <RenameInput initial={t.name} onCommit={(v) => rename('task', t.id, v)} onCancel={() => setRenaming(null)} />
                   ) : (
                     <span className={`grow ${t.done ? 'done-text' : ''}`} title={t.name}>{t.name}</span>
                   )}
@@ -267,7 +276,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                     <input type="checkbox" checked={!!sb.done} aria-label={`Done: ${sb.name}`}
                       onChange={() => toggleSubtask(sb)} />
                     {renaming?.kind === 'subtask' && renaming.id === sb.id ? (
-                      <RenameInput initial={sb.name} onCommit={(v) => rename('subtask', sb.id, v)} />
+                      <RenameInput initial={sb.name} onCommit={(v) => rename('subtask', sb.id, v)} onCancel={() => setRenaming(null)} />
                     ) : (
                       <span className={`grow ${sb.done ? 'done-text' : ''}`}
                         onDoubleClick={() => setRenaming({ kind: 'subtask', id: sb.id })}
@@ -312,9 +321,12 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   );
 }
 
-function RenameInput({ initial, onCommit }: { initial: string; onCommit: (v: string) => void }) {
+function RenameInput({ initial, onCommit, onCancel }: {
+  initial: string; onCommit: (v: string) => void; onCancel: () => void;
+}) {
   const [v, setV] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
+  const cancelled = useRef(false);
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   return (
     <input
@@ -326,9 +338,10 @@ function RenameInput({ initial, onCommit }: { initial: string; onCommit: (v: str
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === 'Enter') onCommit(v);
-        if (e.key === 'Escape') (e.target as HTMLInputElement).blur();
+        // Escape cancels — blur alone would commit via onBlur
+        if (e.key === 'Escape') { cancelled.current = true; onCancel(); }
       }}
-      onBlur={() => onCommit(v)}
+      onBlur={() => { if (!cancelled.current) onCommit(v); }}
       onClick={(e) => e.stopPropagation()}
     />
   );

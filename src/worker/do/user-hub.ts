@@ -10,7 +10,6 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../env';
 import { ulid } from '../../shared/ids';
 import { WsEvent } from '../../shared/constants';
-import { DEFAULT_SETTINGS } from '../defaults';
 
 type PomoPhase = 'idle' | 'focus' | 'decide' | 'break' | 'ready';
 
@@ -38,6 +37,7 @@ export class UserHub extends DurableObject {
   private pomo: PomoState = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
   private settings = { focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
   private lastEventId = 0;
+  private rl = new Map<string, number>(); // rate-limit counters (window key → hits)
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -62,40 +62,31 @@ export class UserHub extends DurableObject {
     this.ctx.storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`
     );
-    // settings (durations live server-side, FR-F5/F-C1)
+    // settings (durations live server-side, FR-F5/F-C1), keyed by the real user id
     const row = await this.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1')
-      .bind(this.ctx.id.toString()).first<{ data: string }>().catch(() => null);
+      .bind(this.userId()).first<{ data: string }>().catch(() => null);
     try {
       const s = JSON.parse(row?.data ?? '{}') ?? {};
-      const f = Number(s?.pomodoro?.focus_min ?? DEFAULT_SETTINGS.pomodoro.focus_min);
-      const b = Number(s?.pomodoro?.break_min ?? DEFAULT_SETTINGS.pomodoro.break_min);
-      this.settings = {
-        focusMs: clamp(f, 5, 90) * 60_000,
-        breakMs: clamp(b, 1, 30) * 60_000,
-        autoStart: !!s?.pomodoro?.auto_start
-      };
+      this.applySettings(s);
     } catch { /* defaults */ }
 
     // running session from the D1 recovery mirror (FR-S3)
-    const at = await this.env.DB.prepare(
-      `SELECT at.session_id, at.task_id, at.started_at, s.source
-       FROM active_timers at JOIN time_sessions s ON s.id = at.session_id
-       WHERE at.user_id = ?1`
-    ).bind(this.userId()).first<any>().catch(() => null);
-    if (at) {
-      this.running = { id: at.session_id, task_id: at.task_id, started_at: Number(at.started_at), source: at.source ?? 'timer' };
-    } else {
-      this.running = null;
-    }
+    this.running = await this.loadRunningFromD1();
 
     // pomodoro state from DO storage
     const raw = this.kvGet('pomo');
     if (raw) {
       try { this.pomo = { ...this.pomo, ...JSON.parse(raw) }; } catch { /* keep defaults */ }
     }
-    // focus accumulation only while a tracked session actually runs (FR-F1);
-    // after rehydration we resume counting from now (sub-second precision loss tolerated)
-    if (this.pomo.phase === 'focus' && this.running) this.pomo.lastResumeMs = Date.now();
+    // Focus accumulation across eviction: `accumulatedFocusMs` (completed
+    // segments) and `lastResumeMs` (start of the in-flight segment) are both
+    // persisted, so the live total recomputes exactly — the wall clock keeps
+    // running while the DO is evicted; resetting lastResumeMs here would
+    // discard the entire in-flight segment.
+    if (this.pomo.phase === 'focus' && this.running && this.pomo.lastResumeMs == null) {
+      this.pomo.lastResumeMs = Date.now(); // legacy/anomalous state only
+      await this.persistPomo();
+    }
 
     const maxId = await this.env.DB.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM sync_log WHERE user_id = ?1')
       .bind(this.userId()).first<{ m: number }>().catch(() => null);
@@ -107,7 +98,33 @@ export class UserHub extends DurableObject {
 
   private userId(): string {
     // DO instances are keyed by idFromName(userId); the name round-trips through the id.
-    return this.ctx.id.name ?? this.env.USER_HUB.idFromName(this.ctx.id.toString()).toString();
+    // There is no correct way to recover the name from the raw id — fail loudly
+    // rather than silently operating on the wrong user.
+    const name = this.ctx.id.name;
+    if (!name) throw new Error('UserHub must be constructed via idFromName(userId)');
+    return name;
+  }
+
+  /** Merge persisted settings JSON into the live durations (clamped). */
+  private applySettings(raw: unknown): void {
+    const s = (raw ?? {}) as { pomodoro?: { focus_min?: number; break_min?: number; auto_start?: boolean } };
+    const f = Number(s.pomodoro?.focus_min ?? this.settings.focusMs / 60_000);
+    const b = Number(s.pomodoro?.break_min ?? this.settings.breakMs / 60_000);
+    this.settings = {
+      focusMs: clamp(f, 5, 90) * 60_000,
+      breakMs: clamp(b, 1, 30) * 60_000,
+      autoStart: !!s.pomodoro?.auto_start
+    };
+  }
+
+  private async loadRunningFromD1(): Promise<RunningSession | null> {
+    const at = await this.env.DB.prepare(
+      `SELECT at.session_id, at.task_id, at.started_at, s.source
+       FROM active_timers at JOIN time_sessions s ON s.id = at.session_id
+       WHERE at.user_id = ?1`
+    ).bind(this.userId()).first<{ session_id: string; task_id: string; started_at: number; source: 'timer' | 'pomodoro' | null }>().catch(() => null);
+    if (!at) return null;
+    return { id: at.session_id, task_id: at.task_id, started_at: Number(at.started_at), source: at.source ?? 'timer' };
   }
 
   // ---------- fetch router ----------
@@ -132,10 +149,32 @@ export class UserHub extends DurableObject {
     if (url.pathname === '/notify') {
       const body = await request.json<{ events: WsEvent[] }>().catch(() => null);
       if (body?.events?.length) {
-        for (const e of body.events) this.lastEventId = Math.max(this.lastEventId, e.id);
+        let runningCleared = false;
+        for (const e of body.events) {
+          this.lastEventId = Math.max(this.lastEventId, e.id);
+          if (e.type === 'settings.updated') this.applySettings((e.data as any)?.settings);
+          if (this.invalidateDeletedTasks(e)) runningCleared = true;
+        }
+        if (runningCleared) {
+          // cascade-deleted rows are already gone from D1; drop the ghost timer
+          // and tell every device — then persist/reset pomo + alarms
+          await this.persistPomo();
+          await this.rearmAlarm();
+          await this.logAndBroadcast({ id: 0, type: 'timer.stopped', actor: 'server', at: Date.now(), data: { session: null } });
+        }
         this.broadcastMany(body.events);
       }
       return Response.json({ ok: true });
+    }
+    if (url.pathname === '/ratelimit') {
+      // Atomic per-user counter for the hot-path rate limit: the DO
+      // is a single instance per user, so read-modify-write here is race-free
+      // and puts no writes on a shared KV key. Counters are in-memory (reset on
+      // eviction); the KV fallback in middleware.rateLimitHit remains as floor.
+      const body = await request.json<{ key: string; limit: number; windowMs: number }>().catch(() => null);
+      if (!body || typeof body.key !== 'string' || !Number.isFinite(body.limit) || !Number.isFinite(body.windowMs))
+        return this.err(422, 'validation', 'invalid body');
+      return Response.json(this.rateLimit(body.key, body.limit, body.windowMs));
     }
     if (url.pathname === '/timer') {
       const body = await request.json<{ op: 'start' | 'stop' | 'switch'; task_id?: string; device: string }>().catch(() => null);
@@ -230,31 +269,48 @@ export class UserHub extends DurableObject {
 
     const now = Date.now();
     const sessionId = ulid(now);
-    this.running = { id: sessionId, task_id: taskId, started_at: now, source };
-    const ev = { type: 'timer.started', actor: device, data: { session: this.running, task_id: taskId } };
+    const session: RunningSession = { id: sessionId, task_id: taskId, started_at: now, source };
+    const ev = { type: 'timer.started', actor: device, data: { session, task_id: taskId } };
 
     // single ordered batch: session row + recovery mirror + sync_log (NFR-5: no partial writes)
-    const results = await this.env.DB.batch([
-      this.env.DB.prepare(
-        `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
-      ).bind(sessionId, this.userId(), taskId, now, source),
-      this.env.DB.prepare(
-        `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT (user_id) DO UPDATE SET task_id = excluded.task_id,
-           session_id = excluded.session_id, started_at = excluded.started_at, pomo_state = excluded.pomo_state`
-      ).bind(this.userId(), taskId, sessionId, now, JSON.stringify(this.pomo)),
-      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-        .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
-    ]);
+    let results: D1Result<unknown>[];
+    try {
+      results = await this.env.DB.batch([
+        this.env.DB.prepare(
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
+        ).bind(sessionId, this.userId(), taskId, now, source),
+        this.env.DB.prepare(
+          `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT (user_id) DO UPDATE SET task_id = excluded.task_id,
+             session_id = excluded.session_id, started_at = excluded.started_at, pomo_state = excluded.pomo_state`
+        ).bind(this.userId(), taskId, sessionId, now, JSON.stringify(this.pomo)),
+        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
+          .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
+      ]);
+    } catch (e) {
+      // D1 batch failed — most plausibly the partial unique index
+      // (idx_sessions_running: one open session per user, e.g. a manual
+      // open-ended row from an older version). Resync from the mirror instead
+      // of throwing a 500 / keeping ghost state.
+      this.running = await this.loadRunningFromD1();
+      if (this.running) {
+        return this.err(409, 'already_running', 'a timer is already running — use switch', { running: this.running });
+      }
+      console.error(JSON.stringify({ evt: 'timer_start_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      return this.err(503, 'timer_unavailable', 'could not start the timer — retry shortly');
+    }
+    this.running = session; // in-memory state only advances once D1 confirms
     const eventId = Number(results[2]?.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, eventId);
     this.broadcast({ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data });
 
-    // pomodoro: resuming/starting focus accumulation with a live timer (FR-F1)
+    // pomodoro: resuming/starting focus accumulation with a live timer (FR-F1).
+    // Only resume when no segment is already in flight — resetting an
+    // in-flight lastResumeMs would discard accumulated live time.
     if (this.pomo.phase === 'focus') {
-      this.pomo.lastResumeMs = now;
+      if (this.pomo.lastResumeMs == null) this.pomo.lastResumeMs = now;
       if (this.pomo.taskId === null) this.pomo.taskId = taskId;
       await this.persistPomo();
       await this.rearmAlarm();
@@ -354,7 +410,9 @@ export class UserHub extends DurableObject {
       return this.pomoPhaseResponse(device, 'focus');
     }
     if (this.pomo.phase === 'focus') {
-      this.pomo.lastResumeMs = Date.now();
+      // idempotent restart: an in-flight focus segment keeps its accumulated
+      // time — only seed lastResumeMs when no segment is running
+      if (this.pomo.lastResumeMs == null) this.pomo.lastResumeMs = Date.now();
       await this.persistPomo();
     }
     await this.rearmAlarm();
@@ -427,12 +485,10 @@ export class UserHub extends DurableObject {
   override async alarm(): Promise<void> {
     await this.ensureLoaded();
     const now = Date.now();
-    const fired: WsEvent[] = [];
 
     // 12h running failsafe — nudge only, never auto-stop (§5.7)
     if (this.running && now >= this.running.started_at + TWELVE_H) {
-      fired.push({ id: 0, type: 'timer.nudge', actor: 'server', at: now, data: { running_since: this.running.started_at } });
-      await this.logAndBroadcast(fired[fired.length - 1]!);
+      await this.logAndBroadcast({ id: 0, type: 'timer.nudge', actor: 'server', at: now, data: { running_since: this.running.started_at } });
     }
 
     // focus goal reached → decide (a prompt, not a timed phase; never stops the timer, FR-F2)
@@ -474,6 +530,47 @@ export class UserHub extends DurableObject {
   }
 
   // ---------- fan-out ----------
+
+  /**
+   * Cascade deletes (task/project) remove time_sessions + active_timers rows in
+   * D1, but the DO holds the running session in memory — clear it here when the
+   * deleted subtree contained it. Returns true when state changed.
+   */
+  private invalidateDeletedTasks(e: WsEvent): boolean {
+    const d = e.data as any;
+    const ids = new Set<string>();
+    if (e.type === 'task.deleted' && d?.task?.id) ids.add(d.task.id);
+    if (e.type === 'project.deleted' && Array.isArray(d?.tasks)) {
+      for (const t of d.tasks) if (t?.id) ids.add(t.id);
+    }
+    if (ids.size === 0) return false;
+    let changed = false;
+    if (this.running && ids.has(this.running.task_id)) {
+      this.running = null;
+      changed = true;
+    }
+    if (this.pomo.taskId && ids.has(this.pomo.taskId)) {
+      // the cycle's anchor task is gone — cancel the cycle without logging time
+      this.pomo = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+      changed = true;
+    }
+    return changed;
+  }
+
+  private rateLimit(key: string, limit: number, windowMs: number): { limited: boolean; retry_after_s: number } {
+    const now = Date.now();
+    const win = Math.floor(now / windowMs);
+    const k = `${win}:${key}`;
+    const cur = (this.rl.get(k) ?? 0) + 1;
+    this.rl.set(k, cur);
+    if (this.rl.size > 64) {
+      for (const [k2] of this.rl) {
+        if (Number(k2.split(':', 1)[0]) < win) this.rl.delete(k2);
+      }
+    }
+    if (cur > limit) return { limited: true, retry_after_s: Math.ceil((windowMs - (now % windowMs)) / 1000) };
+    return { limited: false, retry_after_s: 0 };
+  }
 
   private broadcast(ev: WsEvent): void {
     const msg = JSON.stringify(ev);

@@ -9,15 +9,33 @@ export class RuleError extends Error {
   }
 }
 
+/**
+ * Detect SQLite unique-constraint violations from a D1 error.
+ * D1 does not expose structured SQLite codes, so match on the standard
+ * message text plus the driver error code when present.
+ */
+export function isUniqueConstraintError(e: unknown): boolean {
+  const err = e as { message?: string; code?: string | number } | null;
+  if (!err) return false;
+  if (typeof err.code === 'number' && err.code === 2067) return true; // SQLITE_CONSTRAINT_UNIQUE
+  return /UNIQUE constraint failed/i.test(String(err.message ?? ''));
+}
+
 // ---------- hierarchy (FR-T3, FR-T1) ----------
 
-export async function getTaskOwned(env: Env, userId: string, taskId: string) {
+export interface TaskRow {
+  id: string; user_id: string; project_id: string; parent_id: string | null;
+  name: string; notes: string; done: number; position: number;
+  created_at: number; updated_at: number;
+}
+
+export async function getTaskOwned(env: Env, userId: string, taskId: string): Promise<TaskRow> {
   const t = await env.DB.prepare(
     `SELECT id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at
      FROM tasks WHERE id = ?1 AND user_id = ?2`
-  ).bind(taskId, userId).first();
+  ).bind(taskId, userId).first<TaskRow>();
   if (!t) throw new RuleError(404, 'not_found', 'task not found');
-  return t as any;
+  return t;
 }
 
 /** Subtask creation requires a ROOT-task parent ("a subtask can't have subtasks", FR-T3). */
@@ -38,10 +56,10 @@ export async function assertNotSubtask(env: Env, userId: string, id: string): Pr
 
 // ---------- dependencies (FR-M4/M5) ----------
 
-async function getTaskFull(env: Env, userId: string, taskId: string) {
+async function getTaskFull(env: Env, userId: string, taskId: string): Promise<{ id: string; project_id: string; parent_id: string | null; name: string }> {
   const t = await env.DB.prepare(
     `SELECT id, project_id, parent_id, name FROM tasks WHERE id = ?1 AND user_id = ?2`
-  ).bind(taskId, userId).first<any>();
+  ).bind(taskId, userId).first<{ id: string; project_id: string; parent_id: string | null; name: string }>();
   if (!t) throw new RuleError(404, 'not_found', 'task not found');
   return t;
 }

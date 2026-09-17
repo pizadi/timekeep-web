@@ -88,7 +88,6 @@ wrangler d1 create timekeep                # put the id in wrangler.jsonc
 wrangler kv namespace create KV            # put the id in wrangler.jsonc
 wrangler r2 bucket create timekeep-dumps   # optional: daily dumps
 npm run db:migrate:remote
-wrangler secret put SESSION_SECRET         # openssl rand -hex 32
 wrangler secret put RESEND_API_KEY         # optional: verification/reset email
 wrangler secret put TURNSTILE_SECRET_KEY   # optional: bot defense
 wrangler vars put TURNSTILE_SITE_KEY ...   # public; enables the widget + CSP additions
@@ -110,8 +109,9 @@ Notes:
 * Optional secrets degrade gracefully: no `RESEND_API_KEY` means password-reset
   mail is simply unavailable (the admin can reset passwords from the panel);
   no Turnstile keys means the widget is off.
-* The daily cron (03:17 UTC) dumps all tables to R2 (30-day retention) and
-  prunes `sync_log`.
+* The daily cron (03:17 UTC) dumps all tables to R2 (30-day retention, streamed
+  via multipart upload) and prunes `sync_log`, expired sessions, and expired
+  email tokens.
 
 ## Project layout
 
@@ -138,9 +138,15 @@ e2e/                        end-to-end verification scripts
   boundaries are computed with `Intl` and pushed into SQL via a `json_each()`
   day table, so aggregation stays in the database. DST edge cases are covered
   by unit-test fixtures (Tehran / New York).
-* **Event-driven sync** — every mutation appends to `sync_log` in the same D1
-  batch as the write, then the DO fans out over WebSockets; clients that miss
-  an event refetch via `GET /api/sync?since=`.
+* **Event-driven sync** — every mutation appends to `sync_log` and the DO fans
+  out over WebSockets; clients that miss an event refetch via
+  `GET /api/sync?since=`. Transactionality note: the UserHub DO writes entity
+  rows and events in one D1 batch; route handlers write them in two back-to-back
+  batches (worst case a crash between them drops the event — clients recover via
+  the reconcile poll or a refetch).
+* **Frontend flows for every backend feature** — the emailed password-reset
+  (`/reset?token=…`) and email-verification (`/verify?token=…`) links land on
+  working SPA views.
 
 Detailed spec-coverage tables and known trade-offs live in
 [docs/requirement-coverage.md](docs/requirement-coverage.md).
