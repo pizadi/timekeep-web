@@ -10,6 +10,7 @@ export default function TimerBar() {
   const tasks = useStore((s) => s.tasks);
   const pomo = useStore((s) => s.pomo);
   const serverNow = useStore((s) => s.serverNow);
+  const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
   const [elapsed, setElapsed] = useState(0);
   const [recovering, setRecovering] = useState(false);
   const promptedRef = useRef(false);
@@ -46,14 +47,16 @@ export default function TimerBar() {
     }
   }, [running, elapsed, task?.name]);
 
-  // pomodoro notifications (FR-Nt1) — only when the user enabled them
+  // pomodoro notifications (FR-Nt1) — end-of-run phases (decide/ready) always
+  // notify when the browser permission is granted (they were requested when the
+  // user enabled pomodoro mode); other phase changes follow the Settings toggle
   const prevPhase = useRef<string | null>(null);
   useEffect(() => {
     if (!pomo) { prevPhase.current = null; return; }
     const phase = pomo.phase;
     if (prevPhase.current && prevPhase.current !== phase) {
       const msgs: Record<string, string> = {
-        decide: 'Focus goal reached — start a break or skip?',
+        decide: 'Focus block complete — start a break or skip?',
         break: 'Break started — step away for a bit',
         ready: 'Break over — ready for the next focus',
         focus: 'Focus phase started',
@@ -61,7 +64,7 @@ export default function TimerBar() {
       };
       const msg = msgs[phase] ?? phase;
       pushToast('info', msg);
-      notifyIfPermitted(msg); // exactly one notification per phase change
+      notifyIfPermitted(msg, phase === 'decide' || phase === 'ready'); // one notification per phase change
     }
     prevPhase.current = phase;
   }, [pomo?.phase]);
@@ -93,7 +96,15 @@ export default function TimerBar() {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
-  if (!running) return <div className="timerbar muted" style={{ justifyContent: 'center' }}>No timer running — press <b style={{ margin: '0 6px' }}>T</b> on a selected task</div>;
+  if (!running) {
+    return (
+      <div className="timerbar muted" style={{ justifyContent: 'center' }}>
+        {pomoEnabled
+          ? <>Pomodoro on — press <b style={{ margin: '0 6px' }}>T</b> on a selected task to start a focus block</>
+          : <>No timer running — press <b style={{ margin: '0 6px' }}>T</b> on a selected task</>}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -118,15 +129,18 @@ export default function TimerBar() {
 /** Progress ring + decide prompt (FR-F2/F6). */
 function PomodoroRing() {
   const pomo = useStore((s) => s.pomo);
+  const running = useStore((s) => s.running);
   const serverNow = useStore((s) => s.serverNow);
   if (!pomo || pomo.phase === 'idle') return null;
   const goal = Math.max(1, pomo.focus_goal_ms);
   // focus_ms_live / break_ms_left are DO-clock snapshots taken at the last
   // phase event. Advance them by the time since the snapshot
   // (server-corrected), so the ring/labels tick every second with serverNow.
+  // Focus advances only while a timer actually runs (FR-F1): a stopped timer
+  // freezes focus_ms_live, and advancing it here would inflate the ring.
   const snapshotClientMs = (pomo.server_now ?? serverNow) - serverOffsetMs;
   const sinceSnapshot = Math.max(0, serverNow - snapshotClientMs);
-  const focusLive = Math.min(goal, pomo.focus_ms_live + sinceSnapshot);
+  const focusLive = Math.min(goal, pomo.focus_ms_live + (running && pomo.phase === 'focus' ? sinceSnapshot : 0));
   const breakLeft = Math.max(0, (pomo.break_ms_left ?? 0) - sinceSnapshot);
   const live = pomo.phase === 'break' || pomo.phase === 'ready' ? goal : focusLive;
   const frac = pomo.phase === 'break'
@@ -235,13 +249,15 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-async function notifyIfPermitted(body: string): Promise<void> {
+async function notifyIfPermitted(body: string, force = false): Promise<void> {
   const settings = store.get().settings;
-  if (!settings?.notifications_enabled) return; // permission only requested from Settings toggle (FR-Nt1)
+  // end-of-run notifications (force) only need the browser permission — they
+  // were opted in when pomodoro mode was enabled; the rest need the toggle too
+  if (!force && !settings?.notifications_enabled) return;
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
     const n = new Notification('TimeKeep', { body, tag: 'timekeep-pomo' });
-    if (settings.sound_enabled) beep();
+    if (settings?.sound_enabled) beep();
     setTimeout(() => n.close(), 8000);
   } catch { /* notification quirks are non-fatal */ }
 }

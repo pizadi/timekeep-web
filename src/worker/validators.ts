@@ -104,6 +104,7 @@ export const sessionPatchSchema = z.object({
 
 export const settingsSchema = z.object({
   pomodoro: z.object({
+    enabled: z.boolean(),
     focus_min: z.number().int().min(POMODORO_LIMITS.focusMinMin).max(POMODORO_LIMITS.focusMinMax),
     break_min: z.number().int().min(POMODORO_LIMITS.breakMinMin).max(POMODORO_LIMITS.breakMinMax),
     auto_start: z.boolean()

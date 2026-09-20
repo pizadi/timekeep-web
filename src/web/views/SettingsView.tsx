@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { store, useStore, pushToast, go } from '../lib/store';
 import { api } from '../lib/api';
 import { applyTheme, ThemePref } from '../lib/theme';
+import Combobox from '../components/Combobox';
 
 interface AuthSessionRow { id: string; user_agent: string; ip: string; created_at: number; last_seen_at: number; current: boolean }
 interface AdminUserRow {
@@ -34,6 +35,7 @@ export default function SettingsView({ onClose, currentTheme }: {
   const [adminBusy, setAdminBusy] = useState(false);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState('');
+  const [tzText, setTzText] = useState(user.timezone);
 
   useEffect(() => { void api<{ sessions: AuthSessionRow[] }>('/me/sessions').then((r) => setSessions(r.sessions)).catch(() => {}); }, []);
   useEffect(() => {
@@ -66,6 +68,30 @@ export default function SettingsView({ onClose, currentTheme }: {
     setNotifState(perm);
     if (perm === 'granted') await save({ notifications_enabled: true });
     else pushToast('error', 'Notification permission was not granted');
+  }
+
+  /**
+   * Pomodoro mode: the plain timer becomes a pomodoro (focus blocks + break
+   * prompts). Turning it ON asks for notification permission right away (user
+   * gesture, FR-Nt1) so end-of-run notifications can fire; run endings always
+   * show as in-app toasts even if the browser permission is denied.
+   */
+  async function enablePomodoro(on: boolean) {
+    if (on && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* unsupported quirks */ }
+      setNotifState(Notification.permission);
+    }
+    const granted = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    try {
+      const res = await api<{ settings: any }>('/settings', {
+        method: 'PUT',
+        body: { pomodoro: { enabled: on }, ...(on && granted ? { notifications_enabled: true } : {}) }
+      });
+      store.setSettings(res.settings);
+      if (!on) pushToast('info', 'Pomodoro off — the plain timer is back');
+      else if (granted) pushToast('info', 'Pomodoro on — you will be notified when a focus block or break ends');
+      else pushToast('info', 'Pomodoro on — notifications are blocked, run endings show as in-app toasts');
+    } catch (e: any) { pushToast('error', e.message); }
   }
 
   async function revoke(id: string) {
@@ -132,11 +158,22 @@ export default function SettingsView({ onClose, currentTheme }: {
         <h3>Profile</h3>
         <label className="field"><span>Display name</span>
           <input className="input" defaultValue={user.name} onBlur={(e) => e.target.value !== user.name && saveProfile({ name: e.target.value })} /></label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
           <label className="field"><span>Timezone (IANA — drives all report bucketing)</span>
-            <input className="input" list="tk-tz" defaultValue={user.timezone}
-              onBlur={(e) => e.target.value !== user.timezone && saveProfile({ timezone: e.target.value })} />
-            <datalist id="tk-tz">{timezones.map((tz) => <option key={tz} value={tz} />)}</datalist>
+            <Combobox
+              ariaLabel="Timezone"
+              text={tzText}
+              onTextChange={setTzText}
+              onPick={(tz) => {
+                setTzText(tz);
+                if (store.get().user?.timezone !== tz) void saveProfile({ timezone: tz });
+              }}
+              onBlur={() => {
+                if (tzText && store.get().user?.timezone !== tzText) void saveProfile({ timezone: tzText });
+              }}
+              groups={[{ options: timezones.map((tz) => ({ value: tz, label: tz })) }]}
+              placeholder={user.timezone}
+            />
           </label>
           <label className="field"><span>Week starts on</span>
             <select className="input" value={user.week_start} onChange={(e) => saveProfile({ week_start: Number(e.target.value) })}>
@@ -160,7 +197,15 @@ export default function SettingsView({ onClose, currentTheme }: {
           </select></label>
 
         <h3 style={{ marginTop: 18 }}>Pomodoro</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <label className="field" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" checked={settings.pomodoro.enabled}
+            onChange={(e) => enablePomodoro(e.target.checked)} />
+          <span>Pomodoro timer — the simple timer becomes focus blocks with break prompts (endings notify you)</span>
+        </label>
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 10,
+          opacity: settings.pomodoro.enabled ? 1 : 0.55
+        }}>
           <label className="field"><span>Focus ({settings.pomodoro.focus_min} min)</span>
             <input type="range" min={5} max={90} step={5} defaultValue={settings.pomodoro.focus_min}
               onMouseUp={(e) => save({ pomodoro: { focus_min: Number((e.target as HTMLInputElement).value) } })}
@@ -263,7 +308,7 @@ export default function SettingsView({ onClose, currentTheme }: {
                 </div>
               )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 12 }}>
               <label className="field"><span>Username (new user)</span>
                 <input className="input" value={newUsername} onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
                   placeholder="e.g. sara" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
@@ -299,6 +344,9 @@ export default function SettingsView({ onClose, currentTheme }: {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
           <button className="btn primary" onClick={onClose}>Done</button>
         </div>
+        <p className="muted" style={{ fontSize: 12, textAlign: 'center', margin: '12px 0 0' }}>
+          TimeKeep v{__APP_VERSION__}
+        </p>
       </div>
     </div>
   );

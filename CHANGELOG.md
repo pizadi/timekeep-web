@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-09-20 — v0.1.0: dialog overflow fix, styled comboboxes, pomodoro mode replaces the simple timer
+
+### Web (SPA)
+
+- **Manual session dialog no longer clips.** The Start/End fields sat in a
+  `1fr 1fr` grid whose tracks honor the large intrinsic minimum width of
+  `datetime-local` inputs — at the modal's 460px width the fields spilled past
+  the dialog border. Inputs now get `min-width: 0`, the two-column grids use
+  `minmax(0, 1fr)` tracks (Log editor + Settings), and `.modal` scrolls
+  (`max-height: calc(100dvh - 32px)`) instead of overflowing on short viewports.
+- **Suggestion pickers are custom comboboxes.** The unstyleable native
+  `<datalist>` boxes (task picker in the session editor, timezone picker in
+  Settings) were replaced by a shared `Combobox` component: themed dropdown with
+  project color chips and grouped headers, full keyboard support
+  (↑/↓/Enter/Esc/Tab), ARIA combobox/listbox semantics, and viewport-positioned
+  rendering so modal scroll containers can never clip it. Save-time task
+  resolution (exact → unique contains) is unchanged.
+- **Pomodoro mode (opt-in) replaces the simple timer.** Settings → Pomodoro has
+  an enable toggle; when on, every plain timer start (T key, Jump back in,
+  timer bar) runs the pomodoro state machine — focus block, "goal reached"
+  decide prompt, timed break, ready — instead of a bare timer. The timer bar
+  shows the phase ring and its controls for every timer, and the idle hint
+  names focus blocks. Turning the mode on requests notification permission
+  immediately (user gesture); end-of-run events (focus goal reached, break
+  over) always fire a browser notification when permission was granted plus the
+  in-app toast; other phase changes keep following the "Browser notifications"
+  toggle. Sound still follows the sound setting.
+
+### Worker / Durable Object
+
+- **`pomodoro.enabled` setting (default false).** Added to the settings schema
+  and defaults; no migration (settings are a merged JSON blob). The UserHub DO
+  picks the flag up live via `settings.updated`; disabling mid-cycle cancels the
+  live pomodoro everywhere (broadcast `pomodoro.phase` idle) while the running
+  timer keeps counting — nothing ever auto-stops.
+- **Plain timer starts engage the focus cycle when the mode is on.** `/timer/start`
+  seeds a fresh focus phase (idle/decide/ready → focus; starting during a break
+  cancels the break — same semantics as `/pomo/start`), and the session row is
+  written with `source: 'pomodoro'` so the log's Source badge is meaningful;
+  `/timer/switch` re-anchors the running cycle to the new task and tags the new
+  session `'pomodoro'` too. With the mode off, behavior and sources are
+  unchanged. `timer/start` and `timer/switch` responses now carry the
+  DO's `pomo` state (acting devices apply it directly — they ignore their own
+  WS echoes).
+- **Ring correctness while the timer is stopped.** Focus accumulation freezes
+  when tracking stops (FR-F1); the client no longer advances the frozen
+  `focus_ms_live` snapshot (break countdowns still tick against the
+  wall-clock deadline).
+
+### Tooling
+
+- **Versioning.** `0.1.0` is the first tagged release. The app semver lives in
+  `package.json` and is injected at build time: the SPA gets it via the Vite
+  `define` (shown as "TimeKeep v0.1.0" at the bottom of Settings), the Worker
+  via the `__APP_VERSION__` define in the wrangler configs (bump together with
+  `package.json` on release). `GET /api/version` now reports `version` (semver)
+  alongside `build` (deploy SHA); the SPA bundle embeds the same version.
+
+### Tests
+
+- New `e2e/pomo-mode-test.mjs`: mode off → plain starts (`source: 'timer'`),
+  mode on → engaged focus cycle + sources, switch re-anchoring, skip → idle,
+  disable mid-cycle → idle + timer keeps running, legacy `/pomo/start` intact.
+
 ## 2026-09-17 — Correctness, sync, and UX fixes across worker, DO, and SPA
 
 A broad fix pass over the whole codebase. Detailed notes:

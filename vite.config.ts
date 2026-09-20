@@ -1,11 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
+import pkg from './package.json';
 
 // SPA build → dist/client (served by the Worker via Static Assets, see wrangler.jsonc)
 export default defineConfig({
   root: resolve(__dirname, 'src/web'),
   plugins: [react()],
+  // app semver comes from package.json — the single version source of truth
+  // (the worker gets it at deploy time via `wrangler deploy --define`)
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   build: {
     outDir: resolve(__dirname, 'dist/client'),
     emptyOutDir: true,

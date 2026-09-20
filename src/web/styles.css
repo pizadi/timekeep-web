@@ -140,7 +140,7 @@ a { color: var(--accent); }
 .btn.small { padding: 3px 8px; font-size: 12.5px; }
 
 .input, select.input, textarea.input {
-  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text);
 }
 .input:focus { border-color: var(--accent); outline: none; }
@@ -278,8 +278,31 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 
 /* ---------- modal ---------- */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 80; display: flex; align-items: center; justify-content: center; padding: 16px; }
-.modal { width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+.modal {
+  width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow);
+  /* tall dialogs scroll instead of spilling past the overlay (small viewports) */
+  max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain;
+}
 .modal h3 { margin-top: 0; }
+
+/* ---------- combobox (styled replacement for native <datalist> pickers) ---------- */
+.combobox-list {
+  position: fixed; z-index: 95; max-height: 240px; overflow: auto; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.combobox-group-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted); padding: 6px 8px 2px; font-weight: 700;
+}
+.combobox-opt {
+  display: flex; gap: 8px; align-items: center; padding: 6px 8px;
+  border-radius: 4px; cursor: pointer;
+}
+.combobox-opt.active, .combobox-opt:hover { background: var(--panel-2); }
+.combobox-opt .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combobox-empty { padding: 8px; color: var(--muted); }
 
 .sessions-list { max-height: 320px; overflow: auto; }
 .sr-only-row { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

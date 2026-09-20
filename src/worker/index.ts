@@ -24,10 +24,15 @@ const app = new Hono<WorkerType>();
 
 app.use('*', securityHeaders);
 
-// health + version (unauthenticated, NFR-9)
+// health + version (unauthenticated, NFR-9). `version` is the app semver from
+// package.json (injected at build/deploy); `build` is the deploy SHA. The
+// typeof guard keeps ad-hoc `wrangler deploy` calls (without the --define)
+// honest instead of crashing on a missing global.
+const APP_VERSION = typeof __APP_VERSION__ === 'undefined' ? 'dev' : __APP_VERSION__;
 app.get('/api/version', (c) => c.json({
   name: 'timekeep-web',
-  version: __BUILD_SHA__,
+  version: APP_VERSION,
+  build: __BUILD_SHA__,
   now: Date.now()
 }));
 

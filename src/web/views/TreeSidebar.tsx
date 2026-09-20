@@ -98,13 +98,15 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
       return;
     }
     try {
-      const res = await api<{ session: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
+      const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
       store.setRunning(res.session);
+      if (res.pomo) store.setPomo(res.pomo);
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'already_running') {
         try {
-          const res = await api<{ started: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
+          const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
           store.setRunning(res.started);
+          if (res.pomo) store.setPomo(res.pomo);
         } catch (e2: any) { pushToast('error', e2.message); }
       } else pushToast('error', e.message);
     }

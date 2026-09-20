@@ -210,8 +210,9 @@ function QuickStart() {
           <button key={t.id} className="btn small" onClick={async () => {
             try {
               store.selectTask(t.id);
-              const res = await api<{ session: any }>('/timer/start', { method: 'POST', body: { task_id: t.id } });
+              const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: t.id } });
               store.setRunning(res.session);
+              if (res.pomo) store.setPomo(res.pomo);
             } catch (e: any) {
               if (e instanceof ApiError && e.code === 'already_running') await switchTo(t.id);
               else pushToast('error', e.message);
@@ -225,8 +226,9 @@ function QuickStart() {
 
 async function switchTo(taskId: string): Promise<void> {
   try {
-    const res = await api<{ started: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
+    const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
     store.setRunning(res.started);
+    if (res.pomo) store.setPomo(res.pomo);
   } catch (e: any) {
     pushToast('error', e.message);
   }

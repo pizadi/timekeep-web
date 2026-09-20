@@ -3,6 +3,7 @@ import { POMODORO_DEFAULTS, SESSION_RULES } from '../shared/constants';
 
 export const DEFAULT_SETTINGS = {
   pomodoro: {
+    enabled: false,                        // opt-in: plain timer vs pomodoro mode (FR-F0)
     focus_min: POMODORO_DEFAULTS.focusMin,
     break_min: POMODORO_DEFAULTS.breakMin,
     auto_start: POMODORO_DEFAULTS.autoStart

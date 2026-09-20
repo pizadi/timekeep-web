@@ -19,7 +19,7 @@ export interface PomoState {
 }
 
 export interface Settings {
-  pomodoro: { focus_min: number; break_min: number; auto_start: boolean };
+  pomodoro: { enabled: boolean; focus_min: number; break_min: number; auto_start: boolean };
   grace_min: number;
   notifications_enabled: boolean;
   sound_enabled: boolean;

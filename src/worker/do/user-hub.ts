@@ -35,7 +35,7 @@ export class UserHub extends DurableObject {
   private loaded = false;
   private running: RunningSession | null = null;
   private pomo: PomoState = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
-  private settings = { focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
+  private settings = { pomoEnabled: false, focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
   private lastEventId = 0;
   private rl = new Map<string, number>(); // rate-limit counters (window key → hits)
 
@@ -107,10 +107,11 @@ export class UserHub extends DurableObject {
 
   /** Merge persisted settings JSON into the live durations (clamped). */
   private applySettings(raw: unknown): void {
-    const s = (raw ?? {}) as { pomodoro?: { focus_min?: number; break_min?: number; auto_start?: boolean } };
+    const s = (raw ?? {}) as { pomodoro?: { enabled?: boolean; focus_min?: number; break_min?: number; auto_start?: boolean } };
     const f = Number(s.pomodoro?.focus_min ?? this.settings.focusMs / 60_000);
     const b = Number(s.pomodoro?.break_min ?? this.settings.breakMs / 60_000);
     this.settings = {
+      pomoEnabled: !!s.pomodoro?.enabled,
       focusMs: clamp(f, 5, 90) * 60_000,
       breakMs: clamp(b, 1, 30) * 60_000,
       autoStart: !!s.pomodoro?.auto_start
@@ -150,9 +151,17 @@ export class UserHub extends DurableObject {
       const body = await request.json<{ events: WsEvent[] }>().catch(() => null);
       if (body?.events?.length) {
         let runningCleared = false;
+        let pomoCancelled = false;
         for (const e of body.events) {
           this.lastEventId = Math.max(this.lastEventId, e.id);
-          if (e.type === 'settings.updated') this.applySettings((e.data as any)?.settings);
+          if (e.type === 'settings.updated') {
+            this.applySettings((e.data as any)?.settings);
+            // pomodoro mode turned off mid-cycle — cancel the live cycle everywhere
+            if (!this.settings.pomoEnabled && this.pomo.phase !== 'idle') {
+              this.pomo = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+              pomoCancelled = true;
+            }
+          }
           if (this.invalidateDeletedTasks(e)) runningCleared = true;
         }
         if (runningCleared) {
@@ -161,6 +170,11 @@ export class UserHub extends DurableObject {
           await this.persistPomo();
           await this.rearmAlarm();
           await this.logAndBroadcast({ id: 0, type: 'timer.stopped', actor: 'server', at: Date.now(), data: { session: null } });
+        }
+        if (pomoCancelled) {
+          await this.persistPomo();
+          await this.rearmAlarm();
+          await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: Date.now(), data: { pomo: this.visiblePomo() } });
         }
         this.broadcastMany(body.events);
       }
@@ -267,9 +281,18 @@ export class UserHub extends DurableObject {
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
 
+    // pomodoro mode (FR-F0): a plain timer start IS a pomodoro start — engage
+    // the focus cycle before the batch so the session source and the persisted
+    // pomo_state stay consistent. Fresh cycle from idle/decide/ready; starting
+    // during a break cancels the break (FR-F3) — same semantics as /pomo/start.
+    const engaged = source === 'timer' && this.settings.pomoEnabled;
     const now = Date.now();
+    if (engaged && this.pomo.phase !== 'focus') {
+      this.pomo = { phase: 'focus', taskId, accumulatedFocusMs: 0, lastResumeMs: now, breakEndsAt: null };
+    }
+
     const sessionId = ulid(now);
-    const session: RunningSession = { id: sessionId, task_id: taskId, started_at: now, source };
+    const session: RunningSession = { id: sessionId, task_id: taskId, started_at: now, source: engaged ? 'pomodoro' : source };
     const ev = { type: 'timer.started', actor: device, data: { session, task_id: taskId } };
 
     // single ordered batch: session row + recovery mirror + sync_log (NFR-5: no partial writes)
@@ -279,7 +302,7 @@ export class UserHub extends DurableObject {
         this.env.DB.prepare(
           `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
-        ).bind(sessionId, this.userId(), taskId, now, source),
+        ).bind(sessionId, this.userId(), taskId, now, session.source),
         this.env.DB.prepare(
           `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state)
            VALUES (?1, ?2, ?3, ?4, ?5)
@@ -314,8 +337,13 @@ export class UserHub extends DurableObject {
       if (this.pomo.taskId === null) this.pomo.taskId = taskId;
       await this.persistPomo();
       await this.rearmAlarm();
+      if (engaged) {
+        // the cycle (re)started — tell every device, and include the fresh
+        // pomodoro state in the response (the actor device ignores its own echoes)
+        await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: device, at: now, data: { pomo: this.visiblePomo() } });
+      }
     }
-    return Response.json({ session: this.running, events: [{ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data }] });
+    return Response.json({ session: this.running, pomo: this.visiblePomo(), events: [{ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data }] });
   }
 
   private async timerStop(device: string): Promise<Response> {
@@ -362,10 +390,18 @@ export class UserHub extends DurableObject {
       return Response.json({ session: this.running, events: [] });
     }
 
+    // pomodoro mode (FR-F0): a switch mid-cycle keeps the focus run alive on
+    // the new task (the in-flight focus segment just continues) and the new
+    // session is tagged 'pomodoro' — re-anchor before the batch so the
+    // persisted pomo_state stays consistent.
+    const engaged = this.settings.pomoEnabled;
+    if (engaged && this.pomo.phase !== 'idle') this.pomo.taskId = taskId;
+
     const now = Date.now();
     const stopped = { ...this.running, ended_at: now };
     const newId = ulid(now + 1);
-    const started: RunningSession = { id: newId, task_id: taskId, started_at: now + 1, source: 'timer' };
+    const newSource: 'timer' | 'pomodoro' = engaged ? 'pomodoro' : 'timer';
+    const started: RunningSession = { id: newId, task_id: taskId, started_at: now + 1, source: newSource };
     const ev = { type: 'timer.switched', actor: device, data: { stopped, started } };
 
     const results = await this.env.DB.batch([
@@ -373,8 +409,8 @@ export class UserHub extends DurableObject {
         .bind(now, stopped.id),
       this.env.DB.prepare(
         `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, 'timer', '', ?4, ?4)`
-      ).bind(newId, this.userId(), taskId, now + 1),
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
+      ).bind(newId, this.userId(), taskId, now + 1, newSource),
       this.env.DB.prepare(
         `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5 WHERE user_id = ?1`
       ).bind(this.userId(), taskId, newId, now + 1, JSON.stringify(this.pomo)),
@@ -384,9 +420,10 @@ export class UserHub extends DurableObject {
     const eventId = Number(results[3]?.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, eventId);
     this.running = started;
+    if (engaged) await this.persistPomo(); // re-anchored cycle → refresh the kv mirror
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data });
-    return Response.json({ stopped, started, events: [{ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data }] });
+    return Response.json({ stopped, started, pomo: this.visiblePomo(), events: [{ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data }] });
   }
 
   // ---------- pomodoro state machine (FR-F1–F5) ----------

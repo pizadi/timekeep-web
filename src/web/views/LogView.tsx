@@ -1,10 +1,11 @@
 // Session log (FR-S5/S6/S7): chronological, filterable (project/task/range/note),
 // paginated at 200 rows; editor for manual add/edit; delete with undo (FR-T4).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput } from '../lib/time';
 import { addDaysCivil, dayStartInstant } from '../../shared/time';
+import Combobox from '../components/Combobox';
 
 interface LogRow {
   id: string; task_id: string; started_at: number; ended_at: number | null;
@@ -230,6 +231,15 @@ function SessionEditor({
 
   const filteredTasks = tasks; // picker is searchable below rather than pre-filtered
 
+  // task picker groups: one per project (same coverage the old <datalist> had)
+  const taskGroups = useMemo(() => (
+    projects.map((p) => ({
+      label: p.name,
+      options: filteredTasks.filter((t) => t.project_id === p.id)
+        .map((t) => ({ value: t.id, label: t.name, color: p.color }))
+    })).filter((g) => g.options.length > 0)
+  ), [projects, filteredTasks]);
+
   /** Resolve typed text → task id: exact (case-insensitive), then unique contains. */
   const resolveTask = (text: string): string | null => {
     const t = text.trim().toLowerCase();
@@ -280,23 +290,23 @@ function SessionEditor({
         <h3>{isEdit ? 'Edit session' : 'Add manual session'}</h3>
         <label className="field">
           <span>Task</span>
-          <input className="input" list="tk-task-picker" value={taskText}
-            onChange={(e) => {
-              setTaskText(e.target.value);
-              const hit = resolveTask(e.target.value);
+          <Combobox
+            ariaLabel="Task"
+            text={taskText}
+            onTextChange={(v) => {
+              setTaskText(v);
+              const hit = resolveTask(v);
               if (hit) setTaskId(hit);
-            }} placeholder="Type to search…" />
-          <datalist id="tk-task-picker">
-            {projects.map((p) => (
-              <optgroup key={p.id} label={p.name}>
-                {filteredTasks.filter((t) => t.project_id === p.id).map((t) => (
-                  <option key={t.id} value={t.name} />
-                ))}
-              </optgroup>
-            ))}
-          </datalist>
+            }}
+            onPick={(id) => {
+              setTaskId(id);
+              setTaskText(tasks.find((t) => t.id === id)?.name ?? '');
+            }}
+            groups={taskGroups}
+            placeholder="Type to search…"
+          />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
           <label className="field">
             <span>Start ({user.timezone})</span>
             <input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
