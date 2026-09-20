@@ -5,8 +5,10 @@
 // The running session is included, clipped to `now` (FR-R6).
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
+import { jsonError } from '../env';
 import { requireAuth, limitHeavy } from '../middleware';
 import { dayBounds, weekStartInstant, civilDate, dayStartInstant, minutes } from '../../shared/time';
+import { REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 
 export const reportRoutes = new Hono<WorkerType>();
 reportRoutes.use('/reports', requireAuth);
@@ -36,6 +38,10 @@ reportRoutes.get('/reports/summary', async (c) => {
 
   const bounds = dayBounds(from, to, tz);
   if (bounds.length === 0) return c.json({ days: [], donut: [], table: [], totals: { today: 0, week: 0, all: 0 }, server_now: now });
+  // audit: civilRange silently truncated at its internal guard — a 5-year range
+  // returned the first ~4 years with no indication. Reject oversized ranges instead.
+  if (bounds.length > REPORT_MAX_RANGE_DAYS)
+    return jsonError(422, 'range_too_large', `report range is limited to ${REPORT_MAX_RANGE_DAYS} days`);
 
   const rangeStart = bounds[0]!.start;
   const rangeEnd = bounds[bounds.length - 1]!.end;
@@ -109,7 +115,7 @@ reportRoutes.get('/reports/heatmap', async (c) => {
   const now = Date.now();
   const year = Number(c.req.query('year') ?? civilDate(now, user.timezone).slice(0, 4));
   if (!Number.isInteger(year) || year < 2000 || year > 2200)
-    return new Response(JSON.stringify({ error: { code: 'validation', message: 'invalid year' } }), { status: 422 });
+    return jsonError(422, 'validation', 'invalid year');
 
   const tz = user.timezone;
   const bounds = dayBounds(`${year}-01-01`, `${year}-12-31`, tz);

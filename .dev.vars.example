@@ -13,6 +13,5 @@ FROM_EMAIL=TimeKeep <dev@localhost>
 # token endpoints default to 30/15min — remove RL_TOKEN_IP to test that limit):
 RL_LOGIN_IP=1000
 RL_LOGIN_EMAIL=1000
-RL_SIGNUP_IP=1000
 RL_ADMIN_IP=1000
 RL_TOKEN_IP=1000

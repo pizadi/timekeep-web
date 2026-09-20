@@ -14,7 +14,7 @@ export default function ChangePasswordView() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (next !== confirm) { setError('the passwords do not match'); return; }
+    if (next !== confirm) { setError('The passwords do not match'); return; }
     setBusy(true); setError('');
     try {
       await api('/me/password', { method: 'POST', body: { current_password: current, password: next } });

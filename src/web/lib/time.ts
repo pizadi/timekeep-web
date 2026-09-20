@@ -1,8 +1,7 @@
 // Client-side display helpers. Bucketing decisions are the server's (NFR-6);
 // the client uses the profile timezone for display and datetime-local defaults.
 // fmtHMS lives once in shared/time.ts (re-exported here for convenience).
-import { api, nowMs } from './api';
-import { store } from './store';
+import { nowMs } from './api';
 import { fmtHMS as fmtHMS_ } from '../../shared/time';
 
 export { fmtHMS_ as fmtHMS };
@@ -56,10 +55,6 @@ function guessOffset(instant: number, tz: string): number {
   return Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute')) - instant;
 }
 
-export function runningElapsedMs(startedAt: number): number {
-  return Math.max(0, nowMs() - startedAt);
-}
-
 /** Last N civil days (inclusive) in the user's timezone — range presets (FR-R1). */
 export function rangePreset(
   preset: 'today' | 'week' | 'month' | '30d' | { from: string; to: string },
@@ -90,5 +85,3 @@ function weekStartCivil(today: string, weekStartDow: number): string {
 export function civilOf(instant: number, tz: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(instant);
 }
-
-export const tzOf = () => store.get().user?.timezone ?? 'UTC';

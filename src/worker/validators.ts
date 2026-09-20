@@ -115,6 +115,68 @@ export const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional()
 });
 
+// ---------- import / restore row schemas (audit S3: no more z.any()) ----------
+// The import/restore collections are validated row-by-row with these schemas;
+// a row that fails is SKIPPED (counted in the summary), never a 500. Cross-row
+// rules (parent-is-root, same-project deps/parents, in-file references) are
+// enforced in routes/export.ts against the parsed rows.
+
+const boolInt = z.union([z.boolean(), z.number(), z.string()])
+  .transform((v) => (v === true || v === 1 || v === '1' ? 1 : 0))
+  .catch(0);
+const finiteInt = (d: number) => z.number().int().finite().catch(d);
+
+export const importProjectRow = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().catch('Imported'),
+  color: z.string().max(7).nullable().catch(null),
+  archived: boolInt,
+  position: finiteInt(0),
+  created_at: finiteInt(0)
+});
+
+export const importTaskRow = z.object({
+  id: z.string().min(1).max(64),
+  project_id: ulidish,
+  parent_id: ulidish.nullable().catch(null),
+  name: z.string().catch('Task'),
+  notes: z.string().catch(''),
+  done: boolInt,
+  position: finiteInt(0),
+  created_at: finiteInt(0)
+});
+
+export const importSubtaskRow = z.object({
+  id: z.string().min(1).max(64),
+  task_id: ulidish,
+  name: z.string().catch('Subtask'),
+  done: boolInt,
+  position: finiteInt(0),
+  created_at: finiteInt(0)
+});
+
+export const importDependencyRow = z.object({
+  task_id: ulidish,
+  depends_on_id: ulidish,
+  created_at: finiteInt(0)
+});
+
+// Sessions: started_at must be a real instant; ended_at may be NULL (the undo
+// payload of a deleted task legitimately contains the open running session —
+// restore re-closes it at restore-time). Duration/future checks live in the
+// routes because the two paths differ (import skips, restore re-closes).
+export const importSessionRow = z.object({
+  id: ulidish,
+  task_id: ulidish,
+  started_at: z.number().int().finite(),
+  ended_at: z.number().int().finite().nullable(),
+  note: z.string().max(LIMITS.noteMax).catch(''),
+  source: z.enum(['timer', 'manual', 'pomodoro']).catch('manual'),
+  created_at: finiteInt(0)
+});
+
+// ---------- undo payloads (FR-T4) ----------
+
 export const layoutSchema = z.object({
   positions: z.array(z.object({
     task_id: ulidish,
@@ -127,6 +189,9 @@ export const importSchema = z.object({
   mode: z.enum(['merge', 'duplicate']),
   data: z.object({
     schema_version: z.number().int().optional(),
+    // rows are validated per-item inside routes/export.ts (importXxxRow schemas) —
+    // a bad row is SKIPPED and counted, matching the documented import semantics;
+    // validating them here would fail the whole file on one bad row
     projects: z.array(z.any()).max(LIMITS.projectsActive * 2).default([]),
     tasks: z.array(z.any()).max(LIMITS.tasksPerUser * 2).default([]),
     subtasks: z.array(z.any()).max(LIMITS.tasksPerUser * 2).default([]),
@@ -143,11 +208,11 @@ export const importSchema = z.object({
 const RESTORE_COLLECTION_MAX = LIMITS.subtasksPerTask * LIMITS.tasksPerUser;
 
 export const restoreSchema = z.object({
-  projects: z.array(z.any()).max(LIMITS.projectsActive).default([]),
-  tasks: z.array(z.any()).max(LIMITS.tasksPerUser).default([]),
-  subtasks: z.array(z.any()).max(RESTORE_COLLECTION_MAX).default([]),
-  dependencies: z.array(z.any()).max(RESTORE_COLLECTION_MAX).default([]),
-  sessions: z.array(z.any()).max(LIMITS.sessionsPerUser).default([])
+  projects: z.array(importProjectRow).max(LIMITS.projectsActive).default([]),
+  tasks: z.array(importTaskRow).max(LIMITS.tasksPerUser).default([]),
+  subtasks: z.array(importSubtaskRow).max(RESTORE_COLLECTION_MAX).default([]),
+  dependencies: z.array(importDependencyRow).max(RESTORE_COLLECTION_MAX).default([]),
+  sessions: z.array(importSessionRow).max(LIMITS.sessionsPerUser).default([])
 }).superRefine((d, ctx) => {
   const total = d.projects.length + d.tasks.length + d.subtasks.length
     + d.dependencies.length + d.sessions.length;

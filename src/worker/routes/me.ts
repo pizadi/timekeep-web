@@ -83,6 +83,9 @@ meRoutes.post('/me/password', async (c) => {
     c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2')
       .bind(user.id, c.get('authSessionId'))
   ]);
+  // audit S1: the D1 deletes alone leave revoked devices' WebSockets live —
+  // close them, sparing the acting device's own session/socket
+  revokeHub(c.env, user.id, { keep: c.get('authSessionId') });
   return c.json({ ok: true });});
 
 /** Hard delete: FK cascades remove every user-owned row (FR-A8, NFR-4). */
@@ -130,11 +133,15 @@ meRoutes.delete('/me/sessions/:id', async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1 AND user_id = ?2')
     .bind(id, c.get('user').id).run();
+  // audit S1: if this was a live device, its socket must die too (selective —
+  // deleting the current session's own row kills only this session's sockets)
+  revokeHub(c.env, c.get('user').id, { only: id });
   return c.json({ ok: true });
 });
 
 meRoutes.post('/me/sessions/revoke-others', async (c) => {
   await c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2')
     .bind(c.get('user').id, c.get('authSessionId')).run();
+  revokeHub(c.env, c.get('user').id, { keep: c.get('authSessionId') });
   return c.json({ ok: true });
 });

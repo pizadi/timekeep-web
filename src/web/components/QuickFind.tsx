@@ -34,7 +34,7 @@ export default function QuickFind({ onClose }: { onClose: () => void }) {
       const t = tasks.find((x) => x.id === hit.id);
       if (t) store.selectProject(t.project_id);
     }
-    store.setView(hit.kind === 'task' ? 'map' : 'tree');
+    store.navigateToView(hit.kind === 'task' ? 'map' : 'tree'); // URL sync (audit: setView desynced the URL)
     onClose();
   }
 

@@ -1,5 +1,3 @@
-import type { WsEvent } from '../shared/constants';
-
 export interface Env {
   DB: D1Database;
   KV: KVNamespace;
@@ -16,7 +14,6 @@ export interface Env {
   // optional dev/test overrides for NFR-3 rate limits (see middleware.rateRules)
   RL_LOGIN_IP?: string;
   RL_LOGIN_EMAIL?: string;
-  RL_SIGNUP_IP?: string;
   RL_RESET_EMAIL?: string;
   RL_TOKEN_IP?: string;
   RL_ADMIN_IP?: string;
@@ -60,5 +57,3 @@ export interface UserInfo {
 
 export const jsonError = (status: number, code: string, message: string, details?: unknown) =>
   Response.json({ error: { code, message, ...(details !== undefined ? { details } : {}) } }, { status });
-
-export { WsEvent };

@@ -53,29 +53,46 @@ export default function MapView() {
     return out;
   }, [positions, projectTasks, levels]);
 
-  // load persisted positions per project (FR-M8)
+  // load persisted positions per project (FR-M8); refetch when another device
+  // changes the layout (audit: layout used to fan out no sync events at all)
   useEffect(() => {
     setPositions({});
     if (!selectedProjectId) return;
-    api<{ positions: { task_id: string; x: number; y: number }[] }>(`/layout/${selectedProjectId}`)
-      .then((res) => {
-        const m: Record<string, Pos> = {};
-        for (const p of res.positions) m[p.task_id] = { x: p.x, y: p.y };
-        setPositions(m);
-      })
-      .catch(() => { /* first visit: auto layout */ });
+    const load = () => {
+      api<{ positions: { task_id: string; x: number; y: number }[] }>(`/layout/${selectedProjectId}`)
+        .then((res) => {
+          const m: Record<string, Pos> = {};
+          for (const p of res.positions) m[p.task_id] = { x: p.x, y: p.y };
+          setPositions(m);
+        })
+        .catch(() => { /* first visit: auto layout */ });
+    };
+    load();
+    const onLayoutUpdated = (e: Event) => {
+      const d = (e as CustomEvent).detail ?? {};
+      if (d?.project_id === selectedProjectId) load();
+    };
+    window.addEventListener('tk:layout-updated', onLayoutUpdated);
+    return () => window.removeEventListener('tk:layout-updated', onLayoutUpdated);
   }, [selectedProjectId]);
 
   const persistPositions = useCallback((next: Record<string, Pos>) => {
     if (!selectedProjectId) return;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
       void api(`/layout/${selectedProjectId}`, {
         method: 'PUT',
         body: { positions: Object.entries(next).map(([task_id, p]) => ({ task_id, x: p.x, y: p.y })) }
       }).catch(() => {});
     }, 600);
   }, [selectedProjectId]);
+
+  // flush a pending debounced save on unmount — positions dragged in the last
+  // 600 ms used to be silently lost (audit)
+  useEffect(() => () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+  }, []);
 
   // ---------- SVG coordinate helpers ----------
   const toSvg = useCallback((clientX: number, clientY: number): Pos => {
@@ -182,16 +199,9 @@ export default function MapView() {
       return;
     }
     try {
-      const res = await api<{ session: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
-      store.setRunning(res.session);
-    } catch (e: any) {
-      if (e instanceof ApiError && e.code === 'already_running') {
-        try {
-          const res = await api<{ started: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
-          store.setRunning(res.started);
-        } catch (e2: any) { pushToast('error', e2.message); }
-      } else pushToast('error', e.message);
-    }
+      await store.startTimer(taskId); // applies setRunning + setPomo — the old
+      // copy here dropped the pomo payload, leaving pomo UI stale (audit)
+    } catch (e: any) { pushToast('error', e.message); }
   }
 
   async function toggleDone(task: any) {
@@ -212,6 +222,9 @@ export default function MapView() {
 
   async function resetLayout() {
     if (!selectedProjectId) return;
+    // cancel a pending debounced save first — otherwise it fires AFTER the
+    // DELETE and re-persists the pre-reset positions (audit race)
+    if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
     await api(`/layout/${selectedProjectId}`, { method: 'DELETE' }).catch(() => {});
     setPositions({});
   }

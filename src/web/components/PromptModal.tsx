@@ -2,6 +2,7 @@
 // event loop and clashes with the design system.
 import { createRoot, type Root } from 'react-dom/client';
 import { useEffect, useRef, useState } from 'react';
+import { useModalA11y } from '../lib/modal';
 
 export interface PromptOptions {
   title: string;
@@ -45,11 +46,12 @@ export function openPrompt(opts: PromptOptions): Promise<string | null> {
 function PromptModal({ opts, onDone }: { opts: PromptOptions; onDone: (v: string | null) => void }) {
   const [v, setV] = useState(opts.initialValue ?? '');
   const ref = useRef<HTMLInputElement>(null);
+  const modalRef = useModalA11y(() => onDone(null));
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   const ok = !opts.mustType || v === opts.mustType;
   return (
-    <div className="modal-overlay" role="dialog" aria-label={opts.title} onClick={() => onDone(null)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={opts.title} onClick={() => onDone(null)}>
+      <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>{opts.title}</h3>
         {opts.message && <p className="muted" style={{ marginTop: 0 }}>{opts.message}</p>}
         <input ref={ref} className="input" value={v} placeholder={opts.placeholder ?? ''}

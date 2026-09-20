@@ -2,14 +2,15 @@
 // recovery banner (FR-S3) + Web Notifications (FR-Nt1).
 import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
-import { api, ApiError, nowMs, serverOffsetMs } from '../lib/api';
+import { api, nowMs, serverOffsetMs } from '../lib/api';
 import { fmtHMS } from '../lib/time';
+import { SESSION_RULES } from '../../shared/constants';
+import { useModalA11y } from '../lib/modal';
 
 export default function TimerBar() {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
   const pomo = useStore((s) => s.pomo);
-  const serverNow = useStore((s) => s.serverNow);
   const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
   const [elapsed, setElapsed] = useState(0);
   const [recovering, setRecovering] = useState(false);
@@ -18,14 +19,15 @@ export default function TimerBar() {
   const task = running ? tasks.find((t) => t.id === running.task_id) : null;
 
   // elapsed computed client-side from authoritative started_at + server offset (FR-S2);
-  // keeps ticking even when the WS drops
+  // keeps ticking even when the WS drops. Deps are [running] only — depending on
+  // serverNow too tore the interval down and rebuilt it every second (audit).
   useEffect(() => {
     if (!running) { setElapsed(0); return; }
     const compute = () => setElapsed(Math.max(0, nowMs() - running.started_at));
     compute();
     const iv = setInterval(compute, 1000);
     return () => clearInterval(iv);
-  }, [running, serverNow]);
+  }, [running]);
 
   // FR-S3: a timer that was already running when this tab loaded gets a one-time
   // recovery prompt
@@ -79,7 +81,7 @@ export default function TimerBar() {
   async function discardAndEdit() {
     setRecovering(false);
     if (!running) return;
-    const grace = (store.get().settings?.grace_min ?? 15) * 60_000;
+    const grace = (store.get().settings?.grace_min ?? SESSION_RULES.graceMin) * 60_000;
     try {
       const res = await api<{ session: { id: string; task_id: string; started_at: number } }>('/timer/stop', { method: 'POST' });
       store.setRunning(null);
@@ -200,12 +202,13 @@ export function RecoveryPrompt({ onClose, onDiscard }: {
   const running = useStore((s) => s.running);
   const settings = useStore((s) => s.settings);
   const tasks = useStore((s) => s.tasks);
+  const modalRef = useModalA11y(onClose);
   if (!running) return null;
   const task = tasks.find((t) => t.id === running.task_id);
-  const grace = (settings?.grace_min ?? 15) * 60_000;
+  const grace = (settings?.grace_min ?? SESSION_RULES.graceMin) * 60_000;
   return (
-    <div className="modal-overlay" role="dialog" aria-label="Recover running timer">
-      <div className="modal">
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Recover running timer">
+      <div ref={modalRef} className="modal">
         <h3>Timer still running</h3>
         <p>
           “{task?.name ?? 'A task'}” has been running since{' '}
@@ -276,5 +279,3 @@ function beep(): void {
     setTimeout(() => void ctx.close(), 600);
   } catch { /* audio is best-effort */ }
 }
-
-export { ApiError, nowMs };

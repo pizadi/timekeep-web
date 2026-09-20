@@ -23,7 +23,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const active = projects.filter((p) => !p.archived);
   const archived = projects.filter((p) => !!p.archived);
 
-  // context-aware actions: N (new task), T (toggle timer), F2 (rename), Delete (undo-able)
+  // context-aware actions: N (new task), T (toggle timer), F2 (rename), Delete (undo-able).
+  // Suppressed while a modal is open (audit: shortcuts fired through modals).
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -31,6 +32,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
         if (e.key === 'Escape') setRenaming(null);
         return;
       }
+      const modalOpen = document.querySelector('.modal-overlay, .qf-overlay');
+      if (modalOpen) return;
       const selTask = tasks.find((t) => t.id === selectedTaskId);
       if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
@@ -98,18 +101,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
       return;
     }
     try {
-      const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
-      store.setRunning(res.session);
-      if (res.pomo) store.setPomo(res.pomo);
-    } catch (e: any) {
-      if (e instanceof ApiError && e.code === 'already_running') {
-        try {
-          const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
-          store.setRunning(res.started);
-          if (res.pomo) store.setPomo(res.pomo);
-        } catch (e2: any) { pushToast('error', e2.message); }
-      } else pushToast('error', e.message);
-    }
+      await store.startTimer(taskId); // applies setRunning + setPomo (one shared impl)
+    } catch (e: any) { pushToast('error', e.message); }
   }
 
   async function toggleTaskDone(task: any) {

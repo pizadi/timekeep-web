@@ -8,11 +8,19 @@ export const LIMITS = {
   nameMax: 120,
   noteMax: 2_000,
   logPageSize: 200,
+  // Max events returned by GET /sync per page (client drains full pages).
+  syncPageMax: 500,
   // Total-row cap for /restore (undo). Sized to cover the largest possible
   // legitimate delete payload: 200 projects + 5000 tasks + 500k subtasks
   // (100/task) + 500k dependencies + 200k sessions.
   restoreMaxRows: 1_250_000
 } as const;
+
+/** Password policy minimum (mirrored client-side — do not hardcode). */
+export const MIN_PASSWORD = 10;
+
+/** Hard cap on report date ranges in civil days (a wider from/to is a 422, not a silent truncation). */
+export const REPORT_MAX_RANGE_DAYS = 1500;
 
 export const POMODORO_DEFAULTS = {
   focusMin: 25,   // 5–90 (FR-F5)
@@ -55,7 +63,9 @@ export const EVENT_TYPES = [
   'dependency.created', 'dependency.deleted',
   'pomodoro.phase',
   'settings.updated',
-  'import.completed'
+  'layout.updated',
+  'import.completed',
+  'restore.completed'
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

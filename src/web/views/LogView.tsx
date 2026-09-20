@@ -1,10 +1,13 @@
 // Session log (FR-S5/S6/S7): chronological, filterable (project/task/range/note),
-// paginated at 200 rows; editor for manual add/edit; delete with undo (FR-T4).
-import { useCallback, useEffect, useMemo, useState } from 'react';
+// paginated (server page size = LIMITS.logPageSize); editor for manual add/edit;
+// delete with undo (FR-T4).
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput } from '../lib/time';
 import { addDaysCivil, dayStartInstant } from '../../shared/time';
+import { LIMITS } from '../../shared/constants';
+import { useModalA11y } from '../lib/modal';
 import Combobox from '../components/Combobox';
 
 interface LogRow {
@@ -38,7 +41,11 @@ export default function LogView() {
     return () => clearTimeout(t);
   }, [qInput]);
 
+  // audit: rapid filter changes could land out of order — a slower older fetch
+  // overwrote newer results. A monotonic seq makes stale responses no-ops.
+  const loadSeq = useRef(0);
   const load = useCallback(async (reset: boolean) => {
+    const seq = ++loadSeq.current;
     const params = new URLSearchParams();
     if (projectId) params.set('project_id', projectId);
     if (taskId) params.set('task_id', taskId);
@@ -50,9 +57,12 @@ export default function LogView() {
     if (!reset && cursor) params.set('cursor', cursor);
     try {
       const res = await api<{ sessions: LogRow[]; next_cursor: string | null }>(`/sessions?${params}`);
+      if (seq !== loadSeq.current) return; // superseded
       setRows((prev) => reset ? res.sessions : [...prev, ...res.sessions]);
       setCursor(res.next_cursor);
-    } catch (e: any) { pushToast('error', e.message); }
+    } catch (e: any) {
+      if (seq === loadSeq.current) pushToast('error', e.message);
+    }
   }, [projectId, taskId, q, from, to, cursor, tz]);
 
   useEffect(() => { void load(true); }, [projectId, taskId, q, from, to, reportsVersion]);
@@ -99,6 +109,12 @@ export default function LogView() {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
+  // audit: "Load more" accumulated unbounded DOM — past this cap the oldest
+  // loaded rows are hidden (data is untouched; refine filters or export instead)
+  const MAX_RENDERED = 2000;
+  const hiddenCount = Math.max(0, rows.length - MAX_RENDERED);
+  const visibleRows = hiddenCount > 0 ? rows.slice(rows.length - MAX_RENDERED) : rows;
+
   return (
     <div>
       <div className="card">
@@ -143,7 +159,7 @@ export default function LogView() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {visibleRows.map((r) => {
               const isRunning = running?.id === r.id;
               const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
               return (
@@ -177,6 +193,11 @@ export default function LogView() {
             )}
           </tbody>
         </table>
+        {hiddenCount > 0 && (
+          <div className="muted" style={{ padding: 8, textAlign: 'center', fontSize: 12.5 }}>
+            {hiddenCount} older loaded rows hidden to keep the page responsive — narrow the filters or export to CSV.
+          </div>
+        )}
         {cursor && (
           <div style={{ padding: 10, textAlign: 'center' }}>
             <button className="btn small" onClick={() => void load(false)}>Load more</button>
@@ -226,6 +247,8 @@ function SessionEditor({
     : toLocalInput(suggestEnd ?? Date.now(), tz));
   const [note, setNote] = useState(initial?.note ?? '');
   const [error, setError] = useState<{ message: string; conflicts?: any[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const modalRef = useModalA11y(onClose);
 
   const isEdit = !!initial?.id;
 
@@ -274,6 +297,7 @@ function SessionEditor({
       note
     };
     try {
+      setBusy(true);
       if (isEdit) await api(`/sessions/${initial!.id}`, { method: 'PATCH', body });
       else await api('/sessions', { method: 'POST', body });
       onSaved();
@@ -281,12 +305,12 @@ function SessionEditor({
       if (e instanceof ApiError && e.code === 'overlap') {
         setError({ message: e.message, conflicts: (e.details as any[]) ?? [] });
       } else setError({ message: e.message });
-    }
+    } finally { setBusy(false); }
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-label="Session editor" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Session editor" onClick={onClose}>
+      <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>{isEdit ? 'Edit session' : 'Add manual session'}</h3>
         <label className="field">
           <span>Task</span>
@@ -337,7 +361,7 @@ function SessionEditor({
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={save}>{isEdit ? 'Save' : 'Add session'}</button>
+          <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : isEdit ? 'Save' : 'Add session'}</button>
         </div>
       </div>
     </div>

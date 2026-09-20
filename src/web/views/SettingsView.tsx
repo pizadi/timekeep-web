@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import { store, useStore, pushToast, go } from '../lib/store';
 import { api } from '../lib/api';
 import { applyTheme, ThemePref } from '../lib/theme';
+import { MIN_PASSWORD, POMODORO_LIMITS } from '../../shared/constants';
+import { useModalA11y } from '../lib/modal';
 import Combobox from '../components/Combobox';
 
 interface AuthSessionRow { id: string; user_agent: string; ip: string; created_at: number; last_seen_at: number; current: boolean }
@@ -24,24 +26,9 @@ export default function SettingsView({ onClose, currentTheme }: {
   const [sessions, setSessions] = useState<AuthSessionRow[]>([]);
   const [confirmDelete, setConfirmDelete] = useState('');
   const [notifState, setNotifState] = useState<string>(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
-
-  // admin panel state
-  const isAdmin = user.role === 'admin';
-  const [adminUsers, setAdminUsers] = useState<AdminUserRow[] | null>(isAdmin ? null : []);
-  const [newUsername, setNewUsername] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [adminBusy, setAdminBusy] = useState(false);
-  const [resetFor, setResetFor] = useState<string | null>(null);
-  const [resetPw, setResetPw] = useState('');
   const [tzText, setTzText] = useState(user.timezone);
 
   useEffect(() => { void api<{ sessions: AuthSessionRow[] }>('/me/sessions').then((r) => setSessions(r.sessions)).catch(() => {}); }, []);
-  useEffect(() => {
-    if (!isAdmin) return;
-    void api<{ users: AdminUserRow[] }>('/admin/users').then((r) => setAdminUsers(r.users)).catch(() => setAdminUsers([]));
-  }, [isAdmin]);
 
   if (!settings) return null;
 
@@ -95,13 +82,24 @@ export default function SettingsView({ onClose, currentTheme }: {
   }
 
   async function revoke(id: string) {
-    await api(`/me/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
-    setSessions((prev) => prev.filter((s) => s.id !== id));
+    // audit: failures were swallowed — a failed revocation must be visible
+    try {
+      await api(`/me/sessions/${id}`, { method: 'DELETE' });
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    } catch (e: any) { pushToast('error', e.message); }
   }
 
   async function revokeOthers() {
-    await api('/me/sessions/revoke-others', { method: 'POST' }).catch(() => {});
-    setSessions((prev) => prev.filter((s) => s.current));
+    try {
+      await api('/me/sessions/revoke-others', { method: 'POST' });
+      setSessions((prev) => prev.filter((s) => s.current));
+    } catch (e: any) { pushToast('error', e.message); }
+  }
+
+  async function signOut() {
+    try { await api('/auth/logout', { method: 'POST' }); } catch { /* session may already be gone */ }
+    store.signOut();
+    go('/');
   }
 
   async function deleteAccount() {
@@ -111,49 +109,12 @@ export default function SettingsView({ onClose, currentTheme }: {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
-  // ---------- admin: user management ----------
-  async function adminCreateUser() {
-    setAdminBusy(true);
-    try {
-      await api('/admin/users', {
-        method: 'POST',
-        body: {
-          username: newUsername,
-          name: newName || undefined,
-          email: newEmail || undefined,
-          password: newPassword
-        }
-      });
-      const r = await api<{ users: AdminUserRow[] }>('/admin/users');
-      setAdminUsers(r.users);
-      setNewUsername(''); setNewName(''); setNewEmail(''); setNewPassword('');
-      pushToast('info', `User "${newUsername}" created — they'll set their own password at first login`);
-    } catch (e: any) { pushToast('error', e.message); } finally { setAdminBusy(false); }
-  }
-
-  async function adminSetActive(u: AdminUserRow, active: 0 | 1) {
-    try {
-      await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { active } });
-      setAdminUsers((prev) => prev!.map((x) => (x.id === u.id ? { ...x, active } : x)));
-      pushToast('info', active ? `User "${u.username}" can sign in again` : `User "${u.username}" is signed out and blocked`);
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  async function adminResetPassword(u: AdminUserRow) {
-    setAdminBusy(true);
-    try {
-      await api(`/admin/users/${u.id}/password`, { method: 'POST', body: { password: resetPw } });
-      setAdminUsers((prev) => prev!.map((x) => (x.id === u.id ? { ...x, must_change_password: true } : x)));
-      setResetFor(null); setResetPw('');
-      pushToast('info', `Temporary password set for "${u.username}" — they must change it at next login`);
-    } catch (e: any) { pushToast('error', e.message); } finally { setAdminBusy(false); }
-  }
-
   const timezones = supportedTimezones();
+  const modalRef = useModalA11y(onClose);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 620, maxHeight: '88vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Settings">
+      <div ref={modalRef} className="modal" style={{ maxWidth: 620, maxHeight: '88vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Settings">
 
         <h3>Profile</h3>
         <label className="field"><span>Display name</span>
@@ -207,14 +168,16 @@ export default function SettingsView({ onClose, currentTheme }: {
           opacity: settings.pomodoro.enabled ? 1 : 0.55
         }}>
           <label className="field"><span>Focus ({settings.pomodoro.focus_min} min)</span>
-            <input type="range" min={5} max={90} step={5} defaultValue={settings.pomodoro.focus_min}
+            <input type="range" min={POMODORO_LIMITS.focusMinMin} max={POMODORO_LIMITS.focusMinMax} step={5} defaultValue={settings.pomodoro.focus_min}
               onMouseUp={(e) => save({ pomodoro: { focus_min: Number((e.target as HTMLInputElement).value) } })}
               onTouchEnd={(e) => save({ pomodoro: { focus_min: Number((e.target as HTMLInputElement).value) } })}
+              onKeyUp={(e) => save({ pomodoro: { focus_min: Number((e.target as HTMLInputElement).value) } })}
               aria-label="Focus minutes" /></label>
           <label className="field"><span>Break ({settings.pomodoro.break_min} min)</span>
-            <input type="range" min={1} max={30} defaultValue={settings.pomodoro.break_min}
+            <input type="range" min={POMODORO_LIMITS.breakMinMin} max={POMODORO_LIMITS.breakMinMax} defaultValue={settings.pomodoro.break_min}
               onMouseUp={(e) => save({ pomodoro: { break_min: Number((e.target as HTMLInputElement).value) } })}
               onTouchEnd={(e) => save({ pomodoro: { break_min: Number((e.target as HTMLInputElement).value) } })}
+              onKeyUp={(e) => save({ pomodoro: { break_min: Number((e.target as HTMLInputElement).value) } })}
               aria-label="Break minutes" /></label>
           <label className="field"><span>Auto-start next focus</span>
             <select className="input" value={settings.pomodoro.auto_start ? '1' : '0'}
@@ -257,72 +220,9 @@ export default function SettingsView({ onClose, currentTheme }: {
           </table>
         </div>
         <button className="btn small" style={{ marginTop: 8 }} onClick={revokeOthers}>Sign out all other devices</button>
+        <button className="btn small" style={{ marginTop: 8, marginLeft: 8 }} onClick={signOut}>Sign out</button>
 
-        {isAdmin && (
-          <>
-            <h3 style={{ marginTop: 18 }}>Admin — users</h3>
-            <p className="muted" style={{ marginTop: 0 }}>
-              Accounts are created here only — there is no sign-up form. New users must set their own
-              password at first login. Deactivating signs a user out everywhere and blocks sign-in;
-              their data is kept.
-            </p>
-            <div className="sessions-list">
-              <table className="tbl">
-                <thead><tr><th>User</th><th>Name</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                  {(adminUsers ?? []).map((u) => (
-                    <tr key={u.id}>
-                      <td>{u.username} {u.role === 'admin' && <span className="badge timer">admin</span>}</td>
-                      <td className="muted">{u.name || '—'}</td>
-                      <td>
-                        {!u.active ? <span className="badge" style={{ background: 'var(--danger)', color: '#fff' }}>deactivated</span>
-                          : u.must_change_password ? <span className="badge timer">temp password</span>
-                          : <span className="muted">active</span>}
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        {u.role !== 'admin' && (
-                          <>
-                            <button className="btn ghost small" disabled={adminBusy}
-                              onClick={() => adminSetActive(u, u.active ? 0 : 1)}>
-                              {u.active ? 'Deactivate' : 'Activate'}
-                            </button>
-                            <button className="btn ghost small" disabled={adminBusy}
-                              onClick={() => { setResetFor(resetFor === u.id ? null : u.id); setResetPw(''); }}>
-                              Reset password
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {resetFor && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  <input className="input" style={{ width: 240 }} type="password" placeholder="Temporary password (min 10 chars)"
-                    value={resetPw} onChange={(e) => setResetPw(e.target.value)} aria-label="Temporary password" />
-                  <button className="btn small" disabled={adminBusy || resetPw.length < 10}
-                    onClick={() => { const u = adminUsers!.find((x) => x.id === resetFor); if (u) void adminResetPassword(u); }}>
-                    Set
-                  </button>
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 12 }}>
-              <label className="field"><span>Username (new user)</span>
-                <input className="input" value={newUsername} onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
-                  placeholder="e.g. sara" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
-              <label className="field"><span>Display name (optional)</span>
-                <input className="input" value={newName} onChange={(e) => setNewName(e.target.value)} /></label>
-              <label className="field"><span>Email (optional — only for password-reset mail)</span>
-                <input className="input" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} /></label>
-              <label className="field"><span>Initial password (min 10 characters)</span>
-                <input className="input" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" /></label>
-            </div>
-            <button className="btn small primary" disabled={adminBusy || newUsername.length < 2 || newPassword.length < 10}
-              onClick={adminCreateUser}>Add user</button>
-          </>
-        )}
+        {user.role === 'admin' && <AdminPanel />}
 
         <h3 style={{ marginTop: 18 }}>Data</h3>
         <p className="muted" style={{ marginTop: 0 }}>
@@ -336,7 +236,7 @@ export default function SettingsView({ onClose, currentTheme }: {
         <h3 style={{ marginTop: 22, color: 'var(--danger)' }}>Danger zone</h3>
         <p className="muted">Deletes your account and every project, task, checklist, dependency and session. This cannot be undone after backups age out (30 days).</p>
         <div style={{ display: 'flex', gap: 8 }}>
-          <input className="input" style={{ width: 240 }} placeholder={`Type DELETE to confirm`}
+          <input className="input" style={{ width: 240 }} placeholder="Type DELETE to confirm"
             value={confirmDelete} onChange={(e) => setConfirmDelete(e.target.value)} aria-label="Confirm account deletion" />
           <button className="btn danger" disabled={confirmDelete !== 'DELETE'} onClick={deleteAccount}>Delete account</button>
         </div>
@@ -360,6 +260,121 @@ function deviceLabel(ua: string): string {
   if (/windows/i.test(ua)) return 'Windows';
   if (/linux/i.test(ua)) return 'Linux';
   return ua.slice(0, 28) || 'Unknown device';
+}
+
+/** Admin user management (audit: this lived inline in the six-job settings
+ *  modal — it is its own surface with its own state and API calls). */
+function AdminPanel() {
+  const [users, setUsers] = useState<AdminUserRow[] | null>(null);
+  const [newUsername, setNewUsername] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [resetFor, setResetFor] = useState<string | null>(null);
+  const [resetPw, setResetPw] = useState('');
+
+  useEffect(() => {
+    void api<{ users: AdminUserRow[] }>('/admin/users').then((r) => setUsers(r.users)).catch(() => setUsers([]));
+  }, []);
+
+  async function createUser() {
+    setBusy(true);
+    try {
+      await api('/admin/users', {
+        method: 'POST',
+        body: { username: newUsername, name: newName || undefined, email: newEmail || undefined, password: newPassword }
+      });
+      const r = await api<{ users: AdminUserRow[] }>('/admin/users');
+      setUsers(r.users);
+      setNewUsername(''); setNewName(''); setNewEmail(''); setNewPassword('');
+      pushToast('info', `User "${newUsername}" created — they'll set their own password at first login`);
+    } catch (e: any) { pushToast('error', e.message); } finally { setBusy(false); }
+  }
+
+  async function setActive(u: AdminUserRow, active: 0 | 1) {
+    try {
+      await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { active } });
+      setUsers((prev) => prev!.map((x) => (x.id === u.id ? { ...x, active } : x)));
+      pushToast('info', active ? `User "${u.username}" can sign in again` : `User "${u.username}" is signed out and blocked`);
+    } catch (e: any) { pushToast('error', e.message); }
+  }
+
+  async function resetPassword(u: AdminUserRow) {
+    setBusy(true);
+    try {
+      await api(`/admin/users/${u.id}/password`, { method: 'POST', body: { password: resetPw } });
+      setUsers((prev) => prev!.map((x) => (x.id === u.id ? { ...x, must_change_password: true } : x)));
+      setResetFor(null); setResetPw('');
+      pushToast('info', `Temporary password set for "${u.username}" — they must change it at next login`);
+    } catch (e: any) { pushToast('error', e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      <h3 style={{ marginTop: 18 }}>Admin — users</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Accounts are created here only — there is no sign-up form. New users must set their own
+        password at first login. Deactivating signs a user out everywhere and blocks sign-in;
+        their data is kept.
+      </p>
+      <div className="sessions-list">
+        <table className="tbl">
+          <thead><tr><th>User</th><th>Name</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {(users ?? []).map((u) => (
+              <tr key={u.id}>
+                <td>{u.username} {u.role === 'admin' && <span className="badge timer">admin</span>}</td>
+                <td className="muted">{u.name || '—'}</td>
+                <td>
+                  {!u.active ? <span className="badge" style={{ background: 'var(--danger)', color: '#fff' }}>deactivated</span>
+                    : u.must_change_password ? <span className="badge timer">temp password</span>
+                    : <span className="muted">active</span>}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {u.role !== 'admin' && (
+                    <>
+                      <button className="btn ghost small" disabled={busy}
+                        onClick={() => setActive(u, u.active ? 0 : 1)}>
+                        {u.active ? 'Deactivate' : 'Activate'}
+                      </button>
+                      <button className="btn ghost small" disabled={busy}
+                        onClick={() => { setResetFor(resetFor === u.id ? null : u.id); setResetPw(''); }}>
+                        Reset password
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {resetFor && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input className="input" style={{ width: 240 }} type="password" placeholder={`Temporary password (min ${MIN_PASSWORD} chars)`}
+              value={resetPw} onChange={(e) => setResetPw(e.target.value)} aria-label="Temporary password" />
+            <button className="btn small" disabled={busy || resetPw.length < MIN_PASSWORD}
+              onClick={() => { const u = users!.find((x) => x.id === resetFor); if (u) void resetPassword(u); }}>
+              Set
+            </button>
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 12 }}>
+        <label className="field"><span>Username (new user)</span>
+          <input className="input" value={newUsername} onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
+            placeholder="e.g. sara" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
+        <label className="field"><span>Display name (optional)</span>
+          <input className="input" value={newName} onChange={(e) => setNewName(e.target.value)} /></label>
+        <label className="field"><span>Email (optional — only for password-reset mail)</span>
+          <input className="input" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} /></label>
+        <label className="field"><span>Initial password (min {MIN_PASSWORD} characters)</span>
+          <input className="input" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" /></label>
+      </div>
+      <button className="btn small primary" disabled={busy || newUsername.length < 2 || newPassword.length < MIN_PASSWORD}
+        onClick={createUser}>Add user</button>
+    </>
+  );
 }
 
 function supportedTimezones(): string[] {

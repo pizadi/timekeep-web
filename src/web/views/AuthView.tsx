@@ -45,7 +45,6 @@ export default function AuthView() {
         {siteKey && (
           <div className="ts-wrap" style={{ marginTop: 12 }}>
             <div className="cf-turnstile" data-sitekey={siteKey} data-callback="tkTurnstileCb" />
-            <input type="hidden" value={turnstileToken} readOnly />
           </div>
         )}
       </div>
@@ -53,7 +52,13 @@ export default function AuthView() {
   );
 }
 
-function LoginForm({ siteKey, turnstileToken, onDone }: any) {
+interface LoginFormProps {
+  siteKey: string | null;
+  turnstileToken: string;
+  onDone: () => void;
+}
+
+function LoginForm({ siteKey, turnstileToken, onDone }: LoginFormProps) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');

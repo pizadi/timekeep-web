@@ -2,6 +2,7 @@
 // (last-write-wins at entity level, FR-N3), undo toasts, reports invalidation.
 import { useSyncExternalStore } from 'react';
 import type { WsEvent } from '../../shared/constants';
+import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
 
 export interface Project { id: string; name: string; color: string; archived: 0 | 1; position: number; created_at: number; updated_at: number }
@@ -53,7 +54,6 @@ export interface AppState {
   running: RunningSession | null;
   pomo: PomoState | null;
   connection: 'online' | 'reconnecting' | 'offline';
-  devices: number;
   selectedProjectId: string | null;
   selectedTaskId: string | null;
   view: 'tree' | 'log' | 'map' | 'dashboard';
@@ -76,7 +76,6 @@ let state: AppState = {
   running: null,
   pomo: null,
   connection: 'reconnecting',
-  devices: 0,
   selectedProjectId: null,
   selectedTaskId: null,
   view: 'tree',
@@ -93,6 +92,8 @@ function set(patch: Partial<AppState>): void {
   for (const l of listeners) l();
 }
 
+export let bootRetry: number | null = null;
+
 export const store = {
   get: () => state,
   subscribe(l: () => void) { listeners.add(l); return () => listeners.delete(l); },
@@ -101,6 +102,7 @@ export const store = {
   async boot(): Promise<void> {
     try {
       const b = await api<any>('/bootstrap');
+      if (bootRetry !== null) { window.clearTimeout(bootRetry); bootRetry = null; }
       state = {
         ...state,
         booted: true,
@@ -138,12 +140,22 @@ export const store = {
         state = { ...state, booted: true, authed: false };
         set({});
         pushToast('error', 'Could not reach the server — retrying', undefined, 6000);
-        setTimeout(() => store.boot(), 3000);
+        // tracked retry: a login during the retry window must not leave two
+        // boot loops racing (audit)
+        if (bootRetry === null) {
+          bootRetry = window.setTimeout(() => { bootRetry = null; void store.boot(); }, 3000);
+        }
       }
     }
   },
 
   setAuthed(v: boolean) { set({ authed: v }); if (v) void store.boot(); },
+  /** Session ended (logout, revoke, expiry) → back to the login screen. */
+  signOut() {
+    try { localStorage.removeItem('tk.device'); } catch { /* storage may be blocked */ }
+    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null };
+    set({});
+  },
 
   // ---------- selection / view ----------
   selectProject(id: string | null) { set({ selectedProjectId: id }); },
@@ -156,7 +168,27 @@ export const store = {
   navigateToView(view: AppState['view']) { set({ view }); go(pathForView(view)); },
 
   setConnection(c: AppState['connection']) { set({ connection: c }); },
-  setDevices(n: number) { set({ devices: n }); },
+
+  /**
+   * Timer start with switch-fallback — THE one implementation (audit: this was
+   * triplicated across TreeSidebar/App/MapView, and the Map copy dropped the
+   * `pomo` payload, leaving pomo UI state stale). Applies setRunning + setPomo;
+   * throws for the caller to toast. Stops are not covered (every caller stops
+   * differently).
+   */
+  async startTimer(taskId: string): Promise<void> {
+    try {
+      const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
+      store.setRunning(res.session);
+      if (res.pomo) store.setPomo(res.pomo);
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'already_running') {
+        const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
+        store.setRunning(res.started);
+        if (res.pomo) store.setPomo(res.pomo);
+      } else throw e;
+    }
+  },
 
   // ---------- event reconciliation (FR-N2/N3) ----------
   applyEvent(ev: WsEvent): void {
@@ -175,7 +207,6 @@ export const store = {
       case 'hello': {
         patch.running = d.running ?? null;
         patch.pomo = d.pomo ?? null;
-        patch.devices = d.devices ?? 0;
         patch.connection = 'online';
         break;
       }
@@ -235,12 +266,19 @@ export const store = {
         break;
 
       case 'pomodoro.phase': patch.pomo = d.pomo; break;
+      case 'layout.updated':
+        // map positions changed on another device — refetch happens in MapView
+        // (it listens for this via reportsVersion-style bump on a dedicated
+        // event listener below); nothing else depends on layout
+        window.dispatchEvent(new CustomEvent('tk:layout-updated', { detail: d }));
+        break;
       case 'settings.updated':
         if (d.settings) patch.settings = d.settings;
         if (d.profile) patch.user = state.user ? { ...state.user, ...d.profile } : state.user;
         break;
       case 'import.completed':
-        // bulk mutation on another device — re-sync everything
+      case 'restore.completed':
+        // bulk mutation / undo on another device — re-sync everything
         void refreshAll();
         break;
       default: break; // unknown event types are ignored gracefully (forward-compat)
@@ -380,7 +418,7 @@ let pollCadence = 0;
 let backoff = 1000;
 let wsRetryTimer: number | null = null;
 
-export function connectWs(): void {
+function connectWs(): void {
   if (ws) return; // a socket is already open or connecting
   try {
     const socket = new WebSocket(wsUrl());
@@ -396,9 +434,6 @@ export function connectWs(): void {
         const ev = JSON.parse(m.data as string) as WsEvent & { type: string };
         if ((ev.type as string) === 'pong') return;
         store.applyEvent(ev as WsEvent);
-        if (ev.type === 'hello') {
-          store.setDevices((ev.data as any)?.devices ?? 0);
-        }
       } catch { /* malformed frame ignored */ }
     };
     socket.onclose = () => {
@@ -440,12 +475,7 @@ function startPolling(cadenceMs: number): void {
   void poll();
 }
 
-function stopPolling(): void {
-  if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
-  pollCadence = 0;
-}
-
-const SYNC_PAGE = 500; // server-side limit of GET /api/sync
+const SYNC_PAGE = LIMITS.syncPageMax; // server-side limit of GET /api/sync
 
 const poll = async (): Promise<void> => {
   try {
@@ -476,6 +506,11 @@ const poll = async (): Promise<void> => {
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.booted && state.authed) void poll();
+  });
+  // Global session-expiry handling (audit): any 401 outside the auth endpoints
+  // ends the session instead of toasting forever.
+  window.addEventListener('tk:unauthorized', () => {
+    if (state.authed) store.signOut();
   });
 }
 

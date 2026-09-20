@@ -38,6 +38,12 @@ export class UserHub extends DurableObject {
   private settings = { pomoEnabled: false, focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
   private lastEventId = 0;
   private rl = new Map<string, number>(); // rate-limit counters (window key → hits)
+  /** Next 12h-nudge deadline once the first has fired — the nudge repeats hourly
+   *  while the timer runs past 12h instead of every alarm tick (audit: the old
+   *  rearm-always-past-deadline behavior looped D1 writes until the timer
+   *  stopped). In-memory only: a DO restart re-arms from started_at, costing at
+   *  most one extra nudge. */
+  private nudgeNextAt: number | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -134,6 +140,11 @@ export class UserHub extends DurableObject {
     await this.ensureLoaded();
     const url = new URL(request.url);
 
+    // Only this Worker may drive the DO (audit S5: the x-internal header used to
+    // be sent and never checked — cargo cult). /ws passes it through from index.ts.
+    if (request.headers.get('x-internal') !== '1')
+      return this.err(403, 'forbidden', 'internal only');
+
     if (url.pathname === '/ws' && request.headers.get('upgrade') === 'websocket') {
       return this.handleUpgrade(request);
     }
@@ -141,8 +152,16 @@ export class UserHub extends DurableObject {
       return Response.json(this.stateSnapshot());
     }
     if (url.pathname === '/revoke') {
-      // sessions were revoked (deactivation / password reset) — drop live sockets
-      for (const ws of this.ctx.getWebSockets()) {
+      // Sessions were revoked — drop the live sockets that belonged to them.
+      // Sockets are tagged with their auth-session id at upgrade time, so the
+      // close can be selective (audit S1: password change / revoke-others keep
+      // the acting device's session alive, and its socket with it).
+      const keep = url.searchParams.get('keep');
+      const only = url.searchParams.get('only');
+      const victims: WebSocket[] = only
+        ? this.ctx.getWebSockets(only)
+        : [...this.ctx.getWebSockets()].filter((ws) => !(keep && this.ctx.getWebSockets(keep).includes(ws)));
+      for (const ws of victims) {
         try { ws.close(4001, 'session revoked'); } catch { /* already closing */ }
       }
       return Response.json({ ok: true });
@@ -184,9 +203,10 @@ export class UserHub extends DurableObject {
       // Atomic per-user counter for the hot-path rate limit: the DO
       // is a single instance per user, so read-modify-write here is race-free
       // and puts no writes on a shared KV key. Counters are in-memory (reset on
-      // eviction); the KV fallback in middleware.rateLimitHit remains as floor.
+      // eviction); the D1 rateLimitHit fallback in middleware is atomic anyway.
       const body = await request.json<{ key: string; limit: number; windowMs: number }>().catch(() => null);
-      if (!body || typeof body.key !== 'string' || !Number.isFinite(body.limit) || !Number.isFinite(body.windowMs))
+      if (!body || typeof body.key !== 'string' || !Number.isFinite(body.limit) || body.limit < 1
+        || !Number.isFinite(body.windowMs) || body.windowMs < 1000)
         return this.err(422, 'validation', 'invalid body');
       return Response.json(this.rateLimit(body.key, body.limit, body.windowMs));
     }
@@ -214,8 +234,11 @@ export class UserHub extends DurableObject {
   private handleUpgrade(request: Request): Response {
     const url = new URL(request.url);
     const device = url.searchParams.get('device') ?? 'unknown';
+    // sid = auth session id (verified by the Worker before the upgrade). Tagging
+    // the socket with it makes selective /revoke possible (audit S1).
+    const sid = url.searchParams.get('sid') ?? '';
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], [device]);
+    this.ctx.acceptWebSocket(pair[1], sid ? [device, sid] : [device]);
     const hello: WsEvent = {
       id: this.lastEventId, type: 'hello', actor: 'server', at: Date.now(),
       data: {
@@ -325,6 +348,7 @@ export class UserHub extends DurableObject {
       return this.err(503, 'timer_unavailable', 'could not start the timer — retry shortly');
     }
     this.running = session; // in-memory state only advances once D1 confirms
+    this.nudgeNextAt = null; // fresh session → fresh 12h window
     const eventId = Number(results[2]?.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, eventId);
     this.broadcast({ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data });
@@ -352,14 +376,23 @@ export class UserHub extends DurableObject {
     const session = { ...this.running, ended_at: now };
     const ev = { type: 'timer.stopped', actor: device, data: { session } };
 
-    const results = await this.env.DB.batch([
-      this.env.DB.prepare(
-        'UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2'
-      ).bind(now, session.id),
-      this.env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?1').bind(this.userId()),
-      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-        .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
-    ]);
+    // same failure posture as timerStart: resync from the mirror instead of
+    // throwing a 500 / keeping ghost state (audit: error-handling parity)
+    let results: D1Result<unknown>[];
+    try {
+      results = await this.env.DB.batch([
+        this.env.DB.prepare(
+          'UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2'
+        ).bind(now, session.id),
+        this.env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?1').bind(this.userId()),
+        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
+          .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
+      ]);
+    } catch (e) {
+      this.running = await this.loadRunningFromD1();
+      console.error(JSON.stringify({ evt: 'timer_stop_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      return this.err(503, 'timer_unavailable', 'could not stop the timer — retry shortly');
+    }
     const eventId = Number(results[2]?.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, eventId);
 
@@ -370,6 +403,7 @@ export class UserHub extends DurableObject {
       await this.persistPomo();
     }
     this.running = null;
+    this.nudgeNextAt = null;
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data });
     return Response.json({ session, events: [{ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data }] });
@@ -416,10 +450,17 @@ export class UserHub extends DurableObject {
       ).bind(this.userId(), taskId, newId, now + 1, JSON.stringify(this.pomo)),
       this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
         .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
-    ]);
+    ]).catch(async (e) => {
+      // mirror-resync on failure, same posture as timerStart/timerStop
+      this.running = await this.loadRunningFromD1();
+      console.error(JSON.stringify({ evt: 'timer_switch_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      return null;
+    });
+    if (!results) return this.err(503, 'timer_unavailable', 'could not switch the timer — retry shortly');
     const eventId = Number(results[3]?.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, eventId);
     this.running = started;
+    this.nudgeNextAt = null;
     if (engaged) await this.persistPomo(); // re-anchored cycle → refresh the kv mirror
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data });
@@ -481,11 +522,10 @@ export class UserHub extends DurableObject {
   private async pomoPhaseResponse(device: string, phase: PomoPhase): Promise<Response> {
     const now = Date.now();
     const ev: WsEvent = { id: 0, type: 'pomodoro.phase', actor: device, at: now, data: { pomo: this.visiblePomo() } };
-    const results = await this.env.DB.batch([
-      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-        .bind(this.userId(), ev.type, JSON.stringify({ actor: device, data: ev.data }), now)
-    ]);
-    ev.id = Number(results[0]?.meta.last_row_id ?? 0);
+    const result = await this.env.DB.prepare(
+      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)'
+    ).bind(this.userId(), ev.type, JSON.stringify({ actor: device, data: ev.data }), now).run();
+    ev.id = Number(result.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, ev.id);
     this.broadcast(ev);
     return Response.json({ pomo: this.visiblePomo(), events: [ev] });
@@ -510,7 +550,13 @@ export class UserHub extends DurableObject {
       const live = this.pomo.accumulatedFocusMs + (this.pomo.lastResumeMs ? now - this.pomo.lastResumeMs : 0);
       if (live < this.settings.focusMs) deadlines.push(now + (this.settings.focusMs - live));
     }
-    if (this.running) deadlines.push(this.running.started_at + TWELVE_H);
+    if (this.running) {
+      // 12h nudge: after the first fire this repeats hourly (nudgeNextAt), never
+      // re-arming a deadline that is already in the past — that would make the
+      // alarm refire immediately in a loop (audit)
+      const nudgeAt = this.nudgeNextAt ?? (this.running.started_at + TWELVE_H);
+      if (nudgeAt > now) deadlines.push(nudgeAt);
+    }
     if (deadlines.length === 0) return;
     const next = Math.min(...deadlines);
     const current = await this.ctx.storage.getAlarm();
@@ -523,8 +569,10 @@ export class UserHub extends DurableObject {
     await this.ensureLoaded();
     const now = Date.now();
 
-    // 12h running failsafe — nudge only, never auto-stop (§5.7)
-    if (this.running && now >= this.running.started_at + TWELVE_H) {
+    // 12h running failsafe — nudge only, never auto-stop (§5.7); repeats hourly
+    // while the timer stays past the threshold (audit: no per-tick loop)
+    if (this.running && now >= (this.nudgeNextAt ?? (this.running.started_at + TWELVE_H))) {
+      this.nudgeNextAt = now + 3600_000;
       await this.logAndBroadcast({ id: 0, type: 'timer.nudge', actor: 'server', at: now, data: { running_since: this.running.started_at } });
     }
 
@@ -548,7 +596,18 @@ export class UserHub extends DurableObject {
       if (this.settings.autoStart && this.pomo.taskId) {
         const target = this.pomo.taskId;
         this.pomo = { phase: 'focus', taskId: target, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
-        if (!this.running) await this.timerStart(target, 'server', 'pomodoro');
+        if (!this.running) {
+          const r = await this.timerStart(target, 'server', 'pomodoro');
+          if (r.status !== 200) {
+            // auto-start failed — roll the phase back to 'ready' so the state
+            // machine doesn't claim focus with no timer behind it (audit)
+            this.pomo = { phase: 'ready', taskId: target, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+            await this.persistPomo();
+            await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: Date.now(), data: { pomo: this.visiblePomo() } });
+            await this.rearmAlarm();
+            return;
+          }
+        }
         await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: now, data: { pomo: this.visiblePomo() } });
       }
     }
@@ -557,11 +616,10 @@ export class UserHub extends DurableObject {
   }
 
   private async logAndBroadcast(ev: WsEvent): Promise<void> {
-    const results = await this.env.DB.batch([
-      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-        .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), ev.at)
-    ]);
-    ev.id = Number(results[0]?.meta.last_row_id ?? 0);
+    const result = await this.env.DB.prepare(
+      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)'
+    ).bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), ev.at).run();
+    ev.id = Number(result.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, ev.id);
     this.broadcast(ev);
   }

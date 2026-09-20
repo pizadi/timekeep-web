@@ -56,12 +56,7 @@ export function civilDate(instant: number, tz: string): string {
   return `${String(p.year).padStart(4, '0')}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
-/** Local wall-clock milliseconds since local midnight (for display). */
-export function wallClockMs(instant: number, tz: string): number {
-  const p = zonedParts(instant, tz);
-  return ((p.hour * 60 + p.minute) * 60 + p.second) * 1000;
-}
-
+/** Local wall-clock fields of an instant in `tz` — see zonedParts(). */
 /**
  * First instant of the civil day `civil` (YYYY-MM-DD) in `tz`.
  * Fast path: guess-and-correct against the zone offset. When midnight was
@@ -119,11 +114,6 @@ export function dayBounds(fromCivil: string, toCivil: string, tz: string): { day
     const start = dayStartInstant(day, tz);
     return { day, start, end: dayStartInstant(addDaysCivil(day, 1), tz) };
   });
-}
-
-/** Today's civil date in `tz` for a given instant. */
-export function todayCivil(now: number, tz: string): string {
-  return civilDate(now, tz);
 }
 
 /**

@@ -1,11 +1,13 @@
 // App shell: routing (views are URL routes — /, /log, /map, /dashboard), responsive
 // layout, global keyboard shortcuts (FR-U4), quick-find (FR-T6), toasts, offline
 // banner (FR-N5), recovery banner (FR-S3), and the password-reset/verify flows.
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Component, Suspense, lazy } from 'react';
+import type { ReactNode } from 'react';
 import { store, useStore, pushToast, dismissToast, go, pathForView, viewFromPath } from './lib/store';
 import type { AppState } from './lib/store';
-import { api, ApiError } from './lib/api';
+import { api } from './lib/api';
 import { applyTheme, currentThemePref } from './lib/theme';
+import { useModalA11y } from './lib/modal';
 import AuthView from './views/AuthView';
 import ChangePasswordView from './views/ChangePasswordView';
 import ResetPasswordView from './views/ResetPasswordView';
@@ -13,10 +15,34 @@ import VerifyEmailView from './views/VerifyEmailView';
 import TreeSidebar from './views/TreeSidebar';
 import LogView from './views/LogView';
 import MapView from './views/MapView';
-import DashboardView from './views/DashboardView';
 import SettingsView from './views/SettingsView';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
+
+// chart.js is only used here — lazy-loading roughly halves the initial bundle
+// (audit: 441 KB eager for a time tracker)
+const DashboardView = lazy(() => import('./views/DashboardView'));
+
+/** Audit: no error boundary anywhere — a render exception white-screened the SPA. */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) { console.error(JSON.stringify({ evt: 'render_error', message: String(error?.message ?? error) })); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="auth-wrap">
+          <div className="auth-card">
+            <h2>Something broke</h2>
+            <p className="muted">A rendering error occurred. Your data is safe — the running timer kept ticking server-side.</p>
+            <button className="btn primary" onClick={() => location.reload()}>Reload</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const booted = useStore((s) => s.booted);
@@ -24,14 +50,17 @@ export default function App() {
   const user = useStore((s) => s.user);
   const route = useRoute();
 
-  if (!booted) return <div className="auth-wrap"><div className="muted">Loading…</div></div>;
-  if (route === '/reset') return <ResetPasswordView />;
-  if (route === '/verify') return <VerifyEmailView />;
-  if (!authed || route === '/login') return <AuthView />;
-  // forced password change: nothing else in the app is reachable until it's done
-  if (user?.must_change_password) return <ChangePasswordView />;
-
-  return <Shell route={route} />;
+  return (
+    <ErrorBoundary>
+      {!booted ? <div className="auth-wrap"><div className="muted">Loading…</div></div>
+        : route === '/reset' ? <ResetPasswordView />
+        : route === '/verify' ? <VerifyEmailView />
+        : (!authed || route === '/login') ? <AuthView />
+        // forced password change: nothing else in the app is reachable until it's done
+        : user?.must_change_password ? <ChangePasswordView />
+        : <Shell route={route} />}
+    </ErrorBoundary>
+  );
 }
 
 function useRoute(): string {
@@ -48,10 +77,6 @@ function Shell({ route }: { route: string }) {
   const view = useStore((s) => s.view);
   const connection = useStore((s) => s.connection);
   const user = useStore((s) => s.user)!;
-  const running = useStore((s) => s.running);
-  const tasks = useStore((s) => s.tasks);
-  const pomo = useStore((s) => s.pomo);
-  const settings = useStore((s) => s.settings);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -64,10 +89,12 @@ function Shell({ route }: { route: string }) {
     setSettingsOpen(route === '/settings');
   }, [route]);
 
-  // keyboard shortcuts (FR-U4): N, T, F2 handled in TreeSidebar scope; global: 1-4, Ctrl+K, ?, T
+  // keyboard shortcuts (FR-U4): N, T, F2 handled in TreeSidebar scope; global: 1-4, Ctrl+K, ?, T.
+  // Suppressed while a modal is open (audit: shortcuts fired through modals).
   const onKey = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('input, textarea, select, [contenteditable]')) return;
+    if (quickFindOpen || helpOpen || settingsOpen) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       setQuickFindOpen((v) => !v);
@@ -79,14 +106,11 @@ function Shell({ route }: { route: string }) {
       store.navigateToView(views[Number(e.key) - 1]!);
       return;
     }
-  }, []);
+  }, [quickFindOpen, helpOpen, settingsOpen]);
   useEffect(() => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onKey]);
-
-  const s = settings;
-  const pomoVisible = s && pomo && pomo.phase !== 'idle';
 
   return (
     <div className="app">
@@ -141,7 +165,11 @@ function Shell({ route }: { route: string }) {
           {view === 'tree' && <TreeMain />}
           {view === 'log' && <LogView />}
           {view === 'map' && <MapView />}
-          {view === 'dashboard' && <DashboardView />}
+          {view === 'dashboard' && (
+            <Suspense fallback={<div className="muted" style={{ padding: 24 }}>Loading charts…</div>}>
+              <DashboardView />
+            </Suspense>
+          )}
         </div>
       </div>
 
@@ -210,28 +238,15 @@ function QuickStart() {
           <button key={t.id} className="btn small" onClick={async () => {
             try {
               store.selectTask(t.id);
-              const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: t.id } });
-              store.setRunning(res.session);
-              if (res.pomo) store.setPomo(res.pomo);
+              await store.startTimer(t.id);
             } catch (e: any) {
-              if (e instanceof ApiError && e.code === 'already_running') await switchTo(t.id);
-              else pushToast('error', e.message);
+              pushToast('error', e.message);
             }
           }}>▶ {t.name}</button>
         ))}
       </div>
     </div>
   );
-}
-
-async function switchTo(taskId: string): Promise<void> {
-  try {
-    const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
-    store.setRunning(res.started);
-    if (res.pomo) store.setPomo(res.pomo);
-  } catch (e: any) {
-    pushToast('error', e.message);
-  }
 }
 
 async function resendVerification(): Promise<void> {
@@ -245,9 +260,10 @@ async function resendVerification(): Promise<void> {
 }
 
 function HelpOverlay({ onClose }: { onClose: () => void }) {
+  const modalRef = useModalA11y(onClose);
   return (
-    <div className="modal-overlay" role="dialog" aria-label="Keyboard shortcuts" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={onClose}>
+      <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>Keyboard shortcuts</h3>
         <table className="tbl"><tbody>
           <tr><td><span className="kbd">N</span></td><td>New task (context-aware)</td></tr>

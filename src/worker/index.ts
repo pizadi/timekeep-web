@@ -3,8 +3,9 @@
 // Exported: the Hono fetch handler, the UserHub DO, and the scheduled cron.
 import { Hono } from 'hono';
 import type { WorkerType } from './env';
-import { securityHeaders, securityHeadersFor, csrfGuard, requireAuth, optionalAuth } from './middleware';
+import { securityHeaders, securityHeadersFor, csrfGuard, requireAuth, sanitizeDevice } from './middleware';
 import { sha256Hex } from './auth';
+import { SESSION_COOKIE } from '../shared/constants';
 import { authRoutes } from './routes/auth';
 import { meRoutes } from './routes/me';
 import { adminRoutes } from './routes/admin';
@@ -37,8 +38,9 @@ app.get('/api/version', (c) => c.json({
 }));
 
 // WebSocket upgrade → user's UserHub. The Worker re-verifies the session cookie
-// (§5.6: "WebSocket upgrades re-verify the session"); the DO itself is only
-// reachable from this Worker (internal fetch), never from the public internet.
+// AND applies the same gates as requireAuth (§5.6: "WebSocket upgrades re-verify
+// the session") — the DO itself is only reachable from this Worker (internal
+// fetch, x-internal marker checked DO-side), never from the public internet.
 app.get('/api/ws', async (c) => {
   // HTTP tokens are case-insensitive — compare lowercased
   if (c.req.header('upgrade')?.toLowerCase() !== 'websocket')
@@ -55,19 +57,31 @@ app.get('/api/ws', async (c) => {
     }
   }
   const cookieHeader = c.req.header('cookie') ?? '';
-  const match = cookieHeader.match(/(?:^|;\s*)tk_session=([A-Za-z0-9]+)/);
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([A-Za-z0-9]+)`));
   if (!match) return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
   const hash = await sha256Hex(match[1]!);
   const row = await c.env.DB.prepare(
-    'SELECT user_id, expires_at FROM auth_sessions WHERE token_hash = ?1'
-  ).bind(hash).first<{ user_id: string; expires_at: number }>();
+    'SELECT id, user_id, expires_at FROM auth_sessions WHERE token_hash = ?1'
+  ).bind(hash).first<{ id: string; user_id: string; expires_at: number }>();
   if (!row || row.expires_at < Date.now())
     return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
+  // same gates as requireAuth: a deactivated or forced-password-change account
+  // must not be able to stream events over a socket (audit S2)
+  const user = await c.env.DB.prepare('SELECT active, must_change_password FROM users WHERE id = ?1')
+    .bind(row.user_id).first<{ active: 0 | 1; must_change_password: 0 | 1 }>();
+  if (!user || !user.active)
+    return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
+  if (user.must_change_password)
+    return c.json({ error: { code: 'password_change_required', message: 'change your password before continuing' } }, 403);
 
-  const device = new URL(c.req.url).searchParams.get('device') ?? 'unknown';
+  const device = sanitizeDevice(new URL(c.req.url).searchParams.get('device'));
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(row.user_id));
-  return stub.fetch(new Request(`https://do/ws?device=${encodeURIComponent(device)}`, {
-    headers: c.req.raw.headers
+  // sid tags the socket DO-side so /revoke can selectively close just this
+  // session's sockets (audit S1); x-internal marks the request as Worker-internal
+  const headers = new Headers(c.req.raw.headers);
+  headers.set('x-internal', '1');
+  return stub.fetch(new Request(`https://do/ws?device=${encodeURIComponent(device)}&sid=${encodeURIComponent(row.id)}`, {
+    headers
   }));
 });
 

@@ -49,14 +49,23 @@ export function notifyHub(
   const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
   const req = new Request('https://do/notify', {
     method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-internal': '1' },
     body: JSON.stringify({ events })
   });
   const p = stub.fetch(req).catch(() => {});
   if (ctx) ctx.waitUntil(p);
 }
 
-/** Best-effort: close the user's live WebSockets after their sessions were revoked. */
-export function revokeHub(env: Env, userId: string): void {
+/** Best-effort: close the user's live WebSockets after their sessions were revoked.
+ *  - no options  → close every socket (all sessions were revoked);
+ *  - `{ keep }`  → close all except the given auth-session id (password change
+ *                  / revoke-others: the acting device's session survives);
+ *  - `{ only }`  → close just the given auth-session id (single session revoke).
+ * Sockets are tagged with their session id at upgrade time (index.ts /api/ws). */
+export function revokeHub(
+  env: Env, userId: string, opts?: { keep?: string; only?: string }
+): void {
   const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
-  stub.fetch(new Request('https://do/revoke', { method: 'POST' })).catch(() => {});
+  const q = opts?.keep ? `?keep=${encodeURIComponent(opts.keep)}` : opts?.only ? `?only=${encodeURIComponent(opts.only)}` : '';
+  stub.fetch(new Request(`https://do/revoke${q}`, { method: 'POST', headers: { 'x-internal': '1' } })).catch(() => {});
 }

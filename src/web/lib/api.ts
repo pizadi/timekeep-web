@@ -2,12 +2,14 @@
 // error envelope handling, server-clock offset capture (FR-S2/NFR-6).
 import { CSRF_HEADER, DEVICE_HEADER } from '../../shared/constants';
 
+// localStorage: a device is a browser, not a tab — sessionStorage made every
+// tab a distinct "device", multiplying hello fan-out (audit §5.13).
 let deviceId: string = (() => {
   try {
-    let d = sessionStorage.getItem('tk.device');
+    let d = localStorage.getItem('tk.device');
     if (!d) {
       d = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, '0')).join('');
-      sessionStorage.setItem('tk.device', d);
+      localStorage.setItem('tk.device', d);
     }
     return d;
   } catch { return 'unknown'; }
@@ -60,6 +62,11 @@ export async function api<T = unknown>(
   const data = isJson ? await res.json().catch(() => null) : null;
 
   if (!res.ok) {
+    // Global 401 handling (audit: an expired session used to strand the app in
+    // an endless toast loop — the store signs the session out on this event).
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      window.dispatchEvent(new CustomEvent('tk:unauthorized'));
+    }
     const err = (data as any)?.error;
     throw new ApiError(res.status, err?.code ?? 'error', err?.message ?? res.statusText, err?.details);
   }

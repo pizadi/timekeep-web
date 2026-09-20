@@ -1,6 +1,6 @@
 // Cron Trigger (daily, FR-D3): logical dump → R2 (30-day retention), sync_log
-// prune (keeps ≥ 1 h of events per user for reconnect deltas, FR-N3), plus GC
-// of expired auth sessions and email tokens.
+// prune (keeps 2 h of events per user for reconnect deltas, FR-N3), plus GC
+// of expired auth sessions, email tokens and rate-limit counters.
 // Idempotent + resumable (NFR-2).
 import type { Env } from './env';
 
@@ -35,10 +35,11 @@ export async function runDailyCron(env: Env): Promise<void> {
   await env.DB.prepare('DELETE FROM sync_log WHERE created_at < ?1')
     .bind(now - 2 * 3600_000).run();
 
-  // 2. GC: remove expired auth sessions and email tokens so these tables
-  // don't grow monotonically.
+  // 2. GC: remove expired auth sessions, email tokens and rate-limit counters
+  // so these tables don't grow monotonically.
   await env.DB.prepare('DELETE FROM auth_sessions WHERE expires_at < ?1').bind(now).run();
   await env.DB.prepare('DELETE FROM email_tokens WHERE expires_at < ?1').bind(now).run();
+  await env.DB.prepare('DELETE FROM rate_counters WHERE expires_at < ?1').bind(now).run();
 
   // 3. daily logical dump per table → R2 JSONL (skipped when R2 is not bound)
   if (env.R2) {

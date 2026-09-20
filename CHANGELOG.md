@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-09-20 — v0.1.1: security & quality fixes from the audit
+
+Findings, evidence and file references: `AUDIT.md`.
+
+### Security
+
+- **Revoked sessions now lose their live WebSockets.** Password change,
+  single-session revoke, revoke-others and logout deleted the D1 session rows
+  but never told the Durable Object, so a revoked device kept receiving sync
+  events until its socket died naturally. Sockets are now tagged with their
+  auth-session id at upgrade time and `/revoke` accepts `keep`/`only` filters
+  (the acting device's socket survives a password change; everything else
+  closes with code 4001).
+- **The WebSocket upgrade path now applies the same gates as `requireAuth`** —
+  a `must_change_password` account can no longer stream events over a socket
+  while blocked everywhere else.
+- **Import/restore are schema-validated row-by-row** (new per-row Zod schemas in
+  `validators.ts`). This closes six holes: arbitrary non-ULID ids landing in the
+  DB, 3-level task hierarchies, cross-project dependency edges, negative-duration
+  restored sessions, NaN-bind 500s (garbage `position`/`created_at`), and
+  client-controlled `created_at` (now clamped to `[0, now]`). Bad rows are
+  skipped + counted on import; mutated undo payloads are rejected. Import and
+  restore also enforce a request-size cap (413) — the row-count guards were
+  unreachable for multi-MB bodies.
+- **Rate limiting is atomic.** The KV read-modify-write counters (race-exceedable
+  under concurrency) are replaced by a `rate_counters` D1 table written with a
+  single atomic `INSERT … ON CONFLICT … RETURNING` (migration `0004`; pruned
+  daily by cron). Confirmed: rotating `X-Forwarded-For` cannot defeat limits.
+- **The DO's internal-only marker is actually checked now.** `x-internal: '1'`
+  used to be sent by callers and verified by nothing; every UserHub route now
+  requires it, and `/ratelimit` validates its inputs.
+- **Device identifiers are sanitized** (charset + 64-char cap) before they are
+  echoed into events and persisted in `sync_log`.
+
+### Correctness
+
+- **The 12-hour nudge no longer loops.** Once a timer passed 12h the DO re-armed
+  an already-past alarm deadline, refiring the nudge (a D1 write + broadcast per
+  tick) in a tight loop. The nudge now repeats hourly at most.
+- **Layout changes and undos fan out to other devices** (`layout.updated` /
+  `restore.completed` events) — both were silent before, leaving other devices
+  stale until a reload. MapView refetches positions on `layout.updated`.
+- **PUT /settings writes settings + profile theme mirror + event in one batch**;
+  import does the same for its settings merge (crash consistency).
+- **DO timer stop/switch get the same failure posture as start** (mirror-resync
+  instead of a 500 / ghost state), and the break-end auto-start rolls the phase
+  back to `ready` if the timer fails to start.
+- **MapView starting a timer applies the `pomo` payload** (the MapView copy of
+  the start/switch logic had dropped it, leaving pomodoro UI stale). The logic
+  now lives once in `store.startTimer()`.
+- **`GET /api/sessions` validates `from`/`to`/`cursor`** (422 instead of a
+  silently-ignored or NaN filter), and reports reject ranges beyond 1500 days
+  with a 422 instead of silently truncating.
+
+### Web (SPA)
+
+- **There is now a way to sign out** (Settings → Security → Sign out), a global
+  401 handler (expired sessions return to login instead of toasting forever), a
+  React error boundary (render errors show a reload screen instead of a
+  white-screen), and Escape + focus traps on every modal.
+- **PWA installability fixed:** real PNG icons (192/512 + maskable +
+  `apple-touch-icon`), `theme_color` aligned with the app, service-worker cache
+  versioned (`v2`).
+- **Initial bundle halved** (441 KB → 229 KB, 143 → 71 KB gzip): chart.js moved
+  to a lazy chunk loaded only on the Dashboard.
+- Keyboard shortcuts no longer fire while a modal is open; pomodoro sliders
+  persist for keyboard users; heatmap cells are keyboard-focusable; QuickFind
+  and heatmap navigation keep the URL in sync; session fetches are
+  race-guarded; the session editor no longer double-submits; the device id is
+  per-browser (`localStorage`), not per-tab.
+- Removed dead code: `limitProblem`, `nameProblem`, `findOverlaps`,
+  `edgeProblem`, `subtaskPositionLimitProblem`, `optionalAuth`, `RATE_RULES`,
+  the `signup_ip` rate rule, `wallClockMs`, `todayCivil`, `runningElapsedMs`,
+  `tzOf`, `stopPolling`, dead re-exports/state/markup, and five dead CSS rules.
+  `SESSION_SECRET` and `RL_SIGNUP_IP` removed from `.dev.vars` (both unused).
+- Import throughput: ~3× faster (existence checks hoisted out of the per-chunk
+  loop, chunk size 50 → 200); 20k sessions dropped from ~111 s to ~38 s.
+
 ## 2026-09-20 — v0.1.0: dialog overflow fix, styled comboboxes, pomodoro mode replaces the simple timer
 
 ### Web (SPA)

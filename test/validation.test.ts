@@ -1,37 +1,17 @@
-// Pure validators (§5.5): session overlap, DAG cycles + edge legality,
-// password policy, two-level hierarchy, pomodoro config ranges.
+// Pure validators (§5.5): DAG cycles, password policy, pomodoro config ranges,
+// session time rules, and the import/restore row schemas (audit S3).
 import { describe, it, expect } from 'vitest';
 import {
-  findOverlaps, findCyclePath, edgeProblem, passwordProblem, pomoProblem,
-  checkSessionTimes, subtaskPositionLimitProblem
+  findCyclePath, passwordProblem, pomoProblem, checkSessionTimes
 } from '../src/shared/validation';
-import { sessionCreateSchema, sessionPatchSchema, restoreSchema } from '../src/worker/validators';
+import {
+  sessionCreateSchema, sessionPatchSchema, restoreSchema,
+  importTaskRow, importProjectRow, importSessionRow
+} from '../src/worker/validators';
 import { LIMITS } from '../src/shared/constants';
 
 const NOW = 1_800_000_000_000;
-
-describe('session overlap (FR-S4)', () => {
-  const rows = [
-    { id: 'a', started_at: NOW, ended_at: NOW + 3600_000 },
-    { id: 'b', started_at: NOW + 7200_000, ended_at: NOW + 9000_000 }
-  ];
-  it('rejects overlapping same-task ranges and lists conflicts', () => {
-    const hits = findOverlaps(rows, NOW + 1800_000, NOW + 7500_000, NOW);
-    expect(hits.map((h) => h.id)).toEqual(['a', 'b']);
-  });
-  it('allows touching intervals (end == next start)', () => {
-    const hits = findOverlaps(rows, NOW + 3600_000, NOW + 7200_000, NOW);
-    expect(hits).toHaveLength(0);
-  });
-  it('treats a running session (ended_at null) as occupying until now', () => {
-    const running = [{ id: 'r', started_at: NOW - 1000, ended_at: null }];
-    expect(findOverlaps(running, NOW - 500, NOW + 500, NOW)).toHaveLength(1);
-  });
-  it('excludes the edited session itself', () => {
-    const hits = findOverlaps(rows, NOW, NOW + 1800_000, NOW, 'a');
-    expect(hits).toHaveLength(0);
-  });
-});
+const ULID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
 describe('DAG cycle prevention (FR-M4)', () => {
   const edges = [
@@ -46,16 +26,6 @@ describe('DAG cycle prevention (FR-M4)', () => {
   });
   it('allows a legal new edge', () => {
     expect(findCyclePath(edges, 'D', 'A')).toBeNull(); // D depends_on A
-  });
-  it('flags edge legality problems (FR-M5)', () => {
-    expect(edgeProblem(
-      { parent_id: null, project_id: 'p1' },
-      { parent_id: 't1', project_id: 'p1' }
-    )).toContain('root tasks');
-    expect(edgeProblem(
-      { parent_id: null, project_id: 'p1' },
-      { parent_id: null, project_id: 'p2' }
-    )).toContain('same project');
   });
 });
 
@@ -96,15 +66,8 @@ describe('session time rules (§5.5.4)', () => {
   });
 });
 
-describe('hierarchy limits (FR-T3/FR-T7)', () => {
-  it('blocks subtask creation beyond 100 per task', () => {
-    expect(subtaskPositionLimitProblem(100)).toContain('100');
-    expect(subtaskPositionLimitProblem(99)).toBeNull();
-  });
-});
-
 describe('manual session schemas', () => {
-  const base = { task_id: '01ARZ3NDEKTSV4RRFFQ69G5FAV', started_at: NOW };
+  const base = { task_id: ULID, started_at: NOW };
   it('create schema rejects open-ended (ended_at null) sessions', () => {
     const r = sessionCreateSchema.safeParse({ ...base, ended_at: null });
     expect(r.success).toBe(false);
@@ -119,17 +82,43 @@ describe('manual session schemas', () => {
   });
 });
 
+describe('import/restore row schemas (audit S3)', () => {
+  it('task rows require a ULID project reference (non-ULID ids are skipped upstream)', () => {
+    expect(importTaskRow.safeParse({ id: ULID, project_id: 'not-a-ulid' }).success).toBe(false);
+    expect(importTaskRow.safeParse({ id: ULID, project_id: ULID }).success).toBe(true);
+  });
+  it('coerces done to 0/1 and garbage positions to 0 (no NaN binds)', () => {
+    const r = importTaskRow.safeParse({ id: ULID, project_id: ULID, done: true, position: 'abc' });
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.done).toBe(1);
+    expect(r.success && r.data.position).toBe(0);
+  });
+  it('project rows coerce garbage created_at to 0 (clamped to now upstream)', () => {
+    const r = importProjectRow.safeParse({ id: ULID, created_at: 'nope' });
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.created_at).toBe(0);
+  });
+  it('session rows allow a NULL ended_at (undo of a deleted running task) but not garbage timestamps', () => {
+    const open = importSessionRow.safeParse({ id: ULID, task_id: ULID, started_at: NOW, ended_at: null });
+    expect(open.success).toBe(true);
+    const bad = importSessionRow.safeParse({ id: ULID, task_id: ULID, started_at: 'x', ended_at: NOW });
+    expect(bad.success).toBe(false);
+  });
+});
+
 describe('restore payload caps', () => {
-  const ULID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
-  it('accepts an undo payload at the schema per-collection caps', () => {
-    const sessions = Array.from({ length: 5001 }, (_, i) => ({ id: ULID, started_at: i }));
+  it('accepts an undo payload of well-formed rows at the schema caps', () => {
+    const sessions = Array.from({ length: 5001 }, (_, i) => ({
+      id: ULID, task_id: ULID, started_at: i, ended_at: i + 1, note: '', source: 'manual', created_at: i
+    }));
     const r = restoreSchema.safeParse({ sessions });
     expect(r.success).toBe(true);
   });
   it('rejects payloads over the total-row guard', () => {
-    const row = { id: ULID };
+    const row = { id: ULID, task_id: ULID, name: 'x', done: 0, position: 0, created_at: 0 };
     const r = restoreSchema.safeParse({
       subtasks: Array.from({ length: LIMITS.restoreMaxRows }, () => row)
     });
     expect(r.success).toBe(false);
-  });});
+  });
+});

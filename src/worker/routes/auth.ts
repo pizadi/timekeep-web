@@ -128,6 +128,8 @@ authRoutes.post('/auth/login', async (c) => {
 authRoutes.post('/auth/logout', requireAuth, async (c) => {
   await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1')
     .bind(c.get('authSessionId')).run();
+  // audit S1 parity: this session's socket must die with its session row
+  revokeHub(c.env, c.get('user').id, { only: c.get('authSessionId') });
   clearSessionCookie(c);
   return c.json({ ok: true });
 });

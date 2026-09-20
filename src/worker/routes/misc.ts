@@ -7,6 +7,7 @@ import { requireAuth, limitHeavy } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
 import { appendEvents, notifyHub } from '../events';
 import { DEFAULT_SETTINGS } from '../defaults';
+import { LIMITS } from '../../shared/constants';
 
 export const miscRoutes = new Hono<WorkerType>();
 
@@ -92,18 +93,29 @@ miscRoutes.put('/settings', requireAuth, async (c) => {
     ...(parsed.data.sound_enabled !== undefined ? { sound_enabled: parsed.data.sound_enabled } : {}),
     ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {})
   };
-  // keep theme mirrored on the profile for server-side persistence (FR-U1)
-  if (parsed.data.theme !== undefined) {
-    await c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3')
-      .bind(parsed.data.theme, Date.now(), c.get('user').id).run();
-  }
-  await c.env.DB.prepare(
-    `INSERT INTO settings (user_id, data) VALUES (?1, ?2)
-     ON CONFLICT (user_id) DO UPDATE SET data = excluded.data`
-  ).bind(c.get('user').id, JSON.stringify(next)).run();
-
-  const evs = await appendEvents(c.env, c.get('user').id,
-    [{ type: 'settings.updated', actor: c.get('deviceId'), data: { settings: next } }]);
+  // settings write + profile theme mirror + event append in ONE batch (audit:
+  // three unrelated round-trips could leave theme/settings/event divergent on
+  // a crash)
+  const evDrafts = [{ type: 'settings.updated' as const, actor: c.get('deviceId'), data: { settings: next } }];
+  const [evs] = await Promise.all([
+    (async () => {
+      const stmts = [
+        c.env.DB.prepare(
+          `INSERT INTO settings (user_id, data) VALUES (?1, ?2)
+           ON CONFLICT (user_id) DO UPDATE SET data = excluded.data`
+        ).bind(c.get('user').id, JSON.stringify(next)),
+        ...(parsed.data.theme !== undefined
+          ? [c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3')
+            .bind(parsed.data.theme, Date.now(), c.get('user').id)]
+          : []),
+        c.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
+          .bind(c.get('user').id, evDrafts[0].type, JSON.stringify({ actor: evDrafts[0].actor, data: evDrafts[0].data }), Date.now())
+      ];
+      const results = await c.env.DB.batch(stmts);
+      const eventId = Number(results[results.length - 1]?.meta.last_row_id ?? 0);
+      return [{ id: eventId, at: Date.now(), ...evDrafts[0] }];
+    })()
+  ]);
   notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
   return c.json({ settings: next, events: evs });
 });
@@ -136,7 +148,12 @@ miscRoutes.put('/layout/:projectId', requireAuth, async (c) => {
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await c.env.DB.batch(stmts.slice(i, i + CHUNK));
   }
-  return c.json({ ok: true });
+  // audit: layout used to fan out nothing — other devices kept stale map
+  // positions until a full reload. Clients react by refetching the layout.
+  const evs = await appendEvents(c.env, userId,
+    [{ type: 'layout.updated', actor: c.get('deviceId'), data: { project_id: c.req.param('projectId'), count: parsed.data.positions.length } }]);
+  notifyHub(c.env, userId, evs, c.executionCtx);
+  return c.json({ ok: true, events: evs });
 });
 
 miscRoutes.delete('/layout/:projectId', requireAuth, async (c) => {
@@ -145,7 +162,10 @@ miscRoutes.delete('/layout/:projectId', requireAuth, async (c) => {
     `DELETE FROM layout WHERE user_id = ?1 AND task_id IN
        (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`
   ).bind(c.get('user').id, c.req.param('projectId')).run();
-  return c.json({ ok: true });
+  const evs = await appendEvents(c.env, c.get('user').id,
+    [{ type: 'layout.updated', actor: c.get('deviceId'), data: { project_id: c.req.param('projectId'), count: 0 } }]);
+  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+  return c.json({ ok: true, events: evs });
 });
 
 // ---------- sync delta / polling fallback (FR-N3, FR-N5) ----------
@@ -155,7 +175,7 @@ miscRoutes.get('/sync', requireAuth, async (c) => {
   const since = Number(c.req.query('since') ?? 0);
   const rows = await c.env.DB.prepare(
     `SELECT id, type, payload, created_at FROM sync_log
-     WHERE user_id = ?1 AND id > ?2 ORDER BY id LIMIT 500`
+     WHERE user_id = ?1 AND id > ?2 ORDER BY id LIMIT ${LIMITS.syncPageMax}`
   ).bind(c.get('user').id, Number.isFinite(since) ? since : 0).all<any>();
 
   let running: unknown = null;

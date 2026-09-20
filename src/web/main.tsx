@@ -15,8 +15,10 @@ if ('serviceWorker' in navigator) {
 void store.boot();
 watchSystemTheme();
 
-// 1 Hz heartbeat: running-timer display, pomodoro ring, toast expiry (FR-S2)
-setInterval(() => store.tickServerNow(), 1000);
+// 1 Hz heartbeat: running-timer display, pomodoro ring, toast expiry (FR-S2).
+// Gated on auth — pumping the store on the login screen just re-renders
+// nothing, once a second (audit).
+setInterval(() => { if (store.get().authed) store.tickServerNow(); }, 1000);
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

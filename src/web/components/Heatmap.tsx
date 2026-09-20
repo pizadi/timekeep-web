@@ -62,12 +62,22 @@ export default function Heatmap({
               : <div
                 key={civil}
                 className="cell"
+                role="button"
+                tabIndex={0}
+                aria-label={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min; inspect sessions`}
                 title={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min`}
                 style={{ background: intensity(byDay.get(civil) ?? 0) }}
                 onMouseEnter={() => setHover(civil)}
                 onMouseLeave={() => setHover(null)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    store.navigateToView('log'); // URL sync (audit: setView desynced the URL)
+                    window.dispatchEvent(new CustomEvent('tk:focus-day', { detail: civil }));
+                  }
+                }}
                 onClick={() => {
-                  store.setView('log');
+                  store.navigateToView('log'); // URL sync (audit: setView desynced the URL)
                   window.dispatchEvent(new CustomEvent('tk:focus-day', { detail: civil }));
                 }}
               />)

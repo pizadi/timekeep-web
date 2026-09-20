@@ -1,6 +1,6 @@
 // Cross-cutting middleware: security headers (NFR-3), session auth with sliding
 // expiry + rotation (FR-A6), CSRF (SameSite=Lax + Origin check + CSRF cookie),
-// KV-backed rate limiting, and optional Turnstile verification.
+// D1-backed atomic rate limiting, and optional Turnstile verification.
 
 import { createMiddleware } from 'hono/factory';
 import type { Context } from 'hono';
@@ -116,6 +116,15 @@ export function clientIp(c: Ctx): string | null {
 }
 
 /**
+ * Device ids are client-supplied and echoed into every broadcast event + the
+ * sync_log payload — clamp them to a sane charset/length (audit S6).
+ */
+export function sanitizeDevice(raw: string | null | undefined): string {
+  const d = (raw ?? '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+  return d || 'unknown';
+}
+
+/**
  * Require a valid session; populates c.var.user. Throttles last_seen updates
  * (at most once a minute) to keep D1 writes off the hot path.
  */
@@ -146,7 +155,7 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
     return jsonError(403, 'password_change_required', 'change your password before continuing');
   c.set('user', user);
   c.set('authSessionId', session.id);
-  c.set('deviceId', c.req.header('x-device-id') ?? 'unknown');
+  c.set('deviceId', sanitizeDevice(c.req.header('x-device-id')));
   await rotateIfNeeded(c, session);
   await next();
   // Re-issue the double-submit cookie if it was lost (browser restart while the
@@ -165,20 +174,6 @@ function passwordChangeAllowed(method: string, path: string): boolean {
 export const requireAdmin = createMiddleware<WorkerType>(async (c, next) => {
   if (c.get('user').role !== 'admin')
     return jsonError(403, 'forbidden', 'admin access required');
-  await next();
-});
-
-/** Like requireAuth but only sets user when a session exists (for /api/bootstrap before login). */
-export const optionalAuth = createMiddleware<WorkerType>(async (c, next) => {
-  const loaded = await loadSession(c);
-  if (loaded) {
-    const user = await c.env.DB.prepare(
-      `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
-              theme, role, active, must_change_password, email_verified_at, created_at
-       FROM users WHERE id = ?1`
-    ).bind(loaded.session.user_id).first<any>();
-    if (user && user.active) c.set('user', user);
-  }
   await next();
 });
 
@@ -234,29 +229,43 @@ export function issueCsrfCookie(c: Ctx): string {
 export interface RateRule { name: string; limit: number; windowMs: number }
 
 /** Spec limits (NFR-3). Each limit is env-overridable (RL_*) for local dev/tests only. */
-export function rateRules(env: Partial<Env>): Record<string, RateRule> {
+export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
   const n = (v: string | undefined, d: number) => (Number(v) > 0 ? Number(v) : d);
   return {
     loginIp: { name: 'login_ip', limit: n(env.RL_LOGIN_IP, 10), windowMs: 15 * 60_000 },
     loginEmail: { name: 'login_email', limit: n(env.RL_LOGIN_EMAIL, 10), windowMs: 15 * 60_000 },
-    signupIp: { name: 'signup_ip', limit: n(env.RL_SIGNUP_IP, 5), windowMs: 3600_000 },
     resetEmail: { name: 'reset_email', limit: n(env.RL_RESET_EMAIL, 5), windowMs: 3600_000 },
     // unauthenticated token endpoints + admin mutations (CPU-heavy PBKDF2) — IP-keyed
     tokenIp: { name: 'token_ip', limit: n(env.RL_TOKEN_IP, 30), windowMs: 15 * 60_000 },
     adminIp: { name: 'admin_ip', limit: n(env.RL_ADMIN_IP, 20), windowMs: 15 * 60_000 },
     apiUser: { name: 'api_user', limit: n(env.RL_API_USER, 120), windowMs: 60_000 }
   };
-}
+};
 
-export const RATE_RULES = rateRules({});
-
-/** Returns null when allowed, or a Retry-After in seconds when the budget is spent. */
+/**
+ * Returns null when allowed, or a Retry-After in seconds when the budget is spent.
+ *
+ * The counter is ONE atomic D1 upsert … RETURNING — D1 serializes statements per
+ * row, so the increment cannot race (the previous KV get→put implementation let
+ * concurrent requests read the same count and exceed every limit). Known
+ * trade-off (documented): the per-identifier login rule means 10 failed attempts
+ * lock a known username out for 15 min — distributed lockout-DoS is inherent to
+ * per-account failure counters; production mitigates with Turnstile on the login
+ * form.
+ */
 export async function rateLimitHit(env: Env, rule: RateRule, subject: string): Promise<number | null> {
-  const win = Math.floor(Date.now() / rule.windowMs);
-  const key = `rl:${rule.name}:${subject}:${win}`;
-  const cur = Number((await env.KV.get(key)) ?? '0') + 1;
-  await env.KV.put(key, String(cur), { expirationTtl: Math.ceil(rule.windowMs / 1000) + 60 });
-  if (cur > rule.limit) return Math.ceil((rule.windowMs - (Date.now() % rule.windowMs)) / 1000);
+  const now = Date.now();
+  const win = Math.floor(now / rule.windowMs);
+  const key = `${rule.name}:${subject}:${win}`;
+  const expiresAt = now + rule.windowMs + 60_000;
+  const row = await env.DB.prepare(
+    `INSERT INTO rate_counters (key, n, window_start, expires_at)
+     VALUES (?1, 1, ?2, ?3)
+     ON CONFLICT (key) DO UPDATE SET n = n + 1, expires_at = ?3
+     RETURNING n`
+  ).bind(key, win, expiresAt).first<{ n: number }>();
+  const cur = Number(row?.n ?? 1);
+  if (cur > rule.limit) return Math.ceil((rule.windowMs - (now % rule.windowMs)) / 1000);
   return null;
 }
 
@@ -283,7 +292,7 @@ export async function limitHeavy(c: Ctx): Promise<Response | null> {
     const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
     const res = await stub.fetch(new Request('https://do/ratelimit', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-internal': '1' },
       body: JSON.stringify({ key: rule.name, limit: rule.limit, windowMs: rule.windowMs })
     }));
     if (res.ok) {

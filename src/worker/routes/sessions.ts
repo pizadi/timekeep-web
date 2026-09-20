@@ -5,7 +5,7 @@ import type { WorkerType } from '../env';
 import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { sessionCreateSchema, sessionPatchSchema } from '../validators';
-import { checkSessionTimes, findOverlaps, noteProblem, nameProblem } from '../../shared/validation';
+import { checkSessionTimes, noteProblem } from '../../shared/validation';
 import { findSameTaskOverlaps, conflictError, assertNotRunning, RuleError } from '../rules';
 import { appendEvents, notifyHub, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
@@ -26,10 +26,27 @@ sessionRoutes.get('/sessions', async (c) => {
   const userId = c.get('user').id;
   const projectId = c.req.query('project_id');
   const taskId = c.req.query('task_id');
-  const from = c.req.query('from') ? Number(c.req.query('from')) : null;
-  const to = c.req.query('to') ? Number(c.req.query('to')) : null;
+  // audit: NaN filters used to be silently ignored (or 500'd into D1 binds) —
+  // validate like /sync does
+  const toInstant = (raw: string | undefined): number | null | undefined => {
+    if (raw === undefined) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return undefined; // undefined = invalid → 422
+    return n;
+  };
+  const from = toInstant(c.req.query('from'));
+  const to = toInstant(c.req.query('to'));
+  if (from === undefined || to === undefined)
+    return jsonError(422, 'validation', 'from/to must be non-negative epoch-ms integers');
   const note = c.req.query('q');
-  const cursor = c.req.query('cursor'); // "<started_at>_<id>"
+  const cursorRaw = c.req.query('cursor'); // "<started_at>_<id>"
+  let cursor: { sa: number; id: string } | null = null;
+  if (cursorRaw) {
+    const [sa, id] = cursorRaw.split('_');
+    const n = Number(sa);
+    if (!Number.isFinite(n) || !id) return jsonError(422, 'validation', 'invalid cursor');
+    cursor = { sa: n, id };
+  }
 
   const where: string[] = ['s.user_id = ?1'];
   const binds: unknown[] = [userId];
@@ -41,9 +58,8 @@ sessionRoutes.get('/sessions', async (c) => {
   if (to !== null) { where.push(`s.started_at < ?${++n}`); binds.push(to); }
   if (note) { where.push(`s.note LIKE ?${++n} ESCAPE '\\'`); binds.push(escapeLike(note)); }
   if (cursor) {
-    const [sa, id] = cursor.split('_');
     where.push(`(s.started_at < ?${++n} OR (s.started_at = ?${n} AND s.id < ?${++n}))`);
-    binds.push(Number(sa), id);
+    binds.push(cursor.sa, cursor.id);
   }
 
   const rows = await c.env.DB.prepare(
@@ -88,9 +104,7 @@ sessionRoutes.post('/sessions', async (c) => {
 
   // same-task overlap rejected; conflicts returned so the UI can highlight them (FR-S4 AC)
   const conflicts = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at, now);
-  if (conflicts.length > 0) return new Response(JSON.stringify({
-    error: { code: 'overlap', message: 'this session overlaps an existing session on the same task', details: conflicts }
-  }), { status: 409, headers: { 'content-type': 'application/json' } });
+  if (conflicts.length > 0) throw conflictError(conflicts); // formatted by app.onError
 
   const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM time_sessions WHERE user_id = ?1')
     .bind(userId).first<{ n: number }>();
