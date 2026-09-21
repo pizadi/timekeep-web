@@ -104,6 +104,7 @@ interface MemberRow { id: string; username: string; name: string; role: 'owner' 
 
 function GroupDetail({ group }: { group: GroupSummary }) {
   const me = useStore((s) => s.user);
+  const projects = useStore((s) => s.projects);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [myPerms, setMyPerms] = useState<GroupPerm[]>([]);
   const [myRole, setMyRole] = useState<string>('member');
@@ -165,6 +166,53 @@ function GroupDetail({ group }: { group: GroupSummary }) {
       </div>
 
       {chatOpen && me && <ChatPanel groupId={group.id} myUserId={me.id} canModerate={myPerms.includes('moderate_messages')} />}
+
+      <div>
+        <div className="tree-section-title">Group projects (feature 6 — members only)</div>
+        {projects.filter((p) => p.group_id === group.id).map((p) => (
+          <div key={p.id} className="row" style={{ paddingLeft: 12 }}>
+            <span className="chip" style={{ background: p.color }} aria-hidden />
+            <span className="grow">{p.name}{p.archived ? ' (archived)' : ''}</span>
+            {can('manage_projects') && !p.archived && (
+              <button className="icon-btn" aria-label={`Archive ${p.name}`} title="Archive"
+                onClick={async () => {
+                  try {
+                    const res = await api<{ project: any }>(`/projects/${p.id}`, { method: 'PATCH', body: { archived: true } });
+                    store.upsertLocal('project', res.project);
+                  } catch (e: any) { pushToast('error', e.message); }
+                }}>📦</button>
+            )}
+            {can('manage_projects') && (
+              <button className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete for all members (no undo)"
+                onClick={async () => {
+                  const typed = await openPrompt({
+                    title: `Delete “${p.name}” for everyone?`,
+                    message: 'Tasks, checklists and all members’ tracked time on this project are removed. This cannot be undone.',
+                    placeholder: p.name, confirmText: 'Delete', danger: true, mustType: p.name
+                  });
+                  if (typed === null || typed.trim() !== p.name) { pushToast('info', 'Deletion cancelled'); return; }
+                  try {
+                    await api(`/projects/${p.id}`, { method: 'DELETE' });
+                    store.removeLocalProject(p.id);
+                  } catch (e: any) { pushToast('error', e.message); }
+                }}>🗑</button>
+            )}
+          </div>
+        ))}
+        {can('manage_projects') && (
+          <div style={{ padding: '4px 0 0 12px' }}>
+            <button className="btn small" onClick={async () => {
+              const name = await openPrompt({ title: 'New group project', placeholder: 'Project name', confirmText: 'Create' });
+              if (!name?.trim()) return;
+              try {
+                const res = await api<{ project: any }>(`/groups/${group.id}/projects`, { method: 'POST', body: { name: name.trim() } });
+                store.upsertLocal('project', res.project);
+                store.selectProject(res.project.id);
+              } catch (e: any) { pushToast('error', e.message); }
+            }}>＋ Project</button>
+          </div>
+        )}
+      </div>
 
       <div>
         <div className="tree-section-title">Members ({members.length})</div>

@@ -23,15 +23,30 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const userId = c.get('user').id;
   const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social, groups] = await Promise.all([
     c.env.DB.prepare(
-      'SELECT id, name, color, archived, position, visibility, created_at, updated_at FROM projects WHERE user_id = ?1 ORDER BY position, created_at'
+      `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
+       FROM projects
+       WHERE user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)
+       ORDER BY position, created_at`
     ).bind(userId).all(),
     c.env.DB.prepare(
-      'SELECT * FROM tasks WHERE user_id = ?1 ORDER BY position, created_at'
+      `SELECT * FROM tasks
+       WHERE user_id = ?1
+          OR project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
+       ORDER BY position, created_at`
     ).bind(userId).all(),
     c.env.DB.prepare(
-      'SELECT * FROM subtasks WHERE user_id = ?1 ORDER BY position, created_at'
+      `SELECT * FROM subtasks
+       WHERE user_id = ?1
+          OR task_id IN (SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
+                         WHERE p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
+       ORDER BY position, created_at`
     ).bind(userId).all(),
-    c.env.DB.prepare('SELECT * FROM task_dependencies WHERE user_id = ?1').bind(userId).all(),
+    c.env.DB.prepare(
+      `SELECT * FROM task_dependencies
+       WHERE user_id = ?1
+          OR task_id IN (SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
+                         WHERE p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))`
+    ).bind(userId).all(),
     c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
     // "Jump back in": tasks by recency of tracked work, not position
     c.env.DB.prepare(

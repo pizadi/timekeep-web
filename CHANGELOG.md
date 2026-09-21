@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-09-21 — social phase 4: group projects (members-only)
+
+Migration `0008_group_projects.sql` — run `npm run db:migrate:local`.
+
+- **`projects.group_id`** (additive column, FK → groups ON DELETE CASCADE).
+  NULL = personal project (unchanged semantics); set = the project belongs to
+  the group and is visible/editable by every CURRENT member only. The row's
+  `user_id` stays the creator for audit; tasks/subtasks/deps keep per-user
+  attribution — sessions are still strictly yours, so the single-timer
+  invariant (per-user partial unique index) and personal reports are untouched,
+  and two members can track the same group task simultaneously.
+- **Access enforcement centralized** in `worker/access.ts`
+  (`resolveProjectAccess` / `resolveTaskAccess` / `requireEditTasks`):
+  personal = owner-only as before; group = member read access, `edit_tasks`
+  for task/subtask/dependency writes, `manage_projects` for
+  rename/color/archive/delete. Bootstrap, project/task/subtask/dependency
+  routes, manual session entry and the UserHub DO's timer task-check all widened
+  to the membership scope — leaving (or being kicked from) a group revokes
+  access immediately, and deleting a group cascades its projects.
+- **Event fan-out follows the audience**: mutations inside a group project
+  append one `project.*`/`task.*`/`subtask.*` event per member (`emitEntityEvents`)
+  so every member's devices stay in sync; personal mutations are unchanged.
+- **Group report**: `GET /api/groups/:id/report` aggregates ALL members'
+  sessions on the group's projects into day × project buckets + per-member
+  totals (viewer-timezone bucketing, running session clipped, buckets only —
+  never raw rows).
+- **Friend sharing excludes group projects** (`group_id IS NULL` in the
+  friend-browsable queries) and `visibility` is rejected on group projects —
+  the two sharing mechanisms can't be crossed.
+- **No undo across member boundaries**: group-project and group-task deletions
+  are permanent (typed confirmation); the event payload still carries every
+  member's rows so all devices clean up.
+- **UI**: the sidebar splits personal projects from a per-group "👥 group"
+  section (group-colored); task/subtask edit affordances render only for
+  members holding `edit_tasks`, project controls only for `manage_projects`;
+  the group panel lists shared projects and creates new ones
+  (`manage_projects`).
+
 ## 2026-09-21 — social phase 3: group chat
 
 Migration `0007_chat.sql` — run `npm run db:migrate:local`.

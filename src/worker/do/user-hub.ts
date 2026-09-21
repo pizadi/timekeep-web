@@ -300,7 +300,8 @@ export class UserHub extends DurableObject {
     }
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.id = ?1 AND t.user_id = ?2`
+       WHERE t.id = ?1 AND (t.user_id = ?2
+         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
     ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
@@ -422,7 +423,9 @@ export class UserHub extends DurableObject {
       return this.timerStart(taskId, device, 'timer');
     }
     const task = await this.env.DB.prepare(
-      `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?1 AND t.user_id = ?2`
+      `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
+       WHERE t.id = ?1 AND (t.user_id = ?2
+         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
     ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');

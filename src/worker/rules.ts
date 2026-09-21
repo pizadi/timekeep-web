@@ -47,19 +47,21 @@ export async function requireRootTaskForSubtask(env: Env, userId: string, taskId
   return task;
 }
 
-/** Distinguish "id is a subtask" (→ hierarchy error) from "unknown id" (→ 404). */
-export async function assertNotSubtask(env: Env, userId: string, id: string): Promise<void> {
-  const sub = await env.DB.prepare('SELECT 1 FROM subtasks WHERE id = ?1 AND user_id = ?2')
-    .bind(id, userId).first();
+/** Distinguish "id is a subtask" (→ hierarchy error) from "unknown id" (→ 404).
+ *  Id-only on purpose: group-project subtasks carry their creator's user_id,
+ *  and the caller's project-access check authorizes the actual operation. */
+export async function assertNotSubtask(env: Env, id: string): Promise<void> {
+  const sub = await env.DB.prepare('SELECT 1 FROM subtasks WHERE id = ?1')
+    .bind(id).first();
   if (sub) throw new RuleError(422, 'two_level_hierarchy', "a subtask can't have subtasks");
 }
 
 // ---------- dependencies (FR-M4/M5) ----------
 
-async function getTaskFull(env: Env, userId: string, taskId: string): Promise<{ id: string; project_id: string; parent_id: string | null; name: string }> {
+async function getTaskFull(env: Env, taskId: string, scopeUserId: string | null): Promise<{ id: string; project_id: string; parent_id: string | null; name: string }> {
   const t = await env.DB.prepare(
-    `SELECT id, project_id, parent_id, name FROM tasks WHERE id = ?1 AND user_id = ?2`
-  ).bind(taskId, userId).first<{ id: string; project_id: string; parent_id: string | null; name: string }>();
+    `SELECT id, project_id, parent_id, name FROM tasks WHERE id = ?1 ${scopeUserId ? 'AND user_id = ?2' : ''}`
+  ).bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId])).first<{ id: string; project_id: string; parent_id: string | null; name: string }>();
   if (!t) throw new RuleError(404, 'not_found', 'task not found');
   return t;
 }
@@ -69,10 +71,16 @@ async function getTaskFull(env: Env, userId: string, taskId: string): Promise<{ 
  * same project, root tasks only, no self/duplicate, and cycle-free —
  * the cycle check is a recursive CTE reachability query (§5.5.1) and the
  * offending path is returned for the UI toast ("A → B → C → A").
+ *
+ * `scopeUserId` narrows the dependency graph to one user's edges (personal
+ * projects); pass null for GROUP projects — edges there may be created by any
+ * member, so cycle detection must see the whole project's graph.
  */
-export async function createDependency(env: Env, userId: string, taskId: string, dependsOnId: string) {
+export async function createDependency(
+  env: Env, userId: string, taskId: string, dependsOnId: string, scopeUserId: string | null = userId
+) {
   if (taskId === dependsOnId) throw new RuleError(422, 'self_dependency', "a task can't depend on itself");
-  const [a, b] = await Promise.all([getTaskFull(env, userId, taskId), getTaskFull(env, userId, dependsOnId)]);
+  const [a, b] = await Promise.all([getTaskFull(env, taskId, scopeUserId), getTaskFull(env, dependsOnId, scopeUserId)]);
   if (a.parent_id !== null || b.parent_id !== null)
     throw new RuleError(422, 'edge_endpoints', 'dependencies may only connect root tasks');
   if (a.project_id !== b.project_id)
@@ -91,12 +99,12 @@ export async function createDependency(env: Env, userId: string, taskId: string,
        UNION
        SELECT td.depends_on_id FROM task_dependencies td
        JOIN REACH r ON td.task_id = r.id
-       WHERE td.user_id = ?2
+       ${scopeUserId ? 'WHERE td.user_id = ?2' : ''}
      )
      SELECT id FROM REACH WHERE id = ?3`
-  ).bind(dependsOnId, userId, taskId).first();
+  ).bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId]), taskId).first();
   if (reach) {
-    const path = await cyclePathNames(env, userId, taskId, dependsOnId);
+    const path = await cyclePathNames(env, taskId, dependsOnId, scopeUserId);
     throw new RuleError(422, 'cycle', `this would create a circular dependency: ${path.join(' → ')}`, { path });
   }
 
@@ -108,7 +116,7 @@ export async function createDependency(env: Env, userId: string, taskId: string,
 }
 
 /** Reconstruct the would-be cycle path with task names for the toast (FR-M4 AC). */
-async function cyclePathNames(env: Env, userId: string, taskId: string, dependsOnId: string): Promise<string[]> {
+async function cyclePathNames(env: Env, taskId: string, dependsOnId: string, scopeUserId: string | null): Promise<string[]> {
   // chain from target following depends_on edges: [target, …, source]
   const rows = await env.DB.prepare(
     `WITH REACH(id, depth) AS (
@@ -116,30 +124,34 @@ async function cyclePathNames(env: Env, userId: string, taskId: string, dependsO
        UNION
        SELECT td.depends_on_id, r.depth + 1 FROM task_dependencies td
        JOIN REACH r ON td.task_id = r.id
-       WHERE td.user_id = ?2 AND r.depth < 50
+       WHERE ${scopeUserId ? 'td.user_id = ?2 AND' : ''} r.depth < 50
      )
      SELECT id FROM REACH ORDER BY depth`
-  ).bind(dependsOnId, userId).all<{ id: string }>();
+  ).bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId])).all<{ id: string }>();
   const ids = rows.results.map((r) => r.id);
   // full loop display: source → target → … → source
   // (ids already ends at the source — drop it before closing the loop)
   const loop = [taskId, ...ids.slice(0, Math.max(0, ids.length - 1)), taskId];
   const names: string[] = [];
   for (const id of loop) {
-    const t = await env.DB.prepare('SELECT name FROM tasks WHERE id = ?1 AND user_id = ?2').bind(id, userId).first<{ name: string }>();
+    const t = await env.DB.prepare('SELECT name FROM tasks WHERE id = ?1').bind(id).first<{ name: string }>();
     names.push(t?.name ?? id.slice(0, 6));
   }
   return names;
 }
 
-/** Re-parenting a task must not strand cross-project dependencies (FR-T1). */
-export async function assertReparentSafe(env: Env, userId: string, taskId: string, targetProjectId: string) {
+/** Re-parenting a task must not strand cross-project dependencies (FR-T1).
+ *  scopeUserId = null widens to the whole project's edges (group projects). */
+export async function assertReparentSafe(
+  env: Env, userId: string, taskId: string, targetProjectId: string, scopeUserId: string | null = userId
+) {
   const bad = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM task_dependencies td
      JOIN tasks other ON other.id = CASE WHEN td.task_id = ?1 THEN td.depends_on_id ELSE td.task_id END
-     WHERE td.user_id = ?2 AND (td.task_id = ?1 OR td.depends_on_id = ?1)
+     WHERE (td.task_id = ?1 OR td.depends_on_id = ?1)
+       ${scopeUserId ? 'AND td.user_id = ?2' : ''}
        AND other.project_id <> ?3`
-  ).bind(taskId, userId, targetProjectId).first<{ n: number }>();
+  ).bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId]), targetProjectId).first<{ n: number }>();
   if (Number(bad?.n ?? 0) > 0) {
     throw new RuleError(422, 'cross_project_dep', 'cannot move this task: it has dependencies in another project');
   }

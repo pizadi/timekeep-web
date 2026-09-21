@@ -5,7 +5,7 @@ import type { WsEvent } from '../../shared/constants';
 import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
 
-export interface Project { id: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; created_at: number; updated_at: number }
+export interface Project { id: string; user_id?: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; group_id?: string | null; created_at: number; updated_at: number }
 export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
 export interface Subtask { id: string; task_id: string; name: string; done: 0 | 1; position: number; created_at: number }
 export interface Dependency { task_id: string; depends_on_id: string; created_at: number }

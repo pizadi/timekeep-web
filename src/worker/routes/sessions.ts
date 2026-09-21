@@ -90,8 +90,9 @@ sessionRoutes.post('/sessions', async (c) => {
   const { task_id, started_at, ended_at, note } = parsed.data;
 
   const task = await c.env.DB.prepare(
-    `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
-     WHERE t.id = ?1 AND t.user_id = ?2`
+    `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t
+     JOIN projects p ON p.id = t.project_id
+     WHERE t.id = ?1 AND (t.user_id = ?2 OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
   ).bind(task_id, userId).first<any>();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   if (task.archived) return jsonError(422, 'archived', 'this project is archived — new sessions are blocked on it');
@@ -140,8 +141,10 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const ended = u.ended_at !== undefined ? u.ended_at : existing.ended_at;
   const note = u.note ?? existing.note;
 
-  const task = await c.env.DB.prepare('SELECT id FROM tasks WHERE id = ?1 AND user_id = ?2')
-    .bind(taskId, userId).first();
+  const task = await c.env.DB.prepare(
+    `SELECT t.id FROM tasks t WHERE t.id = ?1
+       AND (t.user_id = ?2 OR t.project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2)))`
+  ).bind(taskId, userId).first();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   const now = Date.now();
   const timeCheck = checkSessionTimes(started, ended, user.created_at, now);

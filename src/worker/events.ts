@@ -43,20 +43,22 @@ export async function appendEvents(env: Env, userId: string, drafts: EventDraft[
  * best-effort via waitUntil. The acting user should be included in `items`
  * when their other devices must learn about the change (the acting device
  * itself applies the API response instead — its own echoes are ignored).
+ * Returns the per-recipient event lists (recipient id → events, same order as
+ * the given drafts).
  */
 export async function emitToUsers(
   env: Env,
   items: Array<{ userId: string; draft: EventDraft }>,
   ctx?: { waitUntil(p: Promise<unknown>): void }
-): Promise<void> {
-  if (items.length === 0) return;
+): Promise<Map<string, WsEvent[]>> {
+  const byUser = new Map<string, WsEvent[]>();
+  if (items.length === 0) return byUser;
   const now = Date.now();
   const stmts = items.map((it) =>
     env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
       .bind(it.userId, it.draft.type, JSON.stringify({ actor: it.draft.actor, data: it.draft.data }), now)
   );
   const results = await env.DB.batch(stmts);
-  const byUser = new Map<string, WsEvent[]>();
   results.forEach((r, i) => {
     const it = items[i]!;
     const ev: WsEvent = {
@@ -68,6 +70,32 @@ export async function emitToUsers(
     byUser.set(it.userId, list);
   });
   for (const [userId, events] of byUser) notifyHub(env, userId, events, ctx);
+  return byUser;
+}
+
+/**
+ * Entity mutations fan out to the acting user's hub — and, when the entity
+ * lives in a GROUP project, to every group member's hub (feature 6: shared
+ * tasks stay in sync for the whole group). Call AFTER the entity write.
+ * Returns the acting user's event copies for the API response envelope
+ * (their device skips the echo via the actor guard; other devices apply it).
+ */
+export async function emitEntityEvents(
+  env: Env, userId: string, projectId: string, drafts: EventDraft[],
+  ctx?: { waitUntil(p: Promise<unknown>): void }
+): Promise<WsEvent[]> {
+  const pr = await env.DB.prepare('SELECT group_id FROM projects WHERE id = ?1')
+    .bind(projectId).first<{ group_id: string | null }>();
+  if (!pr?.group_id) {
+    const evs = await appendEvents(env, userId, drafts);
+    notifyHub(env, userId, evs, ctx);
+    return evs;
+  }
+  const members = await env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
+    .bind(pr.group_id).all<{ user_id: string }>();
+  const items = members.results.flatMap((m) => drafts.map((d) => ({ userId: m.user_id, draft: d })));
+  const byUser = await emitToUsers(env, items, ctx);
+  return byUser.get(userId) ?? [];
 }
 
 /**

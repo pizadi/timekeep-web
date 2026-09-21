@@ -267,7 +267,9 @@ friendRoutes.get('/friends/:friendId/projects', async (c) => {
   const [projects, presence] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, name, color, archived, position, created_at, updated_at, visibility
-       FROM projects WHERE user_id = ?1 AND visibility = 'friends' ORDER BY position, created_at`
+       FROM projects
+       WHERE user_id = ?1 AND visibility = 'friends' AND group_id IS NULL
+       ORDER BY position, created_at`
     ).bind(friendId).all(),
     friendVisiblePresence(c.env, friendId)
   ]);
@@ -286,7 +288,7 @@ friendRoutes.get('/friends/:friendId/projects/:projectId', async (c) => {
 
   const project = await c.env.DB.prepare(
     `SELECT id, name, color, archived, position, created_at, updated_at, visibility
-     FROM projects WHERE id = ?1 AND user_id = ?2 AND visibility = 'friends'`
+     FROM projects WHERE id = ?1 AND user_id = ?2 AND visibility = 'friends' AND group_id IS NULL`
   ).bind(projectId, friendId).first();
   if (!project) return jsonError(404, 'not_found', 'project not found');
 

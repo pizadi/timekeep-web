@@ -1,5 +1,8 @@
 // FR-T: tasks, subtask check-lists (two-level, FR-T3), dependency DAG edges
 // (cycle-checked, FR-M4). Deleting returns the undo payload (FR-T4).
+// Phase 4: group projects — every access goes through worker/access.ts:
+// members read everything in the project; structure edits need `edit_tasks`;
+// events fan out to the whole group. Sessions stay strictly user-owned.
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import type { Context } from 'hono';
@@ -7,10 +10,11 @@ import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { taskCreateSchema, taskPatchSchema, subtaskCreateSchema, subtaskPatchSchema, depCreateSchema } from '../validators';
 import {
-  assertTaskLimit, assertSubtaskLimit, requireRootTaskForSubtask, assertNotSubtask,
+  assertTaskLimit, assertSubtaskLimit, assertNotSubtask,
   createDependency, assertReparentSafe, RuleError
 } from '../rules';
-import { appendEvents, notifyHub, EventDraft } from '../events';
+import { appendEvents, notifyHub, emitEntityEvents, EventDraft } from '../events';
+import { requireProjectAccess, requireTaskAccess, requireEditTasks } from '../access';
 import { ulid } from '../../shared/ids';
 import { findCyclePath } from '../../shared/validation';
 
@@ -21,32 +25,27 @@ taskRoutes.use('/subtasks', requireAuth);
 taskRoutes.use('/subtasks/*', requireAuth);
 taskRoutes.use('/projects/*', requireAuth);
 
-async function getProjectOwned(c: Context<WorkerType>, id: string) {
-  const p = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?1 AND user_id = ?2')
-    .bind(id, c.get('user').id).first();
-  if (!p) throw new RuleError(404, 'not_found', 'project not found');
-  return p as any;
-}
-
 // ---------- tasks ----------
 
 taskRoutes.get('/projects/:id/tasks', async (c) => {
   const projectId = c.req.param('id');
-  await getProjectOwned(c, projectId);
+  const access = await requireProjectAccess(c.env, c.get('user').id, projectId);
+  // group projects expose every member's tasks; personal projects are owner-only anyway
   const tasks = await c.env.DB.prepare(
-    `SELECT * FROM tasks WHERE project_id = ?1 AND user_id = ?2 ORDER BY position, created_at`
-  ).bind(projectId, c.get('user').id).all();
+    `SELECT * FROM tasks WHERE project_id = ?1 ORDER BY position, created_at`
+  ).bind(projectId).all();
   const subtasks = await c.env.DB.prepare(
     `SELECT sb.* FROM subtasks sb JOIN tasks t ON t.id = sb.task_id
-     WHERE t.project_id = ?1 AND sb.user_id = ?2 ORDER BY sb.position, sb.created_at`
-  ).bind(projectId, c.get('user').id).all();
+     WHERE t.project_id = ?1 ORDER BY sb.position, sb.created_at`
+  ).bind(projectId).all();
+  void access;
   return c.json({ tasks: tasks.results, subtasks: subtasks.results });
 });
 
 taskRoutes.post('/projects/:id/tasks', async (c) => {
   const projectId = c.req.param('id');
-  const project = await getProjectOwned(c, projectId);
-  if (project.archived) return jsonError(422, 'archived', 'this project is archived — restore it to add tasks');
+  const access = await requireEditTasks(c.env, c.get('user').id, projectId);
+  if (access.project.archived) return jsonError(422, 'archived', 'this project is archived — restore it to add tasks');
   const parsed = taskCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid task payload', parsed.error.flatten());
   await assertTaskLimit(c.env, c.get('user').id);
@@ -62,26 +61,30 @@ taskRoutes.post('/projects/:id/tasks', async (c) => {
   ).bind(id, c.get('user').id, projectId, parsed.data.name, parsed.data.notes ?? '', (posRow?.p ?? -1) + 1, now).run();
 
   const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?1').bind(id).first();
-  const evs = await appendEvents(c.env, c.get('user').id,
-    [{ type: 'task.created', actor: c.get('deviceId'), data: { task } }]);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+  const evs = await emitEntityEvents(c.env, c.get('user').id, projectId,
+    [{ type: 'task.created', actor: c.get('deviceId'), data: { task } }], c.executionCtx);
   return c.json({ task, events: evs }, 201);
 });
 
 taskRoutes.patch('/tasks/:id', async (c) => {
   const userId = c.get('user').id;
-  const existing = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
-  if (!existing) return jsonError(404, 'not_found', 'task not found');
+  const { task: existing, access } = await requireTaskAccess(c.env, userId, c.req.param('id'));
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
   const parsed = taskPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid task payload', parsed.error.flatten());
   const u = parsed.data;
 
   if (u.project_id && u.project_id !== existing.project_id) {
-    const targetProject = (await getProjectOwned(c, u.project_id)) as { archived: number };
-    await assertReparentSafe(c.env, userId, existing.id, u.project_id);
+    const target = await requireProjectAccess(c.env, userId, u.project_id);
+    if (access.isGroup !== target.isGroup || access.project.group_id !== target.project.group_id) {
+      // moving between personal ↔ group (or across groups) would change the
+      // task's audience mid-flight — not supported; delete + recreate instead
+      return jsonError(422, 'cross_scope_move', 'tasks cannot move between projects with different access');
+    }
+    await assertReparentSafe(c.env, userId, existing.id, u.project_id, access.isGroup ? null : userId);
     // parity with task/session creation: no (re-)entry into archived projects
-    if (targetProject.archived)
+    if (target.project.archived)
       return jsonError(422, 'archived', 'this project is archived — restore it to add tasks');
   }
 
@@ -94,40 +97,38 @@ taskRoutes.patch('/tasks/:id', async (c) => {
   if (u.project_id !== undefined) { sets.push('project_id = ?'); binds.push(u.project_id); }
   if (sets.length === 0) return c.json({ task: existing });
   sets.push('updated_at = ?');
-  binds.push(Date.now(), userId, existing.id);
-  await c.env.DB.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
+  binds.push(Date.now(), existing.id);
+  await c.env.DB.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
 
   const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?1').bind(existing.id).first();
   // "done" changes affect map badges + charts legend → task.updated covers both (FR-N2)
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'task.updated', actor: c.get('deviceId'), data: { task } }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  const evs = await emitEntityEvents(c.env, userId, existing.project_id,
+    [{ type: 'task.updated', actor: c.get('deviceId'), data: { task } }], c.executionCtx);
   return c.json({ task, events: evs });
 });
 
 taskRoutes.delete('/tasks/:id', async (c) => {
   const userId = c.get('user').id;
-  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
-  if (!task) return jsonError(404, 'not_found', 'task not found');
+  const { task, access } = await requireTaskAccess(c.env, userId, c.req.param('id'));
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
 
-  // One transactional batch: the reads (undo payload) and the delete observe a
-  // consistent snapshot, so rows created concurrently can't vanish from the
-  // payload while still being cascade-deleted.
+  // One transactional batch: the reads (event/undo payload) and the delete
+  // observe a consistent snapshot. For group tasks the reads are deliberately
+  // NOT user-scoped — the deletion hits every member, so every device needs
+  // the full payload to clean up (and group deletes carry no undo).
   const [subtasks, deps, sessions, ,] = await c.env.DB.batch([
     c.env.DB.prepare('SELECT * FROM subtasks WHERE task_id = ?1').bind(task.id),
-    c.env.DB.prepare(
-      `SELECT * FROM task_dependencies WHERE user_id = ?1 AND (task_id = ?2 OR depends_on_id = ?2)`
-    ).bind(userId, task.id),
+    c.env.DB.prepare(`SELECT * FROM task_dependencies WHERE task_id = ?1 OR depends_on_id = ?1`).bind(task.id),
     c.env.DB.prepare('SELECT * FROM time_sessions WHERE task_id = ?1').bind(task.id),
-    c.env.DB.prepare('DELETE FROM tasks WHERE id = ?1 AND user_id = ?2').bind(task.id, userId) // cascades to subtasks/deps/sessions
+    c.env.DB.prepare('DELETE FROM tasks WHERE id = ?1').bind(task.id) // cascades to subtasks/deps/sessions
   ]);
 
-  const evs = await appendEvents(c.env, userId, [{
+  const evs = await emitEntityEvents(c.env, userId, task.project_id, [{
     type: 'task.deleted', actor: c.get('deviceId'),
     data: { task, subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results }
-  }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  }], c.executionCtx);
+  if (access.isGroup) return c.json({ deleted: true, undo: null, events: evs });
   return c.json({
     deleted: true,
     undo: { tasks: [task], subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results },
@@ -139,11 +140,15 @@ taskRoutes.delete('/tasks/:id', async (c) => {
 
 taskRoutes.post('/tasks/:id/subtasks', async (c) => {
   const userId = c.get('user').id;
-  await assertNotSubtask(c.env, userId, c.req.param('id')); // FR-T3: clear message for sub-subtask attempts
-  const parent = await requireRootTaskForSubtask(c.env, userId, c.req.param('id'));
+  await assertNotSubtask(c.env, c.req.param('id')); // FR-T3: clear message for sub-subtask attempts
+  const { task: parent, access } = await requireTaskAccess(c.env, userId, c.req.param('id'));
+  if (parent.parent_id !== null)
+    return jsonError(422, 'two_level_hierarchy', "a subtask can't have subtasks");
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
   const parsed = subtaskCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid subtask payload', parsed.error.flatten());
-  await assertSubtaskLimit(c.env, userId, parent.id);
+  await assertSubtaskLimit(c.env, userId, parent.id as string);
 
   const now = Date.now();
   const id = ulid(now);
@@ -156,17 +161,24 @@ taskRoutes.post('/tasks/:id/subtasks', async (c) => {
   ).bind(id, parent.id, userId, parsed.data.name, (posRow?.p ?? -1) + 1, now).run();
 
   const subtask = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1').bind(id).first();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'subtask.created', actor: c.get('deviceId'), data: { subtask, task_id: parent.id } }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  const evs = await emitEntityEvents(c.env, userId, parent.project_id as string,
+    [{ type: 'subtask.created', actor: c.get('deviceId'), data: { subtask, task_id: parent.id } }], c.executionCtx);
   return c.json({ subtask, events: evs }, 201);
 });
 
 taskRoutes.patch('/subtasks/:id', async (c) => {
   const userId = c.get('user').id;
-  const existing = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
-  if (!existing) return jsonError(404, 'not_found', 'subtask not found');
+  // resolve through the parent task's project — group membership grants access
+  const row = await c.env.DB.prepare(
+    `SELECT sb.*, t.project_id, t.user_id AS task_user_id FROM subtasks sb JOIN tasks t ON t.id = sb.task_id
+     WHERE sb.id = ?1`
+  ).bind(c.req.param('id')).first<any>();
+  if (!row) return jsonError(404, 'not_found', 'subtask not found');
+  const access = await requireProjectAccess(c.env, userId, row.project_id);
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
+  if (!access.isGroup && row.user_id !== userId)
+    return jsonError(404, 'not_found', 'subtask not found');
   const parsed = subtaskPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid subtask payload', parsed.error.flatten());
   const u = parsed.data;
@@ -176,39 +188,47 @@ taskRoutes.patch('/subtasks/:id', async (c) => {
   if (u.name !== undefined) { sets.push('name = ?'); binds.push(u.name); }
   if (u.done !== undefined) { sets.push('done = ?'); binds.push(u.done ? 1 : 0); }
   if (u.position !== undefined) { sets.push('position = ?'); binds.push(u.position); }
-  if (sets.length === 0) return c.json({ subtask: existing });
-  binds.push(existing.id, userId);
-  await c.env.DB.prepare(`UPDATE subtasks SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
+  if (sets.length === 0) return c.json({ subtask: row });
+  binds.push(row.id);
+  await c.env.DB.prepare(`UPDATE subtasks SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
 
-  const subtask = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1').bind(existing.id).first();
+  const subtask = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1').bind(row.id).first();
   // rapid toggles must never be lost (FR-M9 AC): each toggle is its own persisted event
-  const type = u.done !== undefined && u.done !== !!existing.done ? 'subtask.toggled' : 'subtask.updated';
-  const evs = await appendEvents(c.env, userId,
-    [{ type, actor: c.get('deviceId'), data: { subtask } }] as EventDraft[]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  const type = u.done !== undefined && u.done !== !!row.done ? 'subtask.toggled' : 'subtask.updated';
+  const evs = await emitEntityEvents(c.env, userId, row.project_id,
+    [{ type, actor: c.get('deviceId'), data: { subtask } }] as EventDraft[], c.executionCtx);
   return c.json({ subtask, events: evs });
 });
 
 taskRoutes.delete('/subtasks/:id', async (c) => {
   const userId = c.get('user').id;
-  const existing = await c.env.DB.prepare('SELECT * FROM subtasks WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
-  if (!existing) return jsonError(404, 'not_found', 'subtask not found');
-  await c.env.DB.prepare('DELETE FROM subtasks WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId).run();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'subtask.deleted', actor: c.get('deviceId'), data: { subtask: existing } }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
-  return c.json({ deleted: true, undo: { subtasks: [existing] }, events: evs });
+  const row = await c.env.DB.prepare(
+    `SELECT sb.*, t.project_id FROM subtasks sb JOIN tasks t ON t.id = sb.task_id
+     WHERE sb.id = ?1`
+  ).bind(c.req.param('id')).first<any>();
+  if (!row) return jsonError(404, 'not_found', 'subtask not found');
+  const access = await requireProjectAccess(c.env, userId, row.project_id);
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
+  if (!access.isGroup && row.user_id !== userId)
+    return jsonError(404, 'not_found', 'subtask not found');
+
+  await c.env.DB.prepare('DELETE FROM subtasks WHERE id = ?1').bind(row.id).run();
+  const evs = await emitEntityEvents(c.env, userId, row.project_id,
+    [{ type: 'subtask.deleted', actor: c.get('deviceId'), data: { subtask: row } }], c.executionCtx);
+  return c.json({ deleted: true, undo: access.isGroup ? null : { subtasks: [row] }, events: evs });
 });
 
 // ---------- dependencies (FR-M2/M3/M4/M5) ----------
 
 taskRoutes.get('/projects/:id/deps', async (c) => {
+  const projectId = c.req.param('id');
+  await requireProjectAccess(c.env, c.get('user').id, projectId);
   const rows = await c.env.DB.prepare(
     `SELECT td.* FROM task_dependencies td
      JOIN tasks t ON t.id = td.task_id
-     WHERE t.project_id = ?1 AND td.user_id = ?2`
-  ).bind(c.req.param('id'), c.get('user').id).all();
+     WHERE t.project_id = ?1`
+  ).bind(projectId).all();
   return c.json({ dependencies: rows.results });
 });
 
@@ -216,10 +236,17 @@ taskRoutes.post('/tasks/:id/deps', async (c) => {
   const userId = c.get('user').id;
   const parsed = depCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'depends_on_id required', parsed.error.flatten());
-  const dep = await createDependency(c.env, userId, c.req.param('id'), parsed.data.depends_on_id);
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'dependency.created', actor: c.get('deviceId'), data: { dependency: dep } }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  // both endpoints must live in an editable project (group → edit_tasks)
+  const { task } = await requireTaskAccess(c.env, userId, c.req.param('id'));
+  const projectAccess = await requireEditTasks(c.env, userId, task.project_id as string);
+  const { task: other } = await requireTaskAccess(c.env, userId, parsed.data.depends_on_id);
+  if (other.project_id !== task.project_id)
+    return jsonError(422, 'cross_project_edge', 'dependencies may only connect tasks of the same project');
+
+  const dep = await createDependency(c.env, userId, c.req.param('id'), parsed.data.depends_on_id,
+    projectAccess.isGroup ? null : userId);
+  const evs = await emitEntityEvents(c.env, userId, task.project_id as string,
+    [{ type: 'dependency.created', actor: c.get('deviceId'), data: { dependency: dep } }], c.executionCtx);
   return c.json({ dependency: dep, events: evs }, 201);
 });
 
@@ -227,15 +254,17 @@ taskRoutes.delete('/tasks/:id/deps/:depId', async (c) => {
   const userId = c.get('user').id;
   const taskId = c.req.param('id');
   const depId = c.req.param('depId');
+  const { task, access } = await requireTaskAccess(c.env, userId, taskId);
+  if (access.isGroup && !access.canEditTasks)
+    return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
   const existing = await c.env.DB.prepare(
-    `SELECT * FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2 AND user_id = ?3`
-  ).bind(taskId, depId, userId).first();
+    `SELECT * FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2`
+  ).bind(taskId, depId).first();
   if (!existing) return jsonError(404, 'not_found', 'dependency not found');
   await c.env.DB.prepare(
-    `DELETE FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2 AND user_id = ?3`
-  ).bind(taskId, depId, userId).run();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'dependency.deleted', actor: c.get('deviceId'), data: { dependency: existing } }]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
-  return c.json({ deleted: true, undo: { dependencies: [existing] }, events: evs });
+    `DELETE FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2`
+  ).bind(taskId, depId).run();
+  const evs = await emitEntityEvents(c.env, userId, task.project_id as string,
+    [{ type: 'dependency.deleted', actor: c.get('deviceId'), data: { dependency: existing } }], c.executionCtx);
+  return c.json({ deleted: true, undo: access.isGroup ? null : { dependencies: [existing] }, events: evs });
 });

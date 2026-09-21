@@ -17,7 +17,8 @@ import { ulid } from '../../shared/ids';
 import { randomToken, sha256Hex } from '../auth';
 import { RuleError, isUniqueConstraintError } from '../rules';
 import { loadGroupContext, requireGroup, requireGroupPerm } from '../group-auth';
-import { LIMITS } from '../../shared/constants';
+import { dayBounds, civilDate, minutes } from '../../shared/time';
+import { LIMITS, REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 
 export const groupRoutes = new Hono<WorkerType>();
 groupRoutes.use('/groups', requireAuth);
@@ -136,6 +137,102 @@ groupRoutes.post('/groups/join', async (c) => {
   const group = await c.env.DB.prepare('SELECT id, name, color, owner_id, created_at, updated_at FROM groups WHERE id = ?1')
     .bind(link.group_id).first();
   return c.json({ group }, 201);
+});
+
+// ---------- group projects (feature 6) ----------
+
+groupRoutes.post('/groups/:id/projects', async (c) => {
+  const parsedId = ulidish.safeParse(c.req.param('id'));
+  if (!parsedId.success) return jsonError(422, 'validation', 'invalid id');
+  const ctx = await requireGroupPerm(c.env, parsedId.data, c.get('user').id, 'manage_projects');
+  const parsed = groupCreateSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return jsonError(422, 'validation', 'invalid project payload', parsed.error.flatten());
+
+  const now = Date.now();
+  const id = ulid(now);
+  const color = parsed.data.color ?? '#4f8cff';
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO projects (id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, 0, 0, 'private', ?5, ?6, ?6)`
+    ).bind(id, c.get('user').id, parsed.data.name, color, ctx.group.id, now).run();
+  } catch (e: any) {
+    if (isUniqueConstraintError(e))
+      return jsonError(422, 'duplicate', 'a project with this name already exists');
+    throw e;
+  }
+  const project = await c.env.DB.prepare(
+    'SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at FROM projects WHERE id = ?1'
+  ).bind(id).first();
+  // the whole group learns about the new shared project
+  const members = await c.env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
+    .bind(ctx.group.id).all<{ user_id: string }>();
+  await emitToUsers(c.env, members.results.map((m) => ({
+    userId: m.user_id,
+    draft: { type: 'project.created' as const, actor: c.get('deviceId'), data: { project } }
+  })), c.executionCtx);
+  return c.json({ project }, 201);
+});
+
+// ---------- group report (aggregate buckets — never raw rows) ----------
+
+groupRoutes.get('/groups/:id/report', async (c) => {
+  const parsedId = ulidish.safeParse(c.req.param('id'));
+  if (!parsedId.success) return jsonError(422, 'validation', 'invalid id');
+  const ctx = await requireGroup(c.env, parsedId.data, c.get('user').id);
+  const now = Date.now();
+  const tz = c.get('user').timezone;
+  const today = civilDate(now, tz);
+  const qFrom = c.req.query('from');
+  const qTo = c.req.query('to');
+  const from = qFrom && /^\d{4}-\d{2}-\d{2}$/.test(qFrom) ? qFrom : today;
+  const to = qTo && /^\d{4}-\d{2}-\d{2}$/.test(qTo) ? qTo : today;
+  const bounds = dayBounds(from, to, tz);
+  if (bounds.length === 0) return c.json({ days: [], members: [], server_now: now });
+  if (bounds.length > REPORT_MAX_RANGE_DAYS)
+    return jsonError(422, 'range_too_large', `report range is limited to ${REPORT_MAX_RANGE_DAYS} days`);
+  const rangeStart = bounds[0]!.start;
+  const rangeEnd = bounds[bounds.length - 1]!.end;
+  const daysJson = JSON.stringify(bounds.map((b) => [b.day, b.start, b.end]));
+
+  // day × project buckets across ALL members' sessions on the group's projects,
+  // running sessions clipped to now (same posture as the personal report)
+  const [bucketRows, memberRows] = await Promise.all([
+    c.env.DB.prepare(
+      `WITH days(day, start_ms, end_ms) AS (
+         SELECT json_extract(je.value, '$[0]'), json_extract(je.value, '$[1]'), json_extract(je.value, '$[2]')
+         FROM json_each(?1) AS je
+       )
+       SELECT d.day AS day, t.project_id AS project_id,
+              SUM(MAX(0, MIN(COALESCE(s.ended_at, ?2), d.end_ms) - MAX(s.started_at, d.start_ms))) AS ms
+       FROM time_sessions s
+       JOIN tasks t ON t.id = s.task_id
+       JOIN days d ON s.started_at < d.end_ms AND COALESCE(s.ended_at, ?2) > d.start_ms
+       WHERE t.project_id IN (SELECT id FROM projects WHERE group_id = ?3)
+         AND s.started_at < ?4 AND COALESCE(s.ended_at, ?2) > ?5
+       GROUP BY d.day, t.project_id`
+    ).bind(daysJson, now, ctx.group.id, rangeEnd, rangeStart).all<{ day: string; project_id: string; ms: number }>(),
+    c.env.DB.prepare(
+      `SELECT s.user_id AS user_id, u.username AS username, u.name AS name, t.project_id AS project_id,
+              SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS ms
+       FROM time_sessions s
+       JOIN tasks t ON t.id = s.task_id
+       JOIN users u ON u.id = s.user_id
+       WHERE t.project_id IN (SELECT id FROM projects WHERE group_id = ?4)
+         AND s.started_at < ?2 AND COALESCE(s.ended_at, ?1) > ?3
+       GROUP BY s.user_id, t.project_id`
+    ).bind(now, rangeEnd, rangeStart, ctx.group.id).all()
+  ]);
+
+  return c.json({
+    from, to, timezone: tz,
+    days: bucketRows.results.map((r) => ({ day: r.day, project_id: r.project_id, minutes: minutes(Number(r.ms)) })),
+    members: memberRows.results.map((r: any) => ({
+      user_id: r.user_id, username: r.username, name: r.name,
+      project_id: r.project_id, minutes: minutes(Number(r.ms))
+    })),
+    server_now: now
+  });
 });
 
 // ---------- invites (username-addressed) ----------
