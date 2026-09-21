@@ -58,7 +58,9 @@ echo "users ok"
 # ---------- phase 1: friends ----------
 echo "== friends: request by username, duplicate 409, accept, both lists =="
 RID=$(req $JA dev-a POST /friends/requests "{\"username\":\"$UB\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['request']['id'])")
+settle
 req $JA dev-a POST /friends/requests "{\"username\":\"$UB\"}" | grep -q already_requested
+settle
 req $JB dev-b POST "/friends/requests/$RID/accept" | grep -q '"accepted":true'
 req $JA dev-a GET /friends | grep -q "\"username\":\"$UB\""
 req $JB dev-b GET /friends | grep -q "\"username\":\"$UA\""

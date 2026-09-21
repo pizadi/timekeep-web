@@ -8,6 +8,12 @@ import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth } from '../middleware';
 import { pomoStartSchema, ulidish } from '../validators';
+import { z } from 'zod';
+
+const timerOpSchema = z.object({
+  task_id: ulidish,
+  subtask_id: ulidish.nullable().optional()   // 0..1 subtask per session
+});
 
 export const timerRoutes = new Hono<WorkerType>();
 timerRoutes.use('/timer', requireAuth);
@@ -52,9 +58,9 @@ timerRoutes.get('/timer', async (c) => {
 });
 
 timerRoutes.post('/timer/start', async (c) => {
-  const parsed = ulidish.safeParse((await c.req.json().catch(() => null))?.task_id);
+  const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
-  const res = await callHub(c, '/timer', { op: 'start', task_id: parsed.data, device: c.get('deviceId') });
+  const res = await callHub(c, '/timer', { op: 'start', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
   return forward(c, res);
 });
 
@@ -63,11 +69,12 @@ timerRoutes.post('/timer/stop', async (c) => {
   return forward(c, res);
 });
 
-// "switch to" — atomically stop old + start new, one API call, one event (FR-S1)
+// "switch to" — atomically stop old + start new, one API call, one event (FR-S1);
+// subtask_id re-anchors the subtask too (same-task switches split the session)
 timerRoutes.post('/timer/switch', async (c) => {
-  const parsed = ulidish.safeParse((await c.req.json().catch(() => null))?.task_id);
+  const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
-  const res = await callHub(c, '/timer', { op: 'switch', task_id: parsed.data, device: c.get('deviceId') });
+  const res = await callHub(c, '/timer', { op: 'switch', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
   return forward(c, res);
 });
 

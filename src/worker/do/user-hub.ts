@@ -25,6 +25,7 @@ interface PomoState {
 interface RunningSession {
   id: string;
   task_id: string;
+  subtask_id: string | null;
   started_at: number;
   source: 'timer' | 'pomodoro';
 }
@@ -127,12 +128,12 @@ export class UserHub extends DurableObject {
 
   private async loadRunningFromD1(): Promise<RunningSession | null> {
     const at = await this.env.DB.prepare(
-      `SELECT at.session_id, at.task_id, at.started_at, s.source
+      `SELECT at.session_id, at.task_id, at.started_at, at.subtask_id, s.source
        FROM active_timers at JOIN time_sessions s ON s.id = at.session_id
        WHERE at.user_id = ?1`
-    ).bind(this.userId()).first<{ session_id: string; task_id: string; started_at: number; source: 'timer' | 'pomodoro' | null }>().catch(() => null);
+    ).bind(this.userId()).first<{ session_id: string; task_id: string; started_at: number; subtask_id: string | null; source: 'timer' | 'pomodoro' | null }>().catch(() => null);
     if (!at) return null;
-    return { id: at.session_id, task_id: at.task_id, started_at: Number(at.started_at), source: at.source ?? 'timer' };
+    return { id: at.session_id, task_id: at.task_id, subtask_id: at.subtask_id ?? null, started_at: Number(at.started_at), source: at.source ?? 'timer' };
   }
 
   // ---------- fetch router ----------
@@ -212,11 +213,11 @@ export class UserHub extends DurableObject {
       return Response.json(this.rateLimit(body.key, body.limit, body.windowMs));
     }
     if (url.pathname === '/timer') {
-      const body = await request.json<{ op: 'start' | 'stop' | 'switch'; task_id?: string; device: string }>().catch(() => null);
+      const body = await request.json<{ op: 'start' | 'stop' | 'switch'; task_id?: string; subtask_id?: string | null; device: string }>().catch(() => null);
       if (!body) return this.err(422, 'validation', 'invalid body');
-      if (body.op === 'start') return this.timerStart(body.task_id!, body.device, 'timer');
+      if (body.op === 'start') return this.timerStart(body.task_id!, body.device, 'timer', body.subtask_id ?? null);
       if (body.op === 'stop') return this.timerStop(body.device);
-      if (body.op === 'switch') return this.timerSwitch(body.task_id!, body.device);
+      if (body.op === 'switch') return this.timerSwitch(body.task_id!, body.device, body.subtask_id ?? null);
       return this.err(422, 'validation', 'unknown op');
     }
     if (url.pathname === '/pomo') {
@@ -294,7 +295,21 @@ export class UserHub extends DurableObject {
 
   // ---------- timer authority (FR-S1) ----------
 
-  private async timerStart(taskId: string, device: string, source: 'timer' | 'pomodoro'): Promise<Response> {
+  /**
+   * Subtask linkage for a session: when `subtaskId` is given it must belong to
+   * `taskId` (and be visible in the task's scope — the task check upstream
+   * already established that). Returns null when absent, a 422 Response on a
+   * bad link.
+   */
+  private async validateSubtask(taskId: string, subtaskId: string | null): Promise<Response | null> {
+    if (!subtaskId) return null;
+    const row = await this.env.DB.prepare(
+      'SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2'
+    ).bind(subtaskId, taskId).first();
+    return row ? null : this.err(422, 'invalid_subtask', 'the subtask does not belong to this task');
+  }
+
+  private async timerStart(taskId: string, device: string, source: 'timer' | 'pomodoro', subtaskId: string | null = null): Promise<Response> {
     if (this.running) {
       return this.err(409, 'already_running', 'a timer is already running — use switch', { running: this.running });
     }
@@ -305,6 +320,8 @@ export class UserHub extends DurableObject {
     ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
+    const badSub = await this.validateSubtask(taskId, subtaskId);
+    if (badSub) return badSub;
 
     // pomodoro mode (FR-F0): a plain timer start IS a pomodoro start — engage
     // the focus cycle before the batch so the session source and the persisted
@@ -317,7 +334,7 @@ export class UserHub extends DurableObject {
     }
 
     const sessionId = ulid(now);
-    const session: RunningSession = { id: sessionId, task_id: taskId, started_at: now, source: engaged ? 'pomodoro' : source };
+    const session: RunningSession = { id: sessionId, task_id: taskId, subtask_id: subtaskId, started_at: now, source: engaged ? 'pomodoro' : source };
     const ev = { type: 'timer.started', actor: device, data: { session, task_id: taskId } };
 
     // single ordered batch: session row + recovery mirror + sync_log (NFR-5: no partial writes)
@@ -325,15 +342,16 @@ export class UserHub extends DurableObject {
     try {
       results = await this.env.DB.batch([
         this.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
-        ).bind(sessionId, this.userId(), taskId, now, session.source),
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`
+        ).bind(sessionId, this.userId(), taskId, now, session.source, subtaskId),
         this.env.DB.prepare(
-          `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state)
-           VALUES (?1, ?2, ?3, ?4, ?5)
+          `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state, subtask_id)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
            ON CONFLICT (user_id) DO UPDATE SET task_id = excluded.task_id,
-             session_id = excluded.session_id, started_at = excluded.started_at, pomo_state = excluded.pomo_state`
-        ).bind(this.userId(), taskId, sessionId, now, JSON.stringify(this.pomo)),
+             session_id = excluded.session_id, started_at = excluded.started_at, pomo_state = excluded.pomo_state,
+             subtask_id = excluded.subtask_id`
+        ).bind(this.userId(), taskId, sessionId, now, JSON.stringify(this.pomo), subtaskId),
         this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
           .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
       ]);
@@ -416,11 +434,13 @@ export class UserHub extends DurableObject {
     return Response.json({ session, events: [{ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data }] });
   }
 
-  /** Atomic stop-old + start-new — one call, one event, zero overlap/gap (FR-S1 AC). */
-  private async timerSwitch(taskId: string, device: string): Promise<Response> {
+  /** Atomic stop-old + start-new — one call, one event, zero overlap/gap (FR-S1 AC).
+   *  `subtaskId` (optional) re-anchors the subtask too — switching subtasks,
+   *  even within the same task, splits into two cleanly-attributed sessions. */
+  private async timerSwitch(taskId: string, device: string, subtaskId: string | null = null): Promise<Response> {
     if (!this.running) {
       // tolerate: treat as start
-      return this.timerStart(taskId, device, 'timer');
+      return this.timerStart(taskId, device, 'timer', subtaskId);
     }
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
@@ -429,8 +449,10 @@ export class UserHub extends DurableObject {
     ).bind(taskId, this.userId()).first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
-    if (task.id === this.running.task_id) {
-      return Response.json({ session: this.running, events: [] });
+    const badSub = await this.validateSubtask(taskId, subtaskId);
+    if (badSub) return badSub;
+    if (task.id === this.running.task_id && (this.running.subtask_id ?? null) === (subtaskId ?? null)) {
+      return Response.json({ session: this.running, events: [] }); // same task AND subtask — nothing to switch
     }
 
     // pomodoro mode (FR-F0): a switch mid-cycle keeps the focus run alive on
@@ -444,19 +466,19 @@ export class UserHub extends DurableObject {
     const stopped = { ...this.running, ended_at: now };
     const newId = ulid(now + 1);
     const newSource: 'timer' | 'pomodoro' = engaged ? 'pomodoro' : 'timer';
-    const started: RunningSession = { id: newId, task_id: taskId, started_at: now + 1, source: newSource };
+    const started: RunningSession = { id: newId, task_id: taskId, subtask_id: subtaskId, started_at: now + 1, source: newSource };
     const ev = { type: 'timer.switched', actor: device, data: { stopped, started } };
 
     const results = await this.env.DB.batch([
       this.env.DB.prepare('UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2')
         .bind(now, stopped.id),
       this.env.DB.prepare(
-        `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4)`
-      ).bind(newId, this.userId(), taskId, now + 1, newSource),
+        `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`
+      ).bind(newId, this.userId(), taskId, now + 1, newSource, subtaskId),
       this.env.DB.prepare(
-        `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5 WHERE user_id = ?1`
-      ).bind(this.userId(), taskId, newId, now + 1, JSON.stringify(this.pomo)),
+        `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5, subtask_id = ?6 WHERE user_id = ?1`
+      ).bind(this.userId(), taskId, newId, now + 1, JSON.stringify(this.pomo), subtaskId),
       this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
         .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
     ]).catch(async (e) => {

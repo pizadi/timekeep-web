@@ -229,18 +229,39 @@ export default function DashboardView() {
           </thead>
           <tbody>
             {tableSorted.map((r) => (
-              <tr key={r.task_id}>
-                <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
-                <td className={r.done ? 'done-text' : ''}>{r.task_name}</td>
-                <td className="num">{r.today}{running?.task_id === r.task_id ? <b style={{ color: 'var(--danger)' }}> +{runningBoost}</b> : ''}</td>
-                <td className="num">{r.week}</td>
-                <td className="num">{r.all}</td>
-              </tr>
+              <SubtaskRows key={r.task_id} r={r} runningTaskId={running?.task_id ?? null} runningBoost={runningBoost} />
             ))}
             {tableSorted.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>No tracked time yet.</td></tr>}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+/** One task row + its subtask breakdown (indented, when the task has any). */
+function SubtaskRows({ r, runningTaskId, runningBoost }: { r: any; runningTaskId: string | null; runningBoost: number }) {
+  return (
+    <>
+      <tr key={r.task_id}>
+        <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
+        <td className={r.done ? 'done-text' : ''} title={r.task_name}>{r.task_name}</td>
+        <td className="num">{r.today}{runningTaskId === r.task_id ? <b style={{ color: 'var(--danger)' }}> +{runningBoost}</b> : ''}</td>
+        <td className="num">{r.week}</td>
+        <td className="num">{r.all}</td>
+      </tr>
+      {(r.subtasks ?? []).map((sb: any) => (
+        <tr key={sb.subtask_id} title={sb.name}>
+          <td />
+          <td style={{ paddingLeft: 22 }} className={sb.done ? 'muted' : ''}>
+            <span aria-hidden style={{ marginRight: 4 }}>↳</span>
+            {sb.name}{sb.done ? <span className="muted"> (done)</span> : ''}
+          </td>
+          <td className="num muted">{sb.today}</td>
+          <td className="num muted">{sb.week}</td>
+          <td className="num muted">{sb.all}</td>
+        </tr>
+      ))}
+    </>
   );
 }

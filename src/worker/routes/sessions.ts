@@ -63,10 +63,11 @@ sessionRoutes.get('/sessions', async (c) => {
   }
 
   const rows = await c.env.DB.prepare(
-    `SELECT s.id, s.task_id, s.started_at, s.ended_at, s.source, s.note,
-            t.name AS task_name, t.project_id, p.name AS project_name, p.color AS project_color
+    `SELECT s.id, s.task_id, s.started_at, s.ended_at, s.source, s.note, s.subtask_id,
+            t.name AS task_name, sb.name AS subtask_name, t.project_id, p.name AS project_name, p.color AS project_color
      FROM time_sessions s
      JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN subtasks sb ON sb.id = s.subtask_id
      JOIN projects p ON p.id = t.project_id
      WHERE ${where.join(' AND ')}
      ORDER BY s.started_at DESC, s.id DESC
@@ -87,7 +88,7 @@ sessionRoutes.post('/sessions', async (c) => {
   const user = c.get('user');
   const parsed = sessionCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid session payload', parsed.error.flatten());
-  const { task_id, started_at, ended_at, note } = parsed.data;
+  const { task_id, subtask_id, started_at, ended_at, note } = parsed.data;
 
   const task = await c.env.DB.prepare(
     `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t
@@ -96,6 +97,12 @@ sessionRoutes.post('/sessions', async (c) => {
   ).bind(task_id, userId).first<any>();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   if (task.archived) return jsonError(422, 'archived', 'this project is archived — new sessions are blocked on it');
+  if (subtask_id) {
+    // the subtask must belong to the session's task (task scope already checked)
+    const sub = await c.env.DB.prepare('SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2')
+      .bind(subtask_id, task_id).first();
+    if (!sub) return jsonError(422, 'invalid_subtask', 'the subtask does not belong to this task');
+  }
 
   const now = Date.now();
   const timeCheck = checkSessionTimes(started_at, ended_at, user.created_at, now);
@@ -114,9 +121,9 @@ sessionRoutes.post('/sessions', async (c) => {
 
   const id = ulid(now);
   await c.env.DB.prepare(
-    `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7)`
-  ).bind(id, userId, task_id, started_at, ended_at, note, now).run();
+    `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8)`
+  ).bind(id, userId, task_id, started_at, ended_at, note, now, subtask_id ?? null).run();
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(id).first();
   const evs = await appendEvents(c.env, userId,
@@ -140,12 +147,19 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const started = u.started_at ?? existing.started_at;
   const ended = u.ended_at !== undefined ? u.ended_at : existing.ended_at;
   const note = u.note ?? existing.note;
+  // subtask link: explicitly clearable (null) or must belong to the (possibly new) task
+  const subtaskId = u.subtask_id !== undefined ? (u.subtask_id ?? null) : (existing.subtask_id ?? null);
 
   const task = await c.env.DB.prepare(
     `SELECT t.id FROM tasks t WHERE t.id = ?1
        AND (t.user_id = ?2 OR t.project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2)))`
   ).bind(taskId, userId).first();
   if (!task) return jsonError(404, 'not_found', 'task not found');
+  if (subtaskId) {
+    const sub = await c.env.DB.prepare('SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2')
+      .bind(subtaskId, taskId).first();
+    if (!sub) return jsonError(422, 'invalid_subtask', 'the subtask does not belong to this task');
+  }
   const now = Date.now();
   const timeCheck = checkSessionTimes(started, ended, user.created_at, now);
   if (!timeCheck.ok) return jsonError(422, 'validation', timeCheck.problem!);
@@ -156,9 +170,9 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   if (conflicts.length > 0) throw conflictError(conflicts);
 
   await c.env.DB.prepare(
-    `UPDATE time_sessions SET task_id = ?1, started_at = ?2, ended_at = ?3, note = ?4, source = 'manual', updated_at = ?5
-     WHERE id = ?6 AND user_id = ?7`
-  ).bind(taskId, started, ended, note, now, existing.id, userId).run();
+    `UPDATE time_sessions SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
+     WHERE id = ?7 AND user_id = ?8`
+  ).bind(taskId, subtaskId, started, ended, note, now, existing.id, userId).run();
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(existing.id).first();
   const evs = await appendEvents(c.env, userId,

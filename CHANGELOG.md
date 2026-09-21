@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-21 — 0.2.0-dev.3: subtask attribution on sessions
+
+A session can now record WHICH subtask it tracked (0..1 per session — NULL =
+task-level time). Migration `0009_session_subtasks.sql` — run
+`npm run db:migrate:local`.
+
+- **Timer on a subtask.** `/timer/start` and `/timer/switch` accept an optional
+  `subtask_id`; the UserHub DO validates it belongs to the task (422
+  `invalid_subtask` otherwise), persists it in the session row + the
+  `active_timers` recovery mirror, and carries it in the payloads. Switching
+  subtask — same task or another — reuses the atomic switch: the segment stops
+  with its subtask and a new one starts with the next (zero gap/overlap). A
+  no-op switch (same task + subtask) returns the running session unchanged.
+  The single-timer invariant is untouched.
+- **Sidebar.** Every subtask row gains a ▶/■ timer button — start/switch/stop
+  per subtask; the row highlights while its subtask is the one running.
+- **Timer bar + tab tray** show `Task ▸ Subtask` while a subtask session runs.
+- **Manual sessions + Log.** The session editor gains a subtask dropdown
+  (filtered to the chosen task; resets when the task changes); log rows render
+  `task ▸ subtask`; `PATCH /sessions/:id` can set or clear (`subtask_id: null`)
+  the link. Cross-task links are rejected (422 `invalid_subtask`).
+- **Reports.** `/reports/summary` table rows now carry a nested `subtasks`
+  breakdown (per-subtask today/week/all) — sessions without a subtask stay on
+  the task row, so task totals are identical to before. The dashboard table
+  renders them indented. Charts remain project-level.
+- **Deletes keep time.** Deleting a subtask (or its parent task/project via
+  cascade) never destroys session rows — the link is `ON DELETE SET NULL`.
+  Import/restore insert subtasks before sessions and drop dangling links
+  instead of aborting the batch; imported rows validate the link against the
+  task. Export carries `subtask_id` (SELECT *).
+- Verified: dedicated e2e (`e2e/subtask-sessions.sh` — start/switch/split/
+  manual/link-rejection/report/deletes) + the full social e2e.
+
 ## 2026-09-21 — 0.2.0.dev2: UI polish — graphical dropdowns, hover names, shortcuts, archive speed
 
 - **All dropdowns are graphical** — the nine native `<select>` elements (settings: week start,

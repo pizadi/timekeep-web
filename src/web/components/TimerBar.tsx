@@ -10,6 +10,7 @@ import { useModalA11y } from '../lib/modal';
 export default function TimerBar() {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
+  const subtasks = useStore((s) => s.subtasks);
   const pomo = useStore((s) => s.pomo);
   const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
   const [elapsed, setElapsed] = useState(0);
@@ -17,6 +18,8 @@ export default function TimerBar() {
   const promptedRef = useRef(false);
 
   const task = running ? tasks.find((t) => t.id === running.task_id) : null;
+  const subtask = running?.subtask_id ? subtasks.find((sb) => sb.id === running.subtask_id) ?? null : null;
+  const runningLabel = task ? (subtask ? `${task.name} ▸ ${subtask.name}` : task.name) : 'Unknown task';
 
   // elapsed computed client-side from authoritative started_at + server offset (FR-S2);
   // keeps ticking even when the WS drops. Deps are [running] only — depending on
@@ -41,13 +44,13 @@ export default function TimerBar() {
   useEffect(() => {
     const base = 'TimeKeep';
     if (running) {
-      document.title = `${fmtHMS(elapsed)} · ${task?.name ?? 'Timer'}`;
+      document.title = `${fmtHMS(elapsed)} · ${runningLabel}`;
       setFavicon(true);
     } else {
       document.title = base;
       setFavicon(false);
     }
-  }, [running, elapsed, task?.name]);
+  }, [running, elapsed, runningLabel]);
 
   // pomodoro notifications (FR-Nt1) — end-of-run phases (decide/ready) always
   // notify when the browser permission is granted (they were requested when the
@@ -113,7 +116,7 @@ export default function TimerBar() {
       <div className="timerbar" role="timer" aria-live="off">
         <span className="dot-running" aria-hidden />
         <span className="elapsed">{fmtHMS(elapsed)}</span>
-        <span className="task">{task?.name ?? 'Unknown task'}</span>
+        <span className="task" title={runningLabel}>{runningLabel}</span>
         <PomodoroRing />
         <div className="spacer" />
         <button className="btn stop" onClick={stop}>■ Stop</button>

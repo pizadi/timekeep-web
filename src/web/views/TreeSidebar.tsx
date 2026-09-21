@@ -9,7 +9,7 @@ import { PALETTE } from '../../shared/constants';
 import { openPrompt } from '../components/PromptModal';
 import { parseGroupPerms } from './GroupsPanel';
 import { GROUP_PERMS, type GroupPerm } from '../../shared/constants';
-import type { Project } from '../lib/store';
+import type { Project, Task, Subtask } from '../lib/store';
 
 const ALL_PERMS: GroupPerm[] = [...GROUP_PERMS];
 
@@ -129,6 +129,20 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     }
     try {
       await store.startTimer(taskId); // applies setRunning + setPomo (one shared impl)
+    } catch (e: any) { pushToast('error', e.message); }
+  }
+
+  /** Timer on a SUBTASK: stop when that subtask is the one running; otherwise
+   *  start (or switch to) a session attributed to it — same-task switches
+   *  split the session server-side. */
+  async function toggleSubtaskTimer(task: Task, sb: Subtask) {
+    if (running?.subtask_id === sb.id) {
+      try { await api('/timer/stop', { method: 'POST' }); store.setRunning(null); }
+      catch (e: any) { pushToast('error', e.message); }
+      return;
+    }
+    try {
+      await store.startTimer(task.id, sb.id);
     } catch (e: any) { pushToast('error', e.message); }
   }
 
@@ -352,6 +366,10 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                         } catch (e: any) { pushToast('error', e.message); }
                       }}>✕</button>
                   )}
+                  <button className="icon-btn" aria-label={`Track subtask ${sb.name}`} title="Track this subtask"
+                    onClick={(e) => { e.stopPropagation(); toggleSubtaskTimer(t, sb); }}>
+                    {running?.subtask_id === sb.id ? '■' : '▶'}
+                  </button>
                 </div>
               ))}
             </div>

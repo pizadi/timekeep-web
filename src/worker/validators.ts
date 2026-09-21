@@ -126,9 +126,10 @@ export const depCreateSchema = z.object({ depends_on_id: ulidish });
 // Manual sessions are always closed intervals: an open-ended (ended_at NULL) row
 // is the *running* session, owned exclusively by the timer authority (UserHub DO);
 // allowing null here would collide with the partial unique index
-// idx_sessions_running.
+// idx_sessions_running. subtask_id: 0..1 subtask per session (NULL = task-level).
 export const sessionCreateSchema = z.object({
   task_id: ulidish,
+  subtask_id: ulidish.nullable().optional(),
   started_at: z.number().int(),
   ended_at: z.number().int(),
   note: z.string().max(LIMITS.noteMax).optional().default(''),
@@ -137,6 +138,7 @@ export const sessionCreateSchema = z.object({
 
 export const sessionPatchSchema = z.object({
   task_id: ulidish.optional(),
+  subtask_id: ulidish.nullable().optional(),   // null clears the subtask link
   started_at: z.number().int().optional(),
   ended_at: z.number().int().optional(),
   note: z.string().max(LIMITS.noteMax).optional()
@@ -208,6 +210,7 @@ export const importDependencyRow = z.object({
 export const importSessionRow = z.object({
   id: ulidish,
   task_id: ulidish,
+  subtask_id: ulidish.nullable().catch(null),   // fail-soft: bad link drops, time stays
   started_at: z.number().int().finite(),
   ended_at: z.number().int().finite().nullable(),
   note: z.string().max(LIMITS.noteMax).catch(''),

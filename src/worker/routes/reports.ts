@@ -74,34 +74,56 @@ reportRoutes.get('/reports/summary', async (c) => {
   ).bind(now, rangeEnd, rangeStart, userId).all<{ project_id: string; ms: number }>();
 
   // summary table: today / week / all-time columns (desktop-parity totals map, FR-R4)
+  // grouped by task × subtask — each task row carries its subtask breakdown
+  // (sessions without a subtask attribute to the task row itself, so task
+  // totals are identical to the pre-subtask behavior)
   const tableRows = await c.env.DB.prepare(
     `SELECT t.id AS task_id, t.name AS task_name, t.done, t.project_id AS project_id,
             p.name AS project_name, p.color AS project_color,
+            sb.id AS subtask_id, sb.name AS subtask_name, sb.done AS subtask_done,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS today_ms,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?4) - MAX(s.started_at, ?5))) AS week_ms,
             SUM(COALESCE(s.ended_at, ?1) - s.started_at) AS all_ms
      FROM time_sessions s
      JOIN tasks t ON t.id = s.task_id
      JOIN projects p ON p.id = t.project_id
+     LEFT JOIN subtasks sb ON sb.id = s.subtask_id
      WHERE s.user_id = ?6
-     GROUP BY t.id`
+     GROUP BY t.id, sb.id`
   ).bind(now, todayEnd, todayStart, now, weekStart, userId).all<any>();
 
+  const table = tableRows.results.reduce<any[]>((acc, r) => {
+    let row = acc.find((x) => x.task_id === r.task_id);
+    if (!row) {
+      row = {
+        task_id: r.task_id, task_name: r.task_name, done: !!r.done,
+        project_id: r.project_id, project_name: r.project_name, project_color: r.project_color,
+        today: 0, week: 0, all: 0, subtasks: []
+      };
+      acc.push(row);
+    }
+    const mins = { today: minutes(Number(r.today_ms ?? 0)), week: minutes(Number(r.week_ms ?? 0)), all: minutes(Number(r.all_ms ?? 0)) };
+    row.today += mins.today; row.week += mins.week; row.all += mins.all;
+    if (r.subtask_id) {
+      row.subtasks.push({
+        subtask_id: r.subtask_id, name: r.subtask_name, done: !!r.subtask_done,
+        today: mins.today, week: mins.week, all: mins.all
+      });
+    }
+    return acc;
+  }, []);
+
   const totals = {
-    today: minutes(tableRows.results.reduce((a, r) => a + Number(r.today_ms ?? 0), 0)),
-    week: minutes(tableRows.results.reduce((a, r) => a + Number(r.week_ms ?? 0), 0)),
-    all: minutes(tableRows.results.reduce((a, r) => a + Number(r.all_ms ?? 0), 0))
+    today: minutes(table.reduce((a, r) => a + r.today, 0)),
+    week: minutes(table.reduce((a, r) => a + r.week, 0)),
+    all: minutes(table.reduce((a, r) => a + r.all, 0))
   };
 
   return c.json({
     from, to, timezone: tz,
     days: bucketRows.results.map((r) => ({ day: r.day, project_id: r.project_id, minutes: minutes(Number(r.ms)) })),
     donut: donutRows.results.map((r) => ({ project_id: r.project_id, minutes: minutes(Number(r.ms)) })),
-    table: tableRows.results.map((r) => ({
-      task_id: r.task_id, task_name: r.task_name, done: !!r.done,
-      project_id: r.project_id, project_name: r.project_name, project_color: r.project_color,
-      today: minutes(Number(r.today_ms ?? 0)), week: minutes(Number(r.week_ms ?? 0)), all: minutes(Number(r.all_ms ?? 0))
-    })),
+    table,
     totals,
     server_now: now
   });

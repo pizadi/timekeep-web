@@ -9,8 +9,8 @@ export interface Project { id: string; user_id?: string; name: string; color: st
 export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
 export interface Subtask { id: string; task_id: string; name: string; done: 0 | 1; position: number; created_at: number }
 export interface Dependency { task_id: string; depends_on_id: string; created_at: number }
-export interface SessionRow { id: string; task_id: string; started_at: number; ended_at: number | null; source: 'timer' | 'manual' | 'pomodoro'; note: string; created_at: number; updated_at: number }
-export interface RunningSession { id: string; task_id: string; started_at: number; source: string; ended_at?: null }
+export interface SessionRow { id: string; task_id: string; subtask_id?: string | null; started_at: number; ended_at: number | null; source: 'timer' | 'manual' | 'pomodoro'; note: string; created_at: number; updated_at: number }
+export interface RunningSession { id: string; task_id: string; subtask_id?: string | null; started_at: number; source: string; ended_at?: null }
 export interface PomoState {
   phase: 'idle' | 'focus' | 'decide' | 'break' | 'ready';
   taskId: string | null;
@@ -211,16 +211,19 @@ export const store = {
    * triplicated across TreeSidebar/App/MapView, and the Map copy dropped the
    * `pomo` payload, leaving pomo UI state stale). Applies setRunning + setPomo;
    * throws for the caller to toast. Stops are not covered (every caller stops
-   * differently).
+   * differently). `subtaskId` starts (or re-anchors via the switch fallback)
+   * the session on a subtask — a same-task switch splits into two attributed
+   * sessions.
    */
-  async startTimer(taskId: string): Promise<void> {
+  async startTimer(taskId: string, subtaskId?: string | null): Promise<void> {
+    const body = { task_id: taskId, subtask_id: subtaskId ?? null };
     try {
-      const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body: { task_id: taskId } });
+      const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body });
       store.setRunning(res.session);
       if (res.pomo) store.setPomo(res.pomo);
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'already_running') {
-        const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body: { task_id: taskId } });
+        const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body });
         store.setRunning(res.started);
         if (res.pomo) store.setPomo(res.pomo);
       } else throw e;

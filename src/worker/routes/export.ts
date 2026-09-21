@@ -395,18 +395,31 @@ exportRoutes.post('/import', async (c) => {
         return true;
       });
     const exist = await existingIds(c.env, userId, 'time_sessions', plannedSessions.map(({ s }) => idOf(s.id)));
+    // subtask links survive import only when the subtask exists AND belongs to
+    // the session's task (subtasks import first; a skipped row → link drops,
+    // the session's time still imports)
+    const importSubIds = plannedSessions.filter(({ s }) => s.subtask_id).map(({ s }) => s.subtask_id!);
+    const importSubs = new Map<string, string>();
+    for (const batch of chunk(importSubIds, 90)) {
+      const marks = batch.map((_, k) => `?${k + 2}`).join(',');
+      const rows = await c.env.DB.prepare(
+        `SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`
+      ).bind(userId, ...batch).all<{ id: string; task_id: string }>();
+      for (const r of rows.results) importSubs.set(r.id, r.task_id);
+    }
     for (const batch of chunk(plannedSessions, IMPORT_CHUNK)) {
       const stmts = batch.map(({ s, started, ended }) => {
         const id = idOf(s.id);
         if (exist.has(id)) summary.sessions.updated++; else summary.sessions.created++;
+        const sub = s.subtask_id && importSubs.get(s.subtask_id) === idOf(s.task_id) ? s.subtask_id : null;
         return c.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
            ON CONFLICT (id) DO UPDATE SET task_id = excluded.task_id, started_at = excluded.started_at,
              ended_at = excluded.ended_at, note = excluded.note, updated_at = excluded.updated_at
            WHERE time_sessions.user_id = excluded.user_id`
         ).bind(id, userId, idOf(s.task_id), started, ended, s.source,
-          String(s.note ?? '').slice(0, LIMITS.noteMax), clampTs(s.created_at));
+          String(s.note ?? '').slice(0, LIMITS.noteMax), clampTs(s.created_at), sub);
       });
       if (stmts.length) await c.env.DB.batch(stmts);
     }
@@ -582,15 +595,28 @@ exportRoutes.post('/restore', async (c) => {
     }
     if (!planned.length) continue;
     const ownedTasks = await existingIds(c.env, userId, 'tasks', planned.map((p) => p.s.task_id));
+    // a subtask link survives restore only when the subtask exists AND belongs
+    // to the session's task (subtasks restore earlier in this handler; a
+    // dropped link must NOT abort the batch — the time is the precious part)
+    const restoreSubIds = planned.filter(({ s }) => s.subtask_id).map(({ s }) => s.subtask_id!);
+    const restoreSubs = new Map<string, string>();
+    for (const part of chunk(restoreSubIds, 90)) {
+      const marks = part.map((_, k) => `?${k + 2}`).join(',');
+      const rows = await c.env.DB.prepare(
+        `SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`
+      ).bind(userId, ...part).all<{ id: string; task_id: string }>();
+      for (const r of rows.results) restoreSubs.set(r.id, r.task_id);
+    }
     const stmts = planned
       .filter(({ s }) => ownedTasks.has(s.task_id))
       .map(({ s, started, ended }) => {
+        const sub = s.subtask_id && restoreSubs.get(s.subtask_id) === s.task_id ? s.subtask_id : null;
         return c.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
            ON CONFLICT (id) DO NOTHING`
         ).bind(s.id, userId, s.task_id, started, ended, s.source,
-          String(s.note ?? '').slice(0, LIMITS.noteMax), now);
+          String(s.note ?? '').slice(0, LIMITS.noteMax), now, sub);
       });
     if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
   }

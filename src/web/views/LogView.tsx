@@ -12,7 +12,8 @@ import Combobox from '../components/Combobox';
 import Dropdown, { ColorChip } from '../components/Dropdown';
 
 interface LogRow {
-  id: string; task_id: string; started_at: number; ended_at: number | null;
+  id: string; task_id: string; subtask_id?: string | null; subtask_name?: string | null;
+  started_at: number; ended_at: number | null;
   source: 'timer' | 'manual' | 'pomodoro'; note: string;
   task_name: string; project_name: string; project_color: string;
 }
@@ -175,7 +176,9 @@ export default function LogView() {
                     if (e.key === 'Delete' && !isRunning) del(r);
                   }}>
                   <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
-                  <td title={r.task_name}>{r.task_name}</td>
+                  <td title={r.subtask_name ? `${r.task_name} ▸ ${r.subtask_name}` : r.task_name}>
+                    {r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
+                  </td>
                   <td>{fmtDateTime(r.started_at, tz)}</td>
                   <td>{isRunning ? <span className="muted">running…</span> : r.ended_at ? fmtClock(r.ended_at, tz) : ''}</td>
                   <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>
@@ -237,6 +240,7 @@ function SessionEditor({
 }) {
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
+  const subtasks = useStore((s) => s.subtasks);
   const user = useStore((s) => s.user)!;
   const selectedTaskId = useStore((s) => s.selectedTaskId);
 
@@ -244,6 +248,7 @@ function SessionEditor({
   const [taskText, setTaskText] = useState(
     initial?.task_id ? (tasks.find((t) => t.id === initial.task_id)?.name ?? '') : ''
   );
+  const [subtaskId, setSubtaskId] = useState<string | null>(initial?.subtask_id ?? null);
   const [start, setStart] = useState(toLocalInput(initial?.started_at ?? Date.now() - 3600_000, tz));
   // manual sessions are closed intervals: open-ended rows collide with the
   // running-session unique index
@@ -297,6 +302,7 @@ function SessionEditor({
     }
     const body = {
       task_id: finalTaskId,
+      subtask_id: taskId === finalTaskId ? (subtaskId ?? null) : null, // task changed → link resets
       started_at: fromLocalInput(start, tz),
       ended_at: fromLocalInput(end, tz),
       note
@@ -330,10 +336,23 @@ function SessionEditor({
             onPick={(id) => {
               setTaskId(id);
               setTaskText(tasks.find((t) => t.id === id)?.name ?? '');
+              setSubtaskId(null); // the previous task's subtask never fits the new one
             }}
             groups={taskGroups}
             placeholder="Type to search…"
           />
+        </label>
+        <label className="field">
+          <span>Subtask (optional — attributes this session's time to it)</span>
+          <Dropdown
+            ariaLabel="Subtask"
+            value={subtaskId ?? ''}
+            onChange={(v) => setSubtaskId(v === '' ? null : v)}
+            options={[
+              { value: '', label: `Whole task — ${tasks.find((t) => t.id === taskId)?.name ?? 'no subtask'}`, icon: '◂' },
+              ...subtasks.filter((sb) => sb.task_id === taskId)
+                .map((sb) => ({ value: sb.id, label: sb.name, icon: sb.done ? '☑' : '☐' }))
+            ]} />
         </label>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
           <label className="field">
