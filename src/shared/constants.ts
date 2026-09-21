@@ -94,7 +94,8 @@ export const EVENT_TYPES = [
   'friend.timer',  // presence: a friend started/stopped tracking on a friends-visible project
   'group.created', 'group.updated', 'group.deleted',
   'group.member_joined', 'group.member_left', 'group.member_removed', 'group.member_updated',
-  'group.invite_created', 'group.invite_removed'
+  'group.invite_created', 'group.invite_removed',
+  'group.message_created', 'group.message_updated', 'group.message_deleted'
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

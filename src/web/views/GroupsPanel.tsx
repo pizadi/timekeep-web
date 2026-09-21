@@ -8,6 +8,7 @@ import type { GroupSummary, GroupInviteRow } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
 import { GROUP_PERMS, type GroupPerm } from '../../shared/constants';
+import ChatPanel from './ChatPanel';
 
 const PERM_LABELS: Record<GroupPerm, string> = {
   invite_members: 'Invite members (requests + links)',
@@ -69,7 +70,10 @@ export default function GroupsPanel() {
                   onClick={() => setExpanded(expanded === g.id ? null : g.id)}
                   onKeyDown={(e) => { if (e.key === 'Enter') setExpanded(expanded === g.id ? null : g.id); }}>
                   <span className="chip" style={{ background: g.color }} aria-hidden />
-                  <span className="grow"><b>{g.name}</b> <span className="muted">· {g.member_count} member{g.member_count === 1 ? '' : 's'} · {live}</span></span>
+                  <span className="grow">
+                    <b>{g.name}</b> <span className="muted">· {g.member_count} member{g.member_count === 1 ? '' : 's'} · {live}</span>
+                    {g.unread > 0 && <span className="muted"> · <b style={{ color: 'var(--accent, #4f8cff)' }}>{g.unread} new</b></span>}
+                  </span>
                 </div>
                 {expanded === g.id && <GroupDetail group={g} />}
               </div>
@@ -99,10 +103,12 @@ export default function GroupsPanel() {
 interface MemberRow { id: string; username: string; name: string; role: 'owner' | 'admin' | 'member'; perms: string; joined_at: number }
 
 function GroupDetail({ group }: { group: GroupSummary }) {
+  const me = useStore((s) => s.user);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [myPerms, setMyPerms] = useState<GroupPerm[]>([]);
   const [myRole, setMyRole] = useState<string>('member');
   const [editing, setEditing] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const reload = async () => {
     try {
@@ -151,9 +157,14 @@ function GroupDetail({ group }: { group: GroupSummary }) {
   return (
     <div style={{ padding: '2px 12px 10px', display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button className="btn small" onClick={() => setChatOpen((v) => !v)} aria-expanded={chatOpen}>
+          💬 Chat {chatOpen ? '▾' : '▸'}
+        </button>
         {isOwner && <button className="btn small" onClick={() => void deleteGroup()}>🗑 Delete group</button>}
         {!isOwner && <button className="btn small" onClick={() => void leave()}>Leave group</button>}
       </div>
+
+      {chatOpen && me && <ChatPanel groupId={group.id} myUserId={me.id} canModerate={myPerms.includes('moderate_messages')} />}
 
       <div>
         <div className="tree-section-title">Members ({members.length})</div>

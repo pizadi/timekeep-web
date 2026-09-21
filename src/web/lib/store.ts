@@ -46,6 +46,7 @@ export interface GroupSummary {
   role: 'owner' | 'admin' | 'member';
   perms: string;               // raw JSON array of GROUP_PERMS keys (parse client-side)
   created_at: number; member_count: number;
+  unread: number;              // chat messages since last_read_at (others' only)
 }
 export interface GroupInviteRow {
   invite_id: string; created_at: number; group_id: string;
@@ -326,6 +327,18 @@ export const store = {
       case 'group.member_updated': case 'group.invite_created': case 'group.invite_removed':
         void store.loadGroups();
         break;
+      case 'group.message_created': {
+        // an open chat panel appends live (custom event); closed panels only
+        // need the unread badge, patched locally — no refetch per message
+        window.dispatchEvent(new CustomEvent('tk:group-message', { detail: d }));
+        if (state.groups.some((g) => g.id === d.group_id)) {
+          patch.groups = state.groups.map((g) => g.id === d.group_id ? { ...g, unread: g.unread + 1 } : g);
+        }
+        break;
+      }
+      case 'group.message_updated': case 'group.message_deleted':
+        window.dispatchEvent(new CustomEvent('tk:group-message', { detail: d }));
+        break;
       case 'friend.timer': {
         const p = d.running && d.project && d.task
           ? { project_id: d.project.id, task_id: d.task.id, task_name: d.task.name, started_at: d.started_at }
@@ -396,6 +409,10 @@ export const store = {
       const res = await api<any>('/groups');
       set({ groups: res.groups ?? [], groupInvites: res.incoming_invites ?? [] });
     } catch { /* offline — keep the last lists */ }
+  },
+  /** The chat panel for this group is open and caught up — clear its badge. */
+  markGroupRead(groupId: string) {
+    set({ groups: state.groups.map((g) => g.id === groupId ? { ...g, unread: 0 } : g) });
   },
 
   refreshAll: async () => refreshAll()

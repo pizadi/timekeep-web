@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-21 — social phase 3: group chat
+
+Migration `0007_chat.sql` — run `npm run db:migrate:local`.
+
+- **Group chat.** `GET /api/groups/:id/messages` (member-only, cursor pagination
+  over the ULID id — `?before=` + capped page size), `POST …/messages` (body ≤
+  2,000 chars, `limitHeavy`-throttled), `PATCH …/messages/:id` (sender-only,
+  `(edited)` marker), `DELETE` (sender or a member holding
+  `moderate_messages`) — deletes are soft tombstones ("message removed").
+- **Delivery reuses the social fan-out.** One `group.message_created/updated/
+  deleted` sync_log row per member + a UserHub notify each, so live clients see
+  messages in real time and offline clients catch up through the existing
+  `/sync` reconcile poll. The acting device applies the API response (its own
+  echo is ignored by the `actor === deviceId` guard). No DO state — D1 is the
+  only authority; nothing is persisted per-keystroke.
+- **Unread badges.** `group_members.last_read_at` vs message `created_at` —
+  the group list carries an `unread` count (others' messages only); the open
+  chat panel marks read via `POST …/read` (MAX-clamped) and the SPA patches its
+  badge locally so a message never triggers a refetch.
+- **UI.** Group detail gains a collapsible chat panel: history + "load older",
+  live appends, edit/delete affordances gated by sender/`moderate_messages`,
+  composer with Enter-to-send.
+- Outsiders and former members get 404 on all chat reads (membership checked
+  per request, never cached client-side).
+
 ## 2026-09-21 — social phase 2: groups, invites, fine-grained permissions
 
 Migration `0006_groups.sql` — run `npm run db:migrate:local`.

@@ -88,6 +88,17 @@ export const groupLinkCreateSchema = z.object({
   max_uses: z.number().int().min(1).max(10_000).nullable().optional()
 });
 
+// Social: group chat. Body capped like task notes (LIMITS.noteMax).
+export const messageCreateSchema = z.object({
+  body: z.string().trim().min(1).max(LIMITS.noteMax)
+});
+export const messagePatchSchema = z.object({
+  body: z.string().trim().min(1).max(LIMITS.noteMax)
+});
+export const readMarkSchema = z.object({
+  at: z.number().int().min(0).max(4_102_444_800_000).optional()   // clamp: [0, 2100]
+});
+
 export const reorderSchema = z.object({ ids: z.array(z.string()).max(LIMITS.projectsActive).optional() });
 
 export const taskCreateSchema = z.object({

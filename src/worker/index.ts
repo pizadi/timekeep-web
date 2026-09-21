@@ -18,6 +18,7 @@ import { miscRoutes } from './routes/misc';
 import { exportRoutes } from './routes/export';
 import { friendRoutes } from './routes/friends';
 import { groupRoutes } from './routes/groups';
+import { chatRoutes } from './routes/chat';
 import { runDailyCron } from './cron';
 import { UserHub } from './do/user-hub';
 
@@ -101,6 +102,7 @@ app.route('/api', reportRoutes);
 app.route('/api', exportRoutes);
 app.route('/api', friendRoutes);     // friends, friend-visible projects, presence
 app.route('/api', groupRoutes);      // groups, membership, invites/links
+app.route('/api', chatRoutes);       // group chat (member-gated, fan-out delivery)
 app.route('/api', miscRoutes);      // /bootstrap, /settings, /layout, /sync, /version
 
 // error envelope {error:{code,message,details?}} (§5.3 conventions)

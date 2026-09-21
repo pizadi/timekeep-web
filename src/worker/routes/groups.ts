@@ -43,7 +43,10 @@ export async function groupLists(db: D1Database, userId: string) {
     db.prepare(
       `SELECT g.id, g.name, g.color, g.owner_id, m.role, m.perms, g.created_at,
               (SELECT COUNT(*) FROM group_members cm JOIN users cu ON cu.id = cm.user_id
-               WHERE cm.group_id = g.id AND cu.active = 1) AS member_count
+               WHERE cm.group_id = g.id AND cu.active = 1) AS member_count,
+              (SELECT COUNT(*) FROM group_messages gm
+               WHERE gm.group_id = g.id AND gm.deleted_at IS NULL
+                 AND gm.sender_id != m.user_id AND gm.created_at > m.last_read_at) AS unread
        FROM groups g JOIN group_members m ON m.group_id = g.id AND m.user_id = ?1
        ORDER BY g.created_at`
     ).bind(userId).all(),
