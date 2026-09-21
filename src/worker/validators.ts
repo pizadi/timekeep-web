@@ -1,6 +1,6 @@
 // Zod schemas — every request body validated server-side (NFR-3).
 import { z } from 'zod';
-import { HEX_COLOR_RE, LIMITS, POMODORO_LIMITS } from '../shared/constants';
+import { GROUP_PERMS, HEX_COLOR_RE, LIMITS, POMODORO_LIMITS } from '../shared/constants';
 
 // Uppercase-only, matching isUlid() in shared/ids.ts (ids are generated uppercase).
 export const ulidish = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'invalid id');
@@ -64,6 +64,28 @@ export const projectPatchSchema = z.object({
 export const friendRequestSchema = z.object({
   username: z.string().trim().toLowerCase().regex(USERNAME_RE,
     'username must be 2–32 chars: lowercase letters, digits, dot, dash, underscore')
+});
+
+// Social: groups. perms is a de-duplicated subset of the GROUP_PERMS catalog.
+export const groupCreateSchema = z.object({
+  name: z.string().trim().min(1).max(LIMITS.nameMax),
+  color: z.string().regex(HEX_COLOR_RE).optional()
+});
+export const groupPatchSchema = z.object({
+  name: z.string().trim().min(1).max(LIMITS.nameMax).optional(),
+  color: z.string().regex(HEX_COLOR_RE).optional()
+});
+export const groupInviteSchema = z.object({
+  username: z.string().trim().toLowerCase().regex(USERNAME_RE,
+    'username must be 2–32 chars: lowercase letters, digits, dot, dash, underscore')
+});
+export const groupMemberPatchSchema = z.object({
+  role: z.enum(['admin', 'member']).optional(),   // owner is not assignable
+  perms: z.array(z.enum(GROUP_PERMS)).max(GROUP_PERMS.length).optional()
+});
+export const groupLinkCreateSchema = z.object({
+  expires_in_days: z.number().int().min(1).max(365).nullable().optional(),
+  max_uses: z.number().int().min(1).max(10_000).nullable().optional()
 });
 
 export const reorderSchema = z.object({ ids: z.array(z.string()).max(LIMITS.projectsActive).optional() });

@@ -7,6 +7,7 @@ import { requireAuth, limitHeavy } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
 import { appendEvents, notifyHub } from '../events';
 import { socialLists } from './friends';
+import { groupLists } from './groups';
 import { DEFAULT_SETTINGS } from '../defaults';
 import { LIMITS } from '../../shared/constants';
 
@@ -20,7 +21,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
   const userId = c.get('user').id;
-  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social] = await Promise.all([
+  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social, groups] = await Promise.all([
     c.env.DB.prepare(
       'SELECT id, name, color, archived, position, visibility, created_at, updated_at FROM projects WHERE user_id = ?1 ORDER BY position, created_at'
     ).bind(userId).all(),
@@ -46,7 +47,8 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
         return { session: null, pomo: null };
       }
     })(),
-    socialLists(c.env.DB, userId)
+    socialLists(c.env.DB, userId),
+    groupLists(c.env.DB, userId)
   ]);
 
   return c.json({
@@ -60,6 +62,8 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     friends: social.friends,
     incoming_requests: social.incoming,
     outgoing_requests: social.outgoing,
+    groups: groups.groups,
+    group_invites: groups.incoming_invites,
     running: (hubState as any).session ?? null,
     pomo: (hubState as any).pomo ?? null,
     last_event_id: (hubState as any).last_event_id ?? 0,

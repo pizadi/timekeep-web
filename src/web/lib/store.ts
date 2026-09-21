@@ -40,6 +40,18 @@ export interface FriendRequestRow { request_id: string; created_at: number; user
 /** A friend's live tracking state — only for friends-visible projects. */
 export interface FriendPresence { project_id: string; task_id: string; task_name: string; started_at: number }
 
+// ---------- social (phase 2: groups) ----------
+export interface GroupSummary {
+  id: string; name: string; color: string; owner_id: string;
+  role: 'owner' | 'admin' | 'member';
+  perms: string;               // raw JSON array of GROUP_PERMS keys (parse client-side)
+  created_at: number; member_count: number;
+}
+export interface GroupInviteRow {
+  invite_id: string; created_at: number; group_id: string;
+  name: string; color: string; inviter_username: string; inviter_name: string;
+}
+
 export interface Toast {
   id: number;
   kind: 'info' | 'error' | 'undo';
@@ -73,6 +85,8 @@ export interface AppState {
   incoming: FriendRequestRow[];
   outgoing: FriendRequestRow[];
   friendPresence: Record<string, FriendPresence | null>; // keyed by friend id
+  groups: GroupSummary[];
+  groupInvites: GroupInviteRow[];
 }
 
 let state: AppState = {
@@ -98,7 +112,9 @@ let state: AppState = {
   friends: [],
   incoming: [],
   outgoing: [],
-  friendPresence: {}
+  friendPresence: {},
+  groups: [],
+  groupInvites: []
 };
 
 const listeners = new Set<() => void>();
@@ -136,6 +152,8 @@ export const store = {
         friends: b.friends ?? [],
         incoming: b.incoming_requests ?? [],
         outgoing: b.outgoing_requests ?? [],
+        groups: b.groups ?? [],
+        groupInvites: b.group_invites ?? [],
         selectedProjectId: b.projects.find((p: Project) => !p.archived)?.id ?? null
       };
       set({});
@@ -171,7 +189,7 @@ export const store = {
   /** Session ended (logout, revoke, expiry) → back to the login screen. */
   signOut() {
     try { localStorage.removeItem('tk.device'); } catch { /* storage may be blocked */ }
-    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {} };
+    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {}, groups: [], groupInvites: [] };
     set({});
   },
 
@@ -303,6 +321,11 @@ export const store = {
       case 'friend.requested': case 'friend.accepted': case 'friend.removed':
         void store.loadSocial();
         break;
+      case 'group.created': case 'group.updated': case 'group.deleted':
+      case 'group.member_joined': case 'group.member_left': case 'group.member_removed':
+      case 'group.member_updated': case 'group.invite_created': case 'group.invite_removed':
+        void store.loadGroups();
+        break;
       case 'friend.timer': {
         const p = d.running && d.project && d.task
           ? { project_id: d.project.id, task_id: d.task.id, task_name: d.task.name, started_at: d.started_at }
@@ -367,6 +390,13 @@ export const store = {
   setFriendPresence(map: Record<string, FriendPresence | null>) {
     set({ friendPresence: { ...state.friendPresence, ...map } });
   },
+  /** Refetch groups + pending group invites. */
+  loadGroups: async () => {
+    try {
+      const res = await api<any>('/groups');
+      set({ groups: res.groups ?? [], groupInvites: res.incoming_invites ?? [] });
+    } catch { /* offline — keep the last lists */ }
+  },
 
   refreshAll: async () => refreshAll()
 };
@@ -416,6 +446,7 @@ export async function refreshAll(): Promise<void> {
     user: b.user, settings: b.settings, projects: b.projects, tasks: b.tasks,
     subtasks: b.subtasks, deps: b.dependencies, recentTaskIds: b.recent_task_ids ?? [],
     friends: b.friends ?? [], incoming: b.incoming_requests ?? [], outgoing: b.outgoing_requests ?? [],
+    groups: b.groups ?? [], groupInvites: b.group_invites ?? [],
     running: b.running ?? null,
     pomo: b.pomo ?? null, lastEventId: b.last_event_id ?? 0, reportsVersion: state.reportsVersion + 1
   });

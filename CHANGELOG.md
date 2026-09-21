@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-09-21 — social phase 2: groups, invites, fine-grained permissions
+
+Migration `0006_groups.sql` — run `npm run db:migrate:local`.
+
+### Groups
+
+- **Group CRUD + membership.** `POST /api/groups` (creator becomes owner),
+  `GET /api/groups` (mine + pending incoming invites), `GET /api/groups/:id`
+  (members with roles/permissions), `PATCH` (rename/recolor), `DELETE`
+  (owner-only, cascades members/invites/links), `POST …/leave` (owner must
+  delete instead — 422), member kick via `DELETE …/members/:userId`.
+- **Fine-grained permissions (feature 5).** Per-member capability flags stored
+  on `group_members.perms` (JSON array of the `GROUP_PERMS` catalog in
+  `shared/constants.ts`): `invite_members`, `remove_members`, `edit_group`,
+  `manage_projects`, `moderate_messages`, `edit_tasks`. The owner implicitly
+  holds all of them and is the only one who can grant/revoke (PATCH
+  `…/members/:userId`); 'admin' vs 'member' is hierarchy/label — power lives in
+  the flags. Enforcement is centralized in `worker/group-auth.ts`
+  (`requireGroup` → 404 for outsiders, `requireGroupPerm` → 403 for members
+  without the flag); the SPA member editor renders the checkbox matrix.
+- **Username invites.** `POST /api/groups/:id/invites {username}` +
+  accept/decline (invitee) + cancel. Duplicates of pending invites 409.
+- **Invite links (token capability).** `POST /api/groups/:id/links` mints a
+  256-bit token returned exactly once — only the SHA-256 hash is stored (same
+  posture as auth sessions), with optional expiry + use cap + revocation.
+  `POST /api/groups/join {token}` joins atomically (use-count increment and
+  membership in one D1 batch; duplicate join rolls back); the SPA serves
+  `/join/:token` with a preview-then-join page.
+- **Event signals.** `group.created/updated/deleted`, `group.member_joined/
+  left/removed/updated`, `group.invite_created/removed` append one sync_log row
+  per current member (plus affected non-members) and fan out via their hubs —
+  clients refetch the group lists on any `group.*` event. Bootstrap now carries
+  `groups` + `group_invites`.
+- **UI.** Social view gains a Friends/Groups section switch; group detail shows
+  the member list (role badges, owner-only permission editor), invite
+  management, link list with use counts, leave/delete with typed confirmation.
+- **Limits.** ≤ 50 groups per user, ≤ 100 members per group, ≤ 20 active links
+  per group; invites/joins/links share the `social_user` rate bucket.
+
 ## 2026-09-21 — social phase 1: friends + project visibility
 
 New social layer, phase 1 of 5 (groups, chat, group projects and the

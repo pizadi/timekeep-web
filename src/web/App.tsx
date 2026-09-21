@@ -12,6 +12,7 @@ import AuthView from './views/AuthView';
 import ChangePasswordView from './views/ChangePasswordView';
 import ResetPasswordView from './views/ResetPasswordView';
 import VerifyEmailView from './views/VerifyEmailView';
+import JoinGroupView from './views/JoinGroupView';
 import TreeSidebar from './views/TreeSidebar';
 import LogView from './views/LogView';
 import MapView from './views/MapView';
@@ -56,6 +57,9 @@ export default function App() {
       {!booted ? <div className="auth-wrap"><div className="muted">Loading…</div></div>
         : route === '/reset' ? <ResetPasswordView />
         : route === '/verify' ? <VerifyEmailView />
+        : route.startsWith('/join/') ? (authed
+            ? <JoinGroupView token={route.slice('/join/'.length)} />
+            : <AuthView />)   // sign in first, then re-open the invite link
         : (!authed || route === '/login') ? <AuthView />
         // forced password change: nothing else in the app is reachable until it's done
         : user?.must_change_password ? <ChangePasswordView />

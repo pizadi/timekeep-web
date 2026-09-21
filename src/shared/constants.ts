@@ -11,6 +11,9 @@ export const LIMITS = {
   // Social layer: hard caps per user.
   friendsMax: 200,
   pendingRequestsMax: 100,
+  groupsPerUser: 50,
+  membersPerGroup: 100,
+  inviteLinksPerGroup: 20,
   // Max events returned by GET /sync per page (client drains full pages).
   syncPageMax: 500,
   // Total-row cap for /restore (undo). Sized to cover the largest possible
@@ -18,6 +21,22 @@ export const LIMITS = {
   // (100/task) + 500k dependencies + 200k sessions.
   restoreMaxRows: 1_250_000
 } as const;
+
+/**
+ * Group permission catalog — per-member capability flags stored on
+ * group_members.perms (JSON array). The owner implicitly holds all of them;
+ * 'admin' vs 'member' is hierarchy/label only — power lives in these flags so
+ * the owner can grant any subset to anyone (feature 5: fine-grained admins).
+ */
+export const GROUP_PERMS = [
+  'invite_members',      // username invites + invite links
+  'remove_members',      // kick (not the owner, not yourself — use leave)
+  'edit_group',          // rename / recolor
+  'manage_projects',     // create/archive/delete group projects (phase 4)
+  'moderate_messages',   // delete others' chat messages (phase 3)
+  'edit_tasks'           // create/edit/complete tasks in group projects (phase 4)
+] as const;
+export type GroupPerm = (typeof GROUP_PERMS)[number];
 
 /** Password policy minimum (mirrored client-side — do not hardcode). */
 export const MIN_PASSWORD = 10;
@@ -72,7 +91,10 @@ export const EVENT_TYPES = [
   // social layer — cross-user events; a mutation appends one event to EACH
   // recipient's sync_log (per-user ids) and fans out via each recipient's hub
   'friend.requested', 'friend.accepted', 'friend.removed',
-  'friend.timer'   // presence: a friend started/stopped tracking on a friends-visible project
+  'friend.timer',  // presence: a friend started/stopped tracking on a friends-visible project
+  'group.created', 'group.updated', 'group.deleted',
+  'group.member_joined', 'group.member_left', 'group.member_removed', 'group.member_updated',
+  'group.invite_created', 'group.invite_removed'
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

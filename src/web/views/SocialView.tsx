@@ -6,8 +6,25 @@ import { store, useStore, pushToast } from '../lib/store';
 import type { FriendSummary, FriendPresence } from '../lib/store';
 import { api } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
+import GroupsPanel from './GroupsPanel';
 
 export default function SocialView() {
+  const [section, setSection] = useState<'friends' | 'groups'>('friends');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760, margin: '0 auto', width: '100%' }}>
+      <div className="view-tabs" role="tablist" aria-label="Social sections" style={{ paddingTop: 4 }}>
+        {(['friends', 'groups'] as const).map((sec) => (
+          <button key={sec} role="tab" aria-selected={section === sec} onClick={() => setSection(sec)}>
+            {sec === 'friends' ? 'Friends' : 'Groups'}
+          </button>
+        ))}
+      </div>
+      {section === 'friends' ? <FriendsSection /> : <GroupsPanel />}
+    </div>
+  );
+}
+
+function FriendsSection() {
   const friends = useStore((s) => s.friends);
   const incoming = useStore((s) => s.incoming);
   const outgoing = useStore((s) => s.outgoing);
