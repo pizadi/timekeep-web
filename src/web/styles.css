@@ -282,8 +282,7 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 }
 .modal h3 { margin-top: 0; }
 
-/* ---------- combobox (styled replacement for native <datalist> pickers) ---------- */
-.combobox-list {
+/* ---------- combobox (styled replacement for native <datalist> pickers) ---------- */.combobox-list {
   position: fixed; z-index: 95; max-height: 240px; overflow: auto; padding: 4px;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
@@ -299,5 +298,28 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 .combobox-opt.active, .combobox-opt:hover { background: var(--panel-2); }
 .combobox-opt .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .combobox-empty { padding: 8px; color: var(--muted); }
+
+/* ---------- graphical dropdown (styled replacement for native <select>) ---------- */
+.dd { position: relative; min-width: 0; }
+.dd-trigger { display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left; padding-right: 26px; }
+.dd-trigger:disabled { opacity: 0.55; cursor: default; }
+.dd-trigger .dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-caret { position: absolute; right: 9px; color: var(--muted); font-size: 11px; pointer-events: none; }
+.dd-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; flex: none; }
+.dd-menu {
+  position: absolute; z-index: 90; top: calc(100% + 4px); left: 0; min-width: 100%;
+  max-height: 260px; overflow: auto; overscroll-behavior: contain; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.dd-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 13.5px; color: var(--text);
+}
+.dd-item.active { background: var(--panel-2); }
+.dd-item.selected { color: var(--accent); font-weight: 600; }
+.dd-item .dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-hint { color: var(--muted); font-size: 12px; flex: none; }
+.dd-check { color: var(--accent); flex: none; }
 
 .sessions-list { max-height: 320px; overflow: auto; }

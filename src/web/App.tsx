@@ -272,7 +272,9 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
       <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>Keyboard shortcuts</h3>
         <table className="tbl"><tbody>
+          <tr><td><span className="kbd">P</span></td><td>New project</td></tr>
           <tr><td><span className="kbd">N</span></td><td>New task (context-aware)</td></tr>
+          <tr><td><span className="kbd">S</span></td><td>New subtask on the selected task</td></tr>
           <tr><td><span className="kbd">T</span></td><td>Toggle timer on selection</td></tr>
           <tr><td><span className="kbd">F2</span></td><td>Rename selection</td></tr>
           <tr><td><span className="kbd">Delete</span></td><td>Delete with 5s undo</td></tr>

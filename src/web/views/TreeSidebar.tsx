@@ -62,6 +62,12 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
         e.preventDefault();
         if (selectedProjectId) await addTask(selectedProjectId);
         else await addProject();
+      } else if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        await addProject();
+      } else if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && selTask) {
+        e.preventDefault();
+        await addSubtask(selTask.id);
       } else if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey && !e.altKey && selTask) {
         e.preventDefault();
         await toggleTimer(selTask.id);
@@ -174,13 +180,6 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
-  async function setArchive(id: string, archived: boolean) {
-    try {
-      const res = await api<{ project: any }>(`/projects/${id}`, { method: 'PATCH', body: { archived } });
-      store.upsertLocal('project', res.project);
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
   async function setColor(id: string, color: string) {
     setColorFor(null);
     try {
@@ -196,6 +195,21 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
       const res = await api<{ project: any }>(`/projects/${id}`, { method: 'PATCH', body: { visibility: shared ? 'friends' : 'private' } });
       store.upsertLocal('project', res.project);
     } catch (e: any) { pushToast('error', e.message); }
+  }
+
+  /** Optimistic archive — the row flips instantly, reverts on failure (the
+   *  PATCH round trip made archiving feel multi-second on slow links). */
+  async function setArchive(id: string, archived: boolean) {
+    const prev = projects.find((p) => p.id === id);
+    if (!prev) return;
+    store.upsertLocal('project', { ...prev, archived: (archived ? 1 : 0) as 0 | 1 });
+    try {
+      const res = await api<{ project: any }>(`/projects/${id}`, { method: 'PATCH', body: { archived } });
+      store.upsertLocal('project', res.project);
+    } catch (e: any) {
+      store.upsertLocal('project', prev);
+      pushToast('error', e.message);
+    }
   }
 
   async function moveProject(id: string, dir: -1 | 1) {
@@ -323,7 +337,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                   {renaming?.kind === 'subtask' && renaming.id === sb.id ? (
                     <RenameInput initial={sb.name} onCommit={(v) => rename('subtask', sb.id, v)} onCancel={() => setRenaming(null)} />
                   ) : (
-                    <span className={`grow ${sb.done ? 'done-text' : ''}`}
+                    <span className={`grow ${sb.done ? 'done-text' : ''}`} title={sb.name}
                       onDoubleClick={() => canEditTasks && setRenaming({ kind: 'subtask', id: sb.id })}
                       onKeyDown={(e) => { if (e.key === 'F2' && canEditTasks) setRenaming({ kind: 'subtask', id: sb.id }); }}
                       tabIndex={0} role="treeitem" aria-selected={false}>{sb.name}</span>

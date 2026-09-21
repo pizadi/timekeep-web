@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-21 — 0.2.0.dev2: UI polish — graphical dropdowns, hover names, shortcuts, archive speed
+
+- **All dropdowns are graphical** — the nine native `<select>` elements (settings: week start,
+  theme, pomodoro auto-start; Log filters: project/task; Dashboard: range/sort; Map: project
+  selector; group member role) are replaced by a custom listbox (`components/Dropdown.tsx`)
+  that renders icons and project color chips, supports full keyboard navigation
+  (↑/↓/Home/End, Enter, Esc) with `aria-expanded`/`role=listbox`/`aria-activedescendant`,
+  closes on outside click, and never overflows its container.
+- **Full task/subtask names on hover** — truncated names now show in full: sidebar subtask
+  rows gained `title`s, Log table cells carry them, and Map nodes/subrows use SVG `<title>`
+  tooltips.
+- **New keyboard shortcuts** — <kbd>P</kbd> new project, <kbd>S</kbd> new subtask on the
+  selected task (alongside N/T/F2/Delete); documented in the `?` shortcut overlay.
+- **Archiving is fast** — two fixes: the PATCH path dropped two sequential D1 round trips
+  (the access-resolution row is reused for the response; the event fan-out reuses the known
+  `group_id` instead of re-reading), and the sidebar now applies the archived state
+  **optimistically** (instant flip, revert + toast on failure).
+
 ## 2026-09-21 — 0.2.0.dev1: prompt dialog keyboard fixes
 
 - **Enter-create no longer re-opens the dialog.** Closing a prompt by confirm

@@ -9,6 +9,7 @@ import { addDaysCivil, dayStartInstant } from '../../shared/time';
 import { LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 import Combobox from '../components/Combobox';
+import Dropdown, { ColorChip } from '../components/Dropdown';
 
 interface LogRow {
   id: string; task_id: string; started_at: number; ended_at: number | null;
@@ -121,17 +122,21 @@ export default function LogView() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label className="field" style={{ width: 170, marginBottom: 0 }}>
             <span>Project</span>
-            <select className="input" value={projectId} onChange={(e) => { setProjectId(e.target.value); setTaskId(''); }}>
-              <option value="">All projects</option>
-              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <Dropdown ariaLabel="Filter by project" value={projectId}
+              onChange={(v) => { setProjectId(v); setTaskId(''); }}
+              options={[
+                { value: '', label: 'All projects', icon: '☰' },
+                ...projects.map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))
+              ]} />
           </label>
           <label className="field" style={{ width: 190, marginBottom: 0 }}>
             <span>Task</span>
-            <select className="input" value={taskId} onChange={(e) => setTaskId(e.target.value)}>
-              <option value="">All tasks</option>
-              {tasks.filter((t) => !projectId || t.project_id === projectId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <Dropdown ariaLabel="Filter by task" value={taskId} onChange={(v) => setTaskId(v)}
+              options={[
+                { value: '', label: 'All tasks', icon: '☰' },
+                ...tasks.filter((t) => !projectId || t.project_id === projectId)
+                  .map((t) => ({ value: t.id, label: t.name, icon: <ColorChip color={projects.find((p) => p.id === t.project_id)?.color ?? '#888'} /> }))
+              ]} />
           </label>
           <label className="field" style={{ width: 150, marginBottom: 0 }}>
             <span>From</span>
@@ -170,7 +175,7 @@ export default function LogView() {
                     if (e.key === 'Delete' && !isRunning) del(r);
                   }}>
                   <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
-                  <td>{r.task_name}</td>
+                  <td title={r.task_name}>{r.task_name}</td>
                   <td>{fmtDateTime(r.started_at, tz)}</td>
                   <td>{isRunning ? <span className="muted">running…</span> : r.ended_at ? fmtClock(r.ended_at, tz) : ''}</td>
                   <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>

@@ -8,6 +8,7 @@ import { applyTheme, ThemePref } from '../lib/theme';
 import { MIN_PASSWORD, POMODORO_LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 import Combobox from '../components/Combobox';
+import Dropdown from '../components/Dropdown';
 
 interface AuthSessionRow { id: string; user_agent: string; ip: string; created_at: number; last_seen_at: number; current: boolean }
 interface AdminUserRow {
@@ -150,12 +151,13 @@ export default function SettingsView({ onClose, currentTheme }: {
 
         <h3 style={{ marginTop: 18 }}>Appearance</h3>
         <label className="field"><span>Theme (dark / light / follow system)</span>
-          <select className="input" value={currentTheme}
-            onChange={(e) => { const v = e.target.value as ThemePref; applyTheme(v, true); }}>
-            <option value="system">Follow system</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select></label>
+          <Dropdown ariaLabel="Theme" value={currentTheme}
+            onChange={(v) => applyTheme(v as ThemePref, true)}
+            options={[
+              { value: 'system', label: 'Follow system', icon: '🌗' },
+              { value: 'light', label: 'Light', icon: '☀️' },
+              { value: 'dark', label: 'Dark', icon: '🌙' }
+            ]} /></label>
 
         <h3 style={{ marginTop: 18 }}>Pomodoro</h3>
         <label className="field" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -180,11 +182,12 @@ export default function SettingsView({ onClose, currentTheme }: {
               onKeyUp={(e) => save({ pomodoro: { break_min: Number((e.target as HTMLInputElement).value) } })}
               aria-label="Break minutes" /></label>
           <label className="field"><span>Auto-start next focus</span>
-            <select className="input" value={settings.pomodoro.auto_start ? '1' : '0'}
-              onChange={(e) => save({ pomodoro: { auto_start: e.target.value === '1' } })}>
-              <option value="0">Off (recommended)</option>
-              <option value="1">On (still counts tracked time only)</option>
-            </select></label>
+            <Dropdown ariaLabel="Auto-start next focus" value={settings.pomodoro.auto_start ? '1' : '0'}
+              onChange={(v) => save({ pomodoro: { auto_start: v === '1' } })}
+              options={[
+                { value: '0', label: 'Off (recommended)', icon: '⏸' },
+                { value: '1', label: 'On (still counts tracked time only)', icon: '⏵' }
+              ]} /></label>
         </div>
         <label className="field"><span>Recovery discard grace (minutes — suggested end time when discarding an old timer)</span>
           <input className="input" type="number" min={0} max={240} defaultValue={settings.grace_min}
@@ -381,5 +384,16 @@ function supportedTimezones(): string[] {
   try {
     return (Intl as any).supportedValuesOf('timeZone') as string[];
   } catch { return ['UTC']; }
+}
+
+/** Weekday letter chip used as the week-start dropdown icon. */
+function WeekdayChip({ d }: { d: string }) {
+  return (
+    <span aria-hidden style={{
+      width: 18, height: 18, borderRadius: 5, flex: 'none', display: 'inline-flex',
+      alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700,
+      background: 'var(--panel-2)', border: '1px solid var(--border)', color: 'var(--muted)'
+    }}>{d}</span>
+  );
 }
 

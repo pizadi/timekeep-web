@@ -9,6 +9,7 @@ import { api, ApiError } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
 import { GROUP_PERMS, type GroupPerm } from '../../shared/constants';
 import ChatPanel from './ChatPanel';
+import Dropdown from '../components/Dropdown';
 
 const PERM_LABELS: Record<GroupPerm, string> = {
   invite_members: 'Invite members (requests + links)',
@@ -279,10 +280,11 @@ function MemberPermEditor({ groupId, member, onSaved }: {
     <div style={{ padding: '4px 12px 10px 28px', display: 'flex', flexDirection: 'column', gap: 6 }}>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         Role:
-        <select className="input" value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'member')} style={{ minWidth: 0, width: 120 }}>
-          <option value="member">member</option>
-          <option value="admin">admin</option>
-        </select>
+        <Dropdown style={{ width: 140 }} ariaLabel="Member role" value={role} onChange={(v) => setRole(v as 'admin' | 'member')}
+          options={[
+            { value: 'member', label: 'Member', icon: '👤' },
+            { value: 'admin', label: 'Admin', icon: '🛡' }
+          ]} />
       </label>
       {GROUP_PERMS.map((p) => (
         <label key={p} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>

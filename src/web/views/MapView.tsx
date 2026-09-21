@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
+import Dropdown, { ColorChip } from '../components/Dropdown';
 
 interface Pos { x: number; y: number }
 const NODE_W = 210, HEADER_H = 30, ROW_H = 19, PAD = 10, PORT_R = 6;
@@ -248,10 +249,9 @@ export default function MapView() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select className="input" style={{ width: 220 }} value={selectedProjectId ?? ''}
-          onChange={(e) => store.selectProject(e.target.value)} aria-label="Map project selector">
-          {projects.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <Dropdown style={{ width: 220 }} ariaLabel="Map project selector" value={selectedProjectId ?? ''}
+          onChange={(v) => store.selectProject(v)}
+          options={projects.filter((p) => !p.archived).map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))} />
         <span className="muted">Drag a node's <b>●</b> port onto another task to add “depends on”. Click an edge to remove it. Ctrl+wheel zooms.</span>
         <div className="spacer" />
         <button className="btn small" onClick={resetLayout}>Reset layout</button>
@@ -322,6 +322,7 @@ export default function MapView() {
                     if (e.key === ' ') { e.preventDefault(); void toggleTrack(t.id); }
                   }}
                 >
+                  <title>{`${t.name}${t.done ? ' (done)' : ''}`}</title>
                   <rect className="card-bg" width={NODE_W} height={h} rx={10} />
                   {/* project-colored spine */}
                   <rect x={0} y={0} width={5} height={h} rx={2.5} fill={project.color} />
@@ -336,6 +337,7 @@ export default function MapView() {
                   {sbs.map((sb, i) => (
                     <g key={sb.id} data-subrow onClick={(e) => { e.stopPropagation(); void toggleSubtaskInstant(sb); }}
                       style={{ cursor: 'pointer' }} role="checkbox" aria-checked={!!sb.done} aria-label={sb.name}>
+                      <title>{sb.name}</title>
                       <rect x={10} y={HEADER_H + i * ROW_H + 2} width={NODE_W - 20} height={ROW_H - 2} fill="transparent" />
                       <text x={16} y={HEADER_H + i * ROW_H + 16} className="sub-row">
                         {sb.done ? '☑' : '☐'} {sb.name.length > 24 ? `${sb.name.slice(0, 23)}…` : sb.name}

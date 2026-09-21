@@ -7,6 +7,7 @@ import { api, nowMs } from '../lib/api';
 import { rangePreset, fmtDay } from '../lib/time';
 import { Chart, registerables } from 'chart.js';
 import Heatmap from '../components/Heatmap';
+import Dropdown from '../components/Dropdown';
 
 Chart.register(...registerables);
 
@@ -161,13 +162,14 @@ export default function DashboardView() {
       <div className="card" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label className="field" style={{ marginBottom: 0 }}>
           <span>Range</span>
-          <select className="input" value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
-            <option value="today">Today</option>
-            <option value="week">This week</option>
-            <option value="month">This month</option>
-            <option value="30d">Last 30 days</option>
-            <option value="custom">Custom</option>
-          </select>
+          <Dropdown ariaLabel="Report range" value={preset} onChange={(v) => setPreset(v as Preset)}
+            options={[
+              { value: 'today', label: 'Today', icon: '📅' },
+              { value: 'week', label: 'This week', icon: '🗓' },
+              { value: 'month', label: 'This month', icon: '📆' },
+              { value: '30d', label: 'Last 30 days', icon: '📈' },
+              { value: 'custom', label: 'Custom', icon: '✎' }
+            ]} />
         </label>
         {preset === 'custom' && (
           <>
@@ -211,13 +213,14 @@ export default function DashboardView() {
           <h3 style={{ flex: 1 }}>Per-task totals</h3>
           <label className="muted" style={{ fontSize: 12.5 }}>
             Sort by{' '}
-            <select className="input" style={{ width: 'auto', padding: '4px 8px' }} value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as any)} aria-label="Sort table">
-              <option value="name">Name</option>
-              <option value="today">Today</option>
-              <option value="week">Week</option>
-              <option value="all">All time</option>
-            </select>
+            <Dropdown style={{ width: 150, display: 'inline-flex', verticalAlign: 'middle' }} ariaLabel="Sort table" value={sortKey}
+              onChange={(v) => setSortKey(v as any)}
+              options={[
+                { value: 'name', label: 'Name', icon: '🔤' },
+                { value: 'today', label: 'Today', icon: '☀️' },
+                { value: 'week', label: 'Week', icon: '📅' },
+                { value: 'all', label: 'All time', icon: '∑' }
+              ]} />
           </label>
         </div>
         <table className="tbl">

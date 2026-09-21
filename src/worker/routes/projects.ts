@@ -97,7 +97,8 @@ projectRoutes.patch('/projects/:id', async (c) => {
   if (sets.length === 0) return c.json({ project: existing });
   sets.push('updated_at = ?');
   // bind order matches the SQL: …, updated_at = ? WHERE id = ? AND user_id = ?
-  binds.push(Date.now(), existing.id, c.get('user').id);
+  const now = Date.now();
+  binds.push(now, existing.id, c.get('user').id);
 
   try {
     const up = await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
@@ -107,9 +108,21 @@ projectRoutes.patch('/projects/:id', async (c) => {
       return jsonError(422, 'duplicate', 'a project with this name already exists');
     throw e;
   }
-  const project = await getOwned(c, existing.id);
+  // construct the updated row from the known SETs — the re-read round trip
+  // measurably slowed archive/rename (every field is app-supplied; nothing is
+  // DB-computed)
+  const project = {
+    ...existing,
+    ...(u.name !== undefined ? { name: u.name } : {}),
+    ...(u.color !== undefined ? { color: u.color } : {}),
+    ...(u.archived !== undefined ? { archived: (u.archived ? 1 : 0) as 0 | 1 } : {}),
+    ...(u.position !== undefined ? { position: u.position } : {}),
+    ...(u.visibility !== undefined ? { visibility: u.visibility } : {}),
+    updated_at: now
+  };
   const evs = await emitEntityEvents(c.env, c.get('user').id, existing.id,
-    [{ type: 'project.updated', actor: c.get('deviceId'), data: { project } }], c.executionCtx);
+    [{ type: 'project.updated', actor: c.get('deviceId'), data: { project } }], c.executionCtx,
+    access.project.group_id ?? null);
   return c.json({ project, events: evs });
 });
 

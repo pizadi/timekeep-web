@@ -77,22 +77,29 @@ export async function emitToUsers(
  * Entity mutations fan out to the acting user's hub — and, when the entity
  * lives in a GROUP project, to every group member's hub (feature 6: shared
  * tasks stay in sync for the whole group). Call AFTER the entity write.
+ * `knownGroupId` skips the project lookup when the caller already read the row
+ * (the PATCH path reuses the access-resolution read — one less round trip).
  * Returns the acting user's event copies for the API response envelope
  * (their device skips the echo via the actor guard; other devices apply it).
  */
 export async function emitEntityEvents(
   env: Env, userId: string, projectId: string, drafts: EventDraft[],
-  ctx?: { waitUntil(p: Promise<unknown>): void }
+  ctx?: { waitUntil(p: Promise<unknown>): void },
+  knownGroupId?: string | null
 ): Promise<WsEvent[]> {
-  const pr = await env.DB.prepare('SELECT group_id FROM projects WHERE id = ?1')
-    .bind(projectId).first<{ group_id: string | null }>();
-  if (!pr?.group_id) {
+  let groupId = knownGroupId;
+  if (groupId === undefined) {
+    const pr = await env.DB.prepare('SELECT group_id FROM projects WHERE id = ?1')
+      .bind(projectId).first<{ group_id: string | null }>();
+    groupId = pr?.group_id ?? null;
+  }
+  if (!groupId) {
     const evs = await appendEvents(env, userId, drafts);
     notifyHub(env, userId, evs, ctx);
     return evs;
   }
   const members = await env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
-    .bind(pr.group_id).all<{ user_id: string }>();
+    .bind(groupId).all<{ user_id: string }>();
   const items = members.results.flatMap((m) => drafts.map((d) => ({ userId: m.user_id, draft: d })));
   const byUser = await emitToUsers(env, items, ctx);
   return byUser.get(userId) ?? [];
