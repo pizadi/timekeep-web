@@ -57,6 +57,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - Version source of truth is `package.json`; the SPA gets it via the Vite `define` (Settings
   footer), the worker via the `__APP_VERSION__` define — present in BOTH wrangler configs'
   `define` blocks. On release: bump all three, commit, then annotated tag `vX.Y.Z`.
+- **Never create a non-dev release unprompted.** Dev versions (`X.Y.Z.devN` commits/iterating)
+  are fine, but a real release — a clean `X.Y.Z` version bump, release commit or `vX.Y.Z` tag —
+  happens ONLY after the user live-tests the build and explicitly tells me to release.
 
 ## Architecture rules
 
@@ -92,6 +95,26 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - The acting device IGNORES its own WS echoes (`ev.actor === deviceId` guard in
   `store.applyEvent`) — timer/pomo API responses carry `pomo`/`running` payloads the caller must
   apply via `store.setPomo`/`store.setRunning`, or the UI state goes stale.
+- Social layer (phases 1–4): friends, project visibility, groups, chat, group projects.
+  - Cross-user fan-out = `emitToUsers` (events.ts): ONE sync_log row per recipient (per-user
+    AUTOINCREMENT ids — the existing `/sync` cursor logic is untouched) + a notify of each
+    recipient's UserHub. State-change events are SIGNALS (clients refetch the small social
+    lists); payload-carrying events are `friend.timer` (presence) and `group.message_*` (chat,
+    relayed to open panels via the `tk:group-message` CustomEvent).
+  - Group authorization lives in `worker/group-auth.ts` (`requireGroup` → 404 outsiders,
+    `requireGroupPerm` → 403) over per-member permission flags (`GROUP_PERMS` in
+    shared/constants, stored as JSON on `group_members.perms`; owner implicit-all, and only the
+    owner grants/revokes). Group-project access resolution (`resolveProjectAccess` /
+    `requireEditTasks`) lives in `worker/access.ts` — group tasks are shared (any member with
+    `edit_tasks` edits), sessions stay strictly user-owned.
+  - Friend-visible projects require `visibility='friends' AND group_id IS NULL` — the two
+    sharing mechanisms (friends ↔ groups) never cross. Presence/chat never expose raw session
+    rows or notes; reports are buckets only.
+  - Group-project/group-task deletes are permanent (no undo payload across member boundaries);
+    personal deletes keep the 5s undo.
+  - Rate limits: `social_user` bucket (friend requests, username lookups, joins, invite/link
+    minting; `RL_SOCIAL_USER`), chat sends ride `limitHeavy`. Invite-link tokens are stored as
+    SHA-256 hashes and returned exactly once.
 - End-of-run pomodoro notifications (`decide`/`ready` phases) bypass the `notifications_enabled`
   toggle (they need only browser permission, requested when pomodoro is enabled in Settings);
   every other notification respects the toggle. Notification permission is never requested

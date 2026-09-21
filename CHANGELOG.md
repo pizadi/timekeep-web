@@ -1,6 +1,30 @@
 # Changelog
 
-## 2026-09-21 — social phase 4: group projects (members-only)
+## 2026-09-21 — v0.2.0: social layer (friends, groups, chat, group projects)
+
+Five-phase social feature set on the same architecture (no new DO class —
+cross-user fan-out rides the per-user UserHub + `sync_log` pipeline):
+
+1. **Friends by username** — requests/accept/decline/cancel/unfriend, reverse-request
+   auto-accept, existence-oracle-safe username lookups, new Social view (5th tab).
+2. **Project visibility** — `projects.visibility` private|friends with a one-click sidebar
+   toggle; friends browse shared projects read-only (structure + aggregate buckets + live
+   "tracking now" presence via `friend.timer` events — never raw rows/notes).
+3. **Groups** — membership with an owner/admin hierarchy, username invites, token invite
+   links (SHA-256-hashed, single-reveal, expiry/use-caps/revocation), SPA `/join/:token` page.
+4. **Fine-grained permissions** — six per-member capability flags (`GROUP_PERMS`) granted by
+   the owner; 'admin' is a label, power is the flag set. Enforced in `worker/group-auth.ts`.
+5. **Group chat** — live delivery over the social fan-out, cursor-paginated history, edit/
+   soft-delete with moderation permission, unread badges via `last_read_at`.
+6. **Group projects** — `projects.group_id` members-only projects shared into the sidebar;
+   task edits gated by `edit_tasks`; simultaneous per-user tracking preserved; new cross-member
+   group report (buckets only).
+
+Migrations `0005`–`0008` (all additive). New e2e: `bash e2e/social-test.sh`.
+Also fixed here (phase 1 commit): **project PATCH silently no-oped** — bind order was
+swapped vs `WHERE id = ? AND user_id = ?`, so renames/recolors/archives reverted on refresh.
+
+### Social phase 4: group projects (members-only)
 
 Migration `0008_group_projects.sql` — run `npm run db:migrate:local`.
 
@@ -38,7 +62,7 @@ Migration `0008_group_projects.sql` — run `npm run db:migrate:local`.
   the group panel lists shared projects and creates new ones
   (`manage_projects`).
 
-## 2026-09-21 — social phase 3: group chat
+### Social phase 3: group chat
 
 Migration `0007_chat.sql` — run `npm run db:migrate:local`.
 
@@ -63,7 +87,7 @@ Migration `0007_chat.sql` — run `npm run db:migrate:local`.
 - Outsiders and former members get 404 on all chat reads (membership checked
   per request, never cached client-side).
 
-## 2026-09-21 — social phase 2: groups, invites, fine-grained permissions
+### Social phase 2: groups, invites, fine-grained permissions
 
 Migration `0006_groups.sql` — run `npm run db:migrate:local`.
 
@@ -102,7 +126,7 @@ Migration `0006_groups.sql` — run `npm run db:migrate:local`.
 - **Limits.** ≤ 50 groups per user, ≤ 100 members per group, ≤ 20 active links
   per group; invites/joins/links share the `social_user` rate bucket.
 
-## 2026-09-21 — social phase 1: friends + project visibility
+### Social phase 1: friends + project visibility
 
 New social layer, phase 1 of 5 (groups, chat, group projects and the
 fine-grained permission matrix come next). Migration `0005_social_friends.sql` —
