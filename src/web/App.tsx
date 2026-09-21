@@ -15,6 +15,7 @@ import VerifyEmailView from './views/VerifyEmailView';
 import TreeSidebar from './views/TreeSidebar';
 import LogView from './views/LogView';
 import MapView from './views/MapView';
+import SocialView from './views/SocialView';
 import SettingsView from './views/SettingsView';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
@@ -101,8 +102,8 @@ function Shell({ route }: { route: string }) {
       return;
     }
     if (e.key === '?') { setHelpOpen((v) => !v); return; }
-    if (e.key >= '1' && e.key <= '4') {
-      const views = ['tree', 'log', 'map', 'dashboard'] as const;
+    if (e.key >= '1' && e.key <= '5') {
+      const views = ['tree', 'log', 'map', 'dashboard', 'social'] as const;
       store.navigateToView(views[Number(e.key) - 1]!);
       return;
     }
@@ -154,7 +155,7 @@ function Shell({ route }: { route: string }) {
         )}
 
         <nav className="view-tabs" role="tablist" aria-label="Views">
-          {(['tree', 'log', 'map', 'dashboard'] as const).map((v, i) => (
+          {(['tree', 'log', 'map', 'dashboard', 'social'] as const).map((v, i) => (
             <button key={v} role="tab" aria-selected={view === v} onClick={() => store.navigateToView(v)}>
               {labelFor(v)} <span aria-hidden> ({i + 1})</span>
             </button>
@@ -165,6 +166,7 @@ function Shell({ route }: { route: string }) {
           {view === 'tree' && <TreeMain />}
           {view === 'log' && <LogView />}
           {view === 'map' && <MapView />}
+          {view === 'social' && <SocialView />}
           {view === 'dashboard' && (
             <Suspense fallback={<div className="muted" style={{ padding: 24 }}>Loading charts…</div>}>
               <DashboardView />
@@ -187,7 +189,7 @@ function Shell({ route }: { route: string }) {
 }
 
 function labelFor(v: string): string {
-  return v === 'tree' ? 'Tasks' : v === 'log' ? 'Log' : v === 'map' ? 'Map' : 'Dashboard';
+  return v === 'tree' ? 'Tasks' : v === 'log' ? 'Log' : v === 'map' ? 'Map' : v === 'dashboard' ? 'Dashboard' : 'Social';
 }
 
 function navigateHome(): void {

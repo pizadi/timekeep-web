@@ -8,6 +8,9 @@ export const LIMITS = {
   nameMax: 120,
   noteMax: 2_000,
   logPageSize: 200,
+  // Social layer: hard caps per user.
+  friendsMax: 200,
+  pendingRequestsMax: 100,
   // Max events returned by GET /sync per page (client drains full pages).
   syncPageMax: 500,
   // Total-row cap for /restore (undo). Sized to cover the largest possible
@@ -65,7 +68,11 @@ export const EVENT_TYPES = [
   'settings.updated',
   'layout.updated',
   'import.completed',
-  'restore.completed'
+  'restore.completed',
+  // social layer — cross-user events; a mutation appends one event to EACH
+  // recipient's sync_log (per-user ids) and fans out via each recipient's hub
+  'friend.requested', 'friend.accepted', 'friend.removed',
+  'friend.timer'   // presence: a friend started/stopped tracking on a friends-visible project
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

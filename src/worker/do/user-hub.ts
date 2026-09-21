@@ -10,6 +10,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../env';
 import { ulid } from '../../shared/ids';
 import { WsEvent } from '../../shared/constants';
+import { broadcastFriendPresence } from '../social';
 
 type PomoPhase = 'idle' | 'focus' | 'decide' | 'break' | 'ready';
 
@@ -353,6 +354,10 @@ export class UserHub extends DurableObject {
     this.lastEventId = Math.max(this.lastEventId, eventId);
     this.broadcast({ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data });
 
+    // social presence: friends watching a friends-visible project get the live
+    // dot (no-op when the project is private or there are no friends)
+    await broadcastFriendPresence(this.env, this.userId(), device, this.running);
+
     // pomodoro: resuming/starting focus accumulation with a live timer (FR-F1).
     // Only resume when no segment is already in flight — resetting an
     // in-flight lastResumeMs would discard accumulated live time.
@@ -406,6 +411,7 @@ export class UserHub extends DurableObject {
     this.nudgeNextAt = null;
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data });
+    await broadcastFriendPresence(this.env, this.userId(), device, null); // clear the live dot
     return Response.json({ session, events: [{ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data }] });
   }
 
@@ -464,6 +470,7 @@ export class UserHub extends DurableObject {
     if (engaged) await this.persistPomo(); // re-anchored cycle → refresh the kv mirror
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data });
+    await broadcastFriendPresence(this.env, this.userId(), device, started);
     return Response.json({ stopped, started, pomo: this.visiblePomo(), events: [{ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data }] });
   }
 

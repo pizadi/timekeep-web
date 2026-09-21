@@ -56,7 +56,14 @@ export const projectPatchSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.nameMax).optional(),
   color: z.string().regex(HEX_COLOR_RE).optional(),
   archived: z.boolean().optional(),
-  position: z.number().int().optional()
+  position: z.number().int().optional(),
+  visibility: z.enum(['private', 'friends']).optional()
+});
+
+// Social: friend requests are addressed by username (login identifier).
+export const friendRequestSchema = z.object({
+  username: z.string().trim().toLowerCase().regex(USERNAME_RE,
+    'username must be 2–32 chars: lowercase letters, digits, dot, dash, underscore')
 });
 
 export const reorderSchema = z.object({ ids: z.array(z.string()).max(LIMITS.projectsActive).optional() });

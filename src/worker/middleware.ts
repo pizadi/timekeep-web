@@ -238,7 +238,10 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
     // unauthenticated token endpoints + admin mutations (CPU-heavy PBKDF2) — IP-keyed
     tokenIp: { name: 'token_ip', limit: n(env.RL_TOKEN_IP, 30), windowMs: 15 * 60_000 },
     adminIp: { name: 'admin_ip', limit: n(env.RL_ADMIN_IP, 20), windowMs: 15 * 60_000 },
-    apiUser: { name: 'api_user', limit: n(env.RL_API_USER, 120), windowMs: 60_000 }
+    apiUser: { name: 'api_user', limit: n(env.RL_API_USER, 120), windowMs: 60_000 },
+    // friend requests + username lookups (blocks request spam and cheap
+    // username enumeration — the only user-existence oracle in the app)
+    socialUser: { name: 'social_user', limit: n(env.RL_SOCIAL_USER, 30), windowMs: 3600_000 }
   };
 };
 

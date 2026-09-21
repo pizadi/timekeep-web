@@ -164,6 +164,14 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
+  /** Social visibility: 'private' (only you) ↔ 'friends' (visible to your friends). */
+  async function setVisibility(id: string, shared: boolean) {
+    try {
+      const res = await api<{ project: any }>(`/projects/${id}`, { method: 'PATCH', body: { visibility: shared ? 'friends' : 'private' } });
+      store.upsertLocal('project', res.project);
+    } catch (e: any) { pushToast('error', e.message); }
+  }
+
   async function moveProject(id: string, dir: -1 | 1) {
     const list = active;
     const i = list.findIndex((p) => p.id === id);
@@ -222,6 +230,11 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
               onClick={(e) => { e.stopPropagation(); moveProject(p.id, -1); }}>↑</button>
             <button className="icon-btn" aria-label={`Move ${p.name} down`} title="Move down"
               onClick={(e) => { e.stopPropagation(); moveProject(p.id, 1); }}>↓</button>
+            <button className="icon-btn" aria-label={`Visibility for ${p.name}: ${p.visibility === 'friends' ? 'friends' : 'private'}`}
+              title={p.visibility === 'friends' ? 'Visible to friends — click to make private' : 'Private — click to share with friends'}
+              onClick={(e) => { e.stopPropagation(); setVisibility(p.id, p.visibility !== 'friends'); }}>
+              {p.visibility === 'friends' ? '👀' : '🔒'}
+            </button>
             <button className="icon-btn" aria-label={`Archive ${p.name}`} title="Archive"
               onClick={(e) => { e.stopPropagation(); setArchive(p.id, true); }}>📦</button>
             <button className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete (typed confirmation)"

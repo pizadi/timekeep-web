@@ -6,6 +6,7 @@ import { jsonError } from '../env';
 import { requireAuth, limitHeavy } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
 import { appendEvents, notifyHub } from '../events';
+import { socialLists } from './friends';
 import { DEFAULT_SETTINGS } from '../defaults';
 import { LIMITS } from '../../shared/constants';
 
@@ -19,9 +20,9 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
   const userId = c.get('user').id;
-  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState] = await Promise.all([
+  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social] = await Promise.all([
     c.env.DB.prepare(
-      'SELECT id, name, color, archived, position, created_at, updated_at FROM projects WHERE user_id = ?1 ORDER BY position, created_at'
+      'SELECT id, name, color, archived, position, visibility, created_at, updated_at FROM projects WHERE user_id = ?1 ORDER BY position, created_at'
     ).bind(userId).all(),
     c.env.DB.prepare(
       'SELECT * FROM tasks WHERE user_id = ?1 ORDER BY position, created_at'
@@ -44,7 +45,8 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
       } catch {
         return { session: null, pomo: null };
       }
-    })()
+    })(),
+    socialLists(c.env.DB, userId)
   ]);
 
   return c.json({
@@ -55,6 +57,9 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     subtasks: subtasks.results,
     dependencies: deps.results,
     recent_task_ids: recent.results.map((r) => r.task_id),
+    friends: social.friends,
+    incoming_requests: social.incoming,
+    outgoing_requests: social.outgoing,
     running: (hubState as any).session ?? null,
     pomo: (hubState as any).pomo ?? null,
     last_event_id: (hubState as any).last_event_id ?? 0,

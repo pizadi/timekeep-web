@@ -16,6 +16,7 @@ import { timerRoutes } from './routes/timer';
 import { reportRoutes } from './routes/reports';
 import { miscRoutes } from './routes/misc';
 import { exportRoutes } from './routes/export';
+import { friendRoutes } from './routes/friends';
 import { runDailyCron } from './cron';
 import { UserHub } from './do/user-hub';
 
@@ -97,6 +98,7 @@ app.route('/api', sessionRoutes);
 app.route('/api', timerRoutes);
 app.route('/api', reportRoutes);
 app.route('/api', exportRoutes);
+app.route('/api', friendRoutes);     // friends, friend-visible projects, presence
 app.route('/api', miscRoutes);      // /bootstrap, /settings, /layout, /sync, /version
 
 // error envelope {error:{code,message,details?}} (§5.3 conventions)

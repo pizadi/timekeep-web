@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-09-21 — social phase 1: friends + project visibility
+
+New social layer, phase 1 of 5 (groups, chat, group projects and the
+fine-grained permission matrix come next). Migration `0005_social_friends.sql` —
+run `npm run db:migrate:local`.
+
+### Friends
+
+- **Friend requests by username.** `POST /api/friends/requests {username}`,
+  accept/decline/cancel, unfriend. A reverse request auto-accepts. Deactivated
+  accounts are invisible to the whole surface (lookups 404 the same as unknown
+  usernames — no existence oracle); username lookups (`GET /api/users/lookup`)
+  return `{id, username, name}` only.
+- **Cross-user event fan-out.** `emitToUsers()` appends one `sync_log` row per
+  recipient (per-user AUTOINCREMENT ids, so the existing `/sync` cursor logic is
+  untouched) and notifies each recipient's UserHub. New events: `friend.requested`,
+  `friend.accepted`, `friend.removed` — signal-only; clients refetch the small
+  social lists. The acting user is included so their other devices converge.
+- **New Social view** (5th tab, `/social`, shortcut `5`): add-by-username,
+  incoming/outgoing requests, friend list with unfriend.
+
+### Live presence + shared projects
+
+- **`friend.timer` presence events.** Starting/stopping/switching a timer on a
+  `friends`-visible project appends a small presence event to each friend's
+  sync_log (only the tracker identity, project, task name and started_at —
+  private projects emit nothing). Fan-out lives in the UserHub DO next to the
+  timer state machine; best-effort, never surfaces errors to the tracker.
+- **Project visibility.** `projects.visibility` (`private` | `friends`,
+  default `private`), toggled from the sidebar (🔒/👀). Friends get read-only
+  access: project structure + aggregate day buckets in the viewer's timezone +
+  live "tracking now" status — never raw session rows or session notes
+  (same posture as the reports surface: buckets, not rows).
+- **Presence snapshot.** `POST /api/friends/presence` answers "which of these
+  friends are tracking right now" via their UserHub `/state` (internal only),
+  used once when the Social view mounts; live updates ride `friend.timer`.
+- Bootstrap now carries `friends` / `incoming_requests` / `outgoing_requests`.
+
+### Fixed
+
+- **Project PATCH silently no-oped** (pre-existing): the bind order was swapped
+  versus `WHERE id = ? AND user_id = ?`, so every project rename/recolor/
+  archive/visibility update matched zero rows and the API echoed the unchanged
+  row — changes reverted on the next refresh. Binds now match the SQL and a
+  zero-change UPDATE returns 404 instead of a fake success.
+- Friend-request ids are ULIDs (client-addressable entities follow the id
+  convention; `ulidish` route validation now matches).
+
+### Rate limits
+
+- New `social_user` rule (default 30/h, `RL_SOCIAL_USER` override) buckets
+  friend-request sends and username lookups together — covers request spam and
+  cheap username enumeration.
+
 ## 2026-09-20 — v0.1.1: security & quality fixes from the audit
 
 Findings, evidence and file references: `AUDIT.md`.

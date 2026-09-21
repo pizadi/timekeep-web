@@ -25,7 +25,7 @@ async function getOwned(c: Context<WorkerType>, id: string) {
 
 projectRoutes.get('/projects', async (c) => {
   const rows = await c.env.DB.prepare(
-    `SELECT id, name, color, archived, position, created_at, updated_at
+    `SELECT id, name, color, archived, position, visibility, created_at, updated_at
      FROM projects WHERE user_id = ?1 ORDER BY position, created_at`
   ).bind(c.get('user').id).all();
   return c.json({ projects: rows.results });
@@ -73,12 +73,15 @@ projectRoutes.patch('/projects/:id', async (c) => {
   if (u.color !== undefined) { sets.push('color = ?'); binds.push(u.color); }
   if (u.archived !== undefined) { sets.push('archived = ?'); binds.push(u.archived ? 1 : 0); }
   if (u.position !== undefined) { sets.push('position = ?'); binds.push(u.position); }
+  if (u.visibility !== undefined) { sets.push('visibility = ?'); binds.push(u.visibility); }
   if (sets.length === 0) return c.json({ project: existing });
   sets.push('updated_at = ?');
-  binds.push(Date.now(), c.get('user').id, existing.id);
+  // bind order matches the SQL: …, updated_at = ? WHERE id = ? AND user_id = ?
+  binds.push(Date.now(), existing.id, c.get('user').id);
 
   try {
-    await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
+    const up = await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).bind(...binds).run();
+    if ((up.meta.changes ?? 0) === 0) return jsonError(404, 'not_found', 'project not found');
   } catch (e: any) {
     if (isUniqueConstraintError(e))
       return jsonError(422, 'duplicate', 'a project with this name already exists');

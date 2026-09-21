@@ -36,6 +36,41 @@ export async function appendEvents(env: Env, userId: string, drafts: EventDraft[
 }
 
 /**
+ * Social layer: append ONE event per recipient — each recipient's sync_log gets
+ * its own row (and its own AUTOINCREMENT id, consistent with the per-user
+ * cursor clients track), then every recipient's UserHub is notified to fan the
+ * event out over its WebSockets. One D1 batch for all rows; hub notifies are
+ * best-effort via waitUntil. The acting user should be included in `items`
+ * when their other devices must learn about the change (the acting device
+ * itself applies the API response instead — its own echoes are ignored).
+ */
+export async function emitToUsers(
+  env: Env,
+  items: Array<{ userId: string; draft: EventDraft }>,
+  ctx?: { waitUntil(p: Promise<unknown>): void }
+): Promise<void> {
+  if (items.length === 0) return;
+  const now = Date.now();
+  const stmts = items.map((it) =>
+    env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
+      .bind(it.userId, it.draft.type, JSON.stringify({ actor: it.draft.actor, data: it.draft.data }), now)
+  );
+  const results = await env.DB.batch(stmts);
+  const byUser = new Map<string, WsEvent[]>();
+  results.forEach((r, i) => {
+    const it = items[i]!;
+    const ev: WsEvent = {
+      id: Number(r.meta.last_row_id), type: it.draft.type,
+      actor: it.draft.actor, at: now, data: it.draft.data
+    };
+    const list = byUser.get(it.userId) ?? [];
+    list.push(ev);
+    byUser.set(it.userId, list);
+  });
+  for (const [userId, events] of byUser) notifyHub(env, userId, events, ctx);
+}
+
+/**
  * Notify the user's UserHub DO to broadcast already-persisted events.
  * When an ExecutionContext is provided the fetch is registered via
  * `waitUntil` so it survives the response; without one it degrades to

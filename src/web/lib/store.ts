@@ -5,7 +5,7 @@ import type { WsEvent } from '../../shared/constants';
 import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
 
-export interface Project { id: string; name: string; color: string; archived: 0 | 1; position: number; created_at: number; updated_at: number }
+export interface Project { id: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; created_at: number; updated_at: number }
 export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
 export interface Subtask { id: string; task_id: string; name: string; done: 0 | 1; position: number; created_at: number }
 export interface Dependency { task_id: string; depends_on_id: string; created_at: number }
@@ -34,6 +34,12 @@ export interface UserProfile {
   email_verified_at: number | null; created_at: number;
 }
 
+// ---------- social (phase 1: friends + visibility) ----------
+export interface FriendSummary { id: string; username: string; name: string; since?: number }
+export interface FriendRequestRow { request_id: string; created_at: number; user_id: string; username: string; name: string }
+/** A friend's live tracking state — only for friends-visible projects. */
+export interface FriendPresence { project_id: string; task_id: string; task_name: string; started_at: number }
+
 export interface Toast {
   id: number;
   kind: 'info' | 'error' | 'undo';
@@ -56,12 +62,17 @@ export interface AppState {
   connection: 'online' | 'reconnecting' | 'offline';
   selectedProjectId: string | null;
   selectedTaskId: string | null;
-  view: 'tree' | 'log' | 'map' | 'dashboard';
+  view: 'tree' | 'log' | 'map' | 'dashboard' | 'social';
   recentTaskIds: string[];      // "Jump back in" — by last tracked activity (FR: L14)
   reportsVersion: number;      // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
   lastEventId: number;
   serverNow: number;
+  // social layer
+  friends: FriendSummary[];
+  incoming: FriendRequestRow[];
+  outgoing: FriendRequestRow[];
+  friendPresence: Record<string, FriendPresence | null>; // keyed by friend id
 }
 
 let state: AppState = {
@@ -83,7 +94,11 @@ let state: AppState = {
   reportsVersion: 0,
   toasts: [],
   lastEventId: 0,
-  serverNow: Date.now()
+  serverNow: Date.now(),
+  friends: [],
+  incoming: [],
+  outgoing: [],
+  friendPresence: {}
 };
 
 const listeners = new Set<() => void>();
@@ -118,6 +133,9 @@ export const store = {
         pomo: b.pomo ?? null,
         lastEventId: b.last_event_id ?? 0,
         serverNow: b.server_now,
+        friends: b.friends ?? [],
+        incoming: b.incoming_requests ?? [],
+        outgoing: b.outgoing_requests ?? [],
         selectedProjectId: b.projects.find((p: Project) => !p.archived)?.id ?? null
       };
       set({});
@@ -153,7 +171,7 @@ export const store = {
   /** Session ended (logout, revoke, expiry) → back to the login screen. */
   signOut() {
     try { localStorage.removeItem('tk.device'); } catch { /* storage may be blocked */ }
-    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null };
+    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {} };
     set({});
   },
 
@@ -281,6 +299,17 @@ export const store = {
         // bulk mutation / undo on another device — re-sync everything
         void refreshAll();
         break;
+      // social state changes are signals — the small social lists are refetched
+      case 'friend.requested': case 'friend.accepted': case 'friend.removed':
+        void store.loadSocial();
+        break;
+      case 'friend.timer': {
+        const p = d.running && d.project && d.task
+          ? { project_id: d.project.id, task_id: d.task.id, task_name: d.task.name, started_at: d.started_at }
+          : null;
+        patch.friendPresence = { ...state.friendPresence, [d.user?.id ?? '']: p };
+        break;
+      }
       default: break; // unknown event types are ignored gracefully (forward-compat)
     }
     set(patch);
@@ -325,6 +354,20 @@ export const store = {
   setUser(u: UserProfile) { set({ user: u }); },
   bumpReports() { set({ reportsVersion: state.reportsVersion + 1 }); },
   tickServerNow() { set({ serverNow: Date.now() }); },
+
+  // ---------- social ----------
+  /** Refetch friends + pending requests (after a social event or a local mutation). */
+  loadSocial: async () => {
+    try {
+      const res = await api<any>('/friends');
+      set({ friends: res.friends ?? [], incoming: res.incoming ?? [], outgoing: res.outgoing ?? [] });
+    } catch { /* offline — keep the last lists */ }
+  },
+  /** Merge one-shot presence results (POST /friends/presence). */
+  setFriendPresence(map: Record<string, FriendPresence | null>) {
+    set({ friendPresence: { ...state.friendPresence, ...map } });
+  },
+
   refreshAll: async () => refreshAll()
 };
 
@@ -372,6 +415,7 @@ export async function refreshAll(): Promise<void> {
   set({
     user: b.user, settings: b.settings, projects: b.projects, tasks: b.tasks,
     subtasks: b.subtasks, deps: b.dependencies, recentTaskIds: b.recent_task_ids ?? [],
+    friends: b.friends ?? [], incoming: b.incoming_requests ?? [], outgoing: b.outgoing_requests ?? [],
     running: b.running ?? null,
     pomo: b.pomo ?? null, lastEventId: b.last_event_id ?? 0, reportsVersion: state.reportsVersion + 1
   });
@@ -398,7 +442,7 @@ export function pathForView(view: AppState['view']): string {
 /** URL path → view; null for non-view routes (/login, /reset, /settings…). */
 export function viewFromPath(path: string): AppState['view'] | null {
   if (path === '/' || path === '') return 'tree';
-  if (path === '/log' || path === '/map' || path === '/dashboard') {
+  if (path === '/log' || path === '/map' || path === '/dashboard' || path === '/social') {
     return path.slice(1) as AppState['view'];
   }
   return null;
