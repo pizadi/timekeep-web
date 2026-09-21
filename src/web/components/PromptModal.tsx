@@ -46,25 +46,37 @@ export function openPrompt(opts: PromptOptions): Promise<string | null> {
 function PromptModal({ opts, onDone }: { opts: PromptOptions; onDone: (v: string | null) => void }) {
   const [v, setV] = useState(opts.initialValue ?? '');
   const ref = useRef<HTMLInputElement>(null);
-  const modalRef = useModalA11y(() => onDone(null));
+  // settle guard: onDone fires AT MOST ONCE (a double Enter racing the async
+  // unmount, or overlay-click + key, must not double-resolve/re-open)
+  const settledRef = useRef(false);
+  const cancelRef = useRef(false);
+  const finish = (val: string | null) => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    // focus returns to the trigger on CANCEL — but NOT on confirm: restoring
+    // there put focus on the ＋ button, so the next Enter re-opened the dialog
+    cancelRef.current = val === null;
+    onDone(val);
+  };
+  const modalRef = useModalA11y(() => finish(null), () => cancelRef.current);
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   const ok = !opts.mustType || v === opts.mustType;
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={opts.title} onClick={() => onDone(null)}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={opts.title} onClick={() => finish(null)}>
       <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>{opts.title}</h3>
         {opts.message && <p className="muted" style={{ marginTop: 0 }}>{opts.message}</p>}
         <input ref={ref} className="input" value={v} placeholder={opts.placeholder ?? ''}
           onChange={(e) => setV(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && ok) onDone(v);
-            if (e.key === 'Escape') onDone(null);
+            if (e.key === 'Enter' && ok) finish(v);
+            if (e.key === 'Escape') finish(null);
           }} />
         {!ok && <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>Type “{opts.mustType}” to confirm.</p>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-          <button className="btn" onClick={() => onDone(null)}>Cancel</button>
+          <button className="btn" onClick={() => finish(null)}>Cancel</button>
           <button className={`btn ${opts.danger ? 'danger' : 'primary'}`} disabled={!ok}
-            onClick={() => onDone(v)}>{opts.confirmText ?? 'OK'}</button>
+            onClick={() => finish(v)}>{opts.confirmText ?? 'OK'}</button>
         </div>
       </div>
     </div>

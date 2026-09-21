@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-21 — 0.2.0.dev1: prompt dialog keyboard fixes
+
+- **Enter-create no longer re-opens the dialog.** Closing a prompt by confirm
+  (Enter or the primary button) restored focus to the trigger — the focused
+  `＋ Project`/`＋ Task` button — so the very next Enter re-opened the dialog,
+  which felt like "Enter never closes it". Confirms now move focus to the page;
+  cancels (Escape/Cancel/overlay click) keep the standard focus restoration to
+  the trigger.
+- **`onDone` fires at most once** — a second Enter racing the modal's async
+  unmount (or an overlay click + key in the same frame) can no longer
+  double-resolve or re-open.
+- **The a11y hook (`useModalA11y`) subscribes once** instead of tearing down and
+  re-subscribing on every keystroke (the `onClose` callback identity changes
+  with each character typed into a controlled input) — focus no longer thrashes
+  while typing, and the Escape/Tab-trap listeners are stable.
+- Regression coverage: `test/prompt-modal.test.ts` (jsdom) pins Enter-close,
+  single-fire, the confirm/cancel focus semantics, and typed-confirmation
+  gating.
+
 ## 2026-09-21 — v0.2.0: social layer (friends, groups, chat, group projects)
 
 Five-phase social feature set on the same architecture (no new DO class —
