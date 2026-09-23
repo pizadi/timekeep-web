@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   verify:
-    name: Typecheck · test · build
+    name: verify (typecheck · test · build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,7 +36,7 @@ jobs:
       - run: npm run build
 
   version-sync:
-    name: Version sync
+    name: version-sync (package.json ↔ wrangler.jsonc)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -47,7 +47,7 @@ jobs:
       - run: node scripts/check-version.mjs
 
   e2e:
-    name: E2E (wrangler dev)
+    name: e2e (wrangler dev)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
