@@ -16,6 +16,14 @@ job — `scripts/run-e2e.sh` wipes local state (only when `CI=true`), migrates,
 starts `wrangler dev`, and runs all ten e2e scripts in order, with one
 automatic retry for the proxy flake.
 
+CD: `.github/workflows/deploy.yml` deploys on `workflow_dispatch` and `v*` tag
+pushes via the `production` environment (required reviewers = approval gate).
+Pipeline: CI gate → `scripts/render-wrangler.mjs` renders `wrangler.jsonc` +
+GitHub variables into `wrangler.ci.jsonc` (gitignored — resource ids stay out
+of the repo) → build → remote D1 migrations → `wrangler deploy` → post-deploy
+`GET /api/version` check (package.json version + short deploy sha). Setup
+(token scope, secrets, variables) in `docs/deployment.md`.
+
 ## Commands
 
 ```bash

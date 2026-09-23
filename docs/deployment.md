@@ -78,7 +78,48 @@ A scheduled handler runs at **03:17 UTC** daily (`cron.ts`):
   still runs
 - prunes `sync_log`, expired sessions, and expired email tokens
 
+## Deploying from GitHub (CI/CD)
+
+`.github/workflows/deploy.yml` deploys from GitHub — no local machine needed:
+
+- **Triggers:** manual (**Actions → Deploy → Run workflow**) and automatic on
+  any `vX.Y.Z` tag push.
+- **Approval gate:** the job runs in the `production` environment — add
+  required reviewers under **Settings → Environments → production** and every
+  deploy waits for (your) approval in the UI.
+- **Config rendering:** `scripts/render-wrangler.mjs` merges the committed
+  `wrangler.jsonc` template with GitHub variables at run time — resource ids
+  never live in the repo. The rendered `wrangler.ci.jsonc` is gitignored.
+
+One-time setup:
+
+1. **API token** — Cloudflare dashboard → My Profile → API Tokens → Create
+   (custom), scoped to the account with: *Workers Scripts: Edit*, *D1: Edit*,
+   *Workers KV Storage: Edit* (plus *R2: Edit* only if the R2 dump bucket is
+   used).
+2. **Repo secrets** (Settings → Secrets and variables → Actions → Secrets):
+   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+3. **Repo variables** (same page → Variables): `CF_D1_DATABASE_ID`,
+   `CF_KV_NAMESPACE_ID`, and `CF_DEPLOY_URL` (e.g.
+   `https://timekeep-web.parham-avia.workers.dev`) for the post-deploy check.
+4. **Environment** — Settings → Environments → create `production`, add the
+   required reviewer(s).
+
+Each run: CI gate (typecheck + tests) → render config → build → **remote D1
+migrations** (idempotent, additive-by-policy) → `wrangler deploy` → verify
+`GET /api/version` reports the `package.json` version and the deployed commit
+sha. App secrets (`RESEND_API_KEY`, Turnstile) live in the Worker and are
+never touched by deploys. Deploys to the same environment queue behind each
+other (`concurrency: production`) — a running deploy is never cancelled.
+
+**Rollback:** run `npx wrangler rollback -c wrangler.local.jsonc` locally, or
+re-run the deploy workflow run of an earlier `vX.Y.Z` tag to redeploy it
+(open the run → Re-run all jobs — the gate re-verifies before deploying).
+
 ## Upgrades
+
+Prefer the GitHub deploy workflow above — it runs the same steps with an
+approval gate and a post-deploy check. Manual upgrade for local use:
 
 ```bash
 git pull

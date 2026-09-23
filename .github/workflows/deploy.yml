@@ -1,0 +1,76 @@
+# TimeKeep Web — CD: deploy to Cloudflare from GitHub.
+#
+# Two ways to deploy:
+#   1. Actions → Deploy → Run workflow (manual, any time)
+#   2. push a vX.Y.Z tag — releases deploy automatically
+#
+# One-time setup (details in docs/deployment.md → "Deploying from GitHub"):
+#   Secrets:   CLOUDFLARE_API_TOKEN (scoped: Workers Scripts Edit, D1 Edit,
+#              Workers KV Storage Edit), CLOUDFLARE_ACCOUNT_ID
+#   Variables: CF_D1_DATABASE_ID, CF_KV_NAMESPACE_ID, CF_DEPLOY_URL
+#   Environment "production": add required reviewers for an approval gate.
+#
+# The deploy config is rendered from the committed wrangler.jsonc template at
+# run time (scripts/render-wrangler.mjs) — resource ids never live in the repo.
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false   # queue deploys — never cancel one mid-run
+
+jobs:
+  deploy:
+    name: deploy (migrate → deploy → verify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: CI gate (typecheck + tests)
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Render deploy config (ids stay out of the repo)
+        run: BUILD_SHA="${GITHUB_SHA::7}" node scripts/render-wrangler.mjs wrangler.ci.jsonc
+        env:
+          D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
+          KV_NAMESPACE_ID: ${{ vars.CF_KV_NAMESPACE_ID }}
+
+      - run: npm run build
+
+      # additive-by-policy migrations, applied before the code switch;
+      # idempotent (wrangler tracks applied migrations)
+      - name: D1 migrations (remote)
+        run: npx wrangler d1 migrations apply timekeep --remote -c wrangler.ci.jsonc
+
+      - name: Deploy
+        run: npx wrangler deploy -c wrangler.ci.jsonc
+
+      - name: Verify /api/version
+        run: |
+          resp=$(curl -fsS "$CF_DEPLOY_URL/api/version")
+          echo "$resp"
+          version=$(node -p 'require("./package.json").version')
+          echo "$resp" | jq -e --arg v "$version" --arg s "${GITHUB_SHA::7}" \
+            '.name == "timekeep-web" and .version == $v and .build == $s' > /dev/null
+          echo "live: version $version, build ${GITHUB_SHA::7}"
+        env:
+          CF_DEPLOY_URL: ${{ vars.CF_DEPLOY_URL }}
