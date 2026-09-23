@@ -1,6 +1,6 @@
 {
   "name": "timekeep-web",
-  "version": "0.3.0.dev2",
+  "version": "0.3.0.dev3",
   "private": true,
   "license": "MIT",
   "description": "TimeKeep Web — time tracking & task management on Cloudflare Workers + D1 + Durable Objects",

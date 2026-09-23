@@ -78,6 +78,18 @@ a { color: var(--accent); }
 /* mobile-only hamburger — the off-canvas sidebar's toggle */
 .sidebar-toggle { display: none; }
 
+/* drawer dismissal (narrow screens): backdrop behind the fixed sidebar
+   (z-40) + a close button inside the drawer, which covers the hamburger
+   once open */
+.sidebar-close { display: none; }
+@media (max-width: 1023px) {
+  .sidebar-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 39; }
+  .sidebar-close { display: inline-flex; }
+}
+@media (min-width: 1024px) {
+  .sidebar-backdrop { display: none; }
+}
+
 /* view navigation is visible at every width */
 .view-tabs {
   display: flex; gap: 2px; padding: 6px 10px; background: var(--panel);

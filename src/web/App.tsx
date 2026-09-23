@@ -131,6 +131,9 @@ function Shell({ route }: { route: string }) {
   return (
     <div className="app">
       <a className="visually-hidden" href="#main-content">Skip to content</a>
+      {/* drawer backdrop (narrow screens): tap anywhere outside to dismiss */}
+      {sidebarOpen && <div className="sidebar-backdrop" aria-hidden="true"
+        onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? ' open' : ''}`} aria-label="Projects and tasks">
         <div className="topbar" style={{ borderBottom: '1px solid var(--border)' }}>
           <strong style={{ flex: 1 }}>TimeKeep</strong>
@@ -138,6 +141,10 @@ function Shell({ route }: { route: string }) {
             onClick={() => setQuickFindOpen(true)}>⌕</button>
           <button className="icon-btn" title="Settings" aria-label="Settings"
             onClick={() => { setSettingsOpen(true); go('/settings'); }}>⚙</button>
+          {/* narrow screens only: the fixed drawer covers the main topbar's
+              hamburger once open, so the drawer needs its own close button */}
+          <button className="icon-btn sidebar-close" aria-label="Close project list"
+            onClick={() => setSidebarOpen(false)}>✕</button>
         </div>
         <TreeSidebar onClose={() => setSidebarOpen(false)} />
       </aside>
@@ -154,6 +161,8 @@ function Shell({ route }: { route: string }) {
           <span className="muted" style={{ fontSize: 12.5 }} title={`Signed in as ${user.username}`}>
             {user.name || user.username}
           </span>
+          <button className="icon-btn" title="Sign out" aria-label="Sign out"
+            onClick={() => void signOutNow()}>⏻</button>
         </header>
 
         {connection === 'offline' && (
@@ -210,6 +219,15 @@ function labelFor(v: string): string {
 
 function navigateHome(): void {
   go(pathForView(store.get().view));
+}
+
+/** Sign out: revoke the session server-side, then clear local state. The
+ *  local clear happens even if the request fails (offline sign-out). */
+async function signOutNow(): Promise<void> {
+  try { await api('/auth/logout', { method: 'POST' }); }
+  catch { /* session is cleared locally regardless */ }
+  store.signOut();
+  go('/');
 }
 
 // Tasks view (main content area): a read-light browser over the same data the

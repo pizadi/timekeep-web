@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-23 — 0.3.0.dev3: sign-out button, mobile sidebar dismissal
+
+- **Sign out.** The main topbar gains a ⏻ button next to the signed-in name —
+  it was only reachable by expiring the session. It revokes the session
+  server-side (`POST /auth/logout`) and always clears local state, even
+  offline, landing on the login screen.
+- **Sidebar can be hidden again on narrow screens.** The off-canvas drawer is
+  `position: fixed`, so once open it covered the main topbar's hamburger —
+  nothing could close it (except selecting a row). Added a tap-outside
+  backdrop behind the drawer and a ✕ close button inside the drawer's topbar
+  (both narrow-screens only).
+
 ## 2026-09-23 — 0.3.0.dev2: fix "Something broke" after login
 
 - Logging in from an expired session (or after logout) crashed the shell:
