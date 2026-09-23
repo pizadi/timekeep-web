@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-23 — 0.3.0.dev2: fix "Something broke" after login
+
+- Logging in from an expired session (or after logout) crashed the shell:
+  `setAuthed(true)` flips `authed` immediately while the `boot()` it triggers is
+  still in flight, and the previous page-load boot had already set
+  `booted: true` on its 401 — so `Shell` rendered with `user: null` and threw on
+  `user.name`, landing in the error boundary ("Something broke") until a manual
+  refresh. The app gate now holds on "Loading…" until the user profile exists.
+- The error-boundary fallback shows the exception message (it was console-only,
+  which made render bugs like this one undiagnosable from the screen).
+
 ## 2026-09-23 — 0.3.0.dev1: chat dock, groups UI, subtask donut, daily summary, newest-first tasks view, map arrows, log pagination
 
 - **Chat dock** (per-group windows). Chats moved out of the group detail into

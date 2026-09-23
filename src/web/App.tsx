@@ -41,6 +41,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
           <div className="auth-card">
             <h2>Something broke</h2>
             <p className="muted">A rendering error occurred. Your data is safe — the running timer kept ticking server-side.</p>
+            {/* message surfaced so a render bug is diagnosable from the screen alone */}
+            <p className="error-text">{this.state.error.message}</p>
             <button className="btn primary" onClick={() => location.reload()}>Reload</button>
           </div>
         </div>
@@ -65,6 +67,11 @@ export default function App() {
             ? <JoinGroupView token={route.slice('/join/'.length)} />
             : <AuthView />)   // sign in first, then re-open the invite link
         : (!authed || route === '/login') ? <AuthView />
+        // login flips `authed` while the boot it triggers is still in flight —
+        // Shell needs the profile, so hold on "Loading…" until `user` exists
+        // (without this gate Shell crashed on `user.name` → "Something broke"
+        // after every login from an expired session)
+        : !user ? <div className="auth-wrap"><div className="muted">Loading…</div></div>
         // forced password change: nothing else in the app is reachable until it's done
         : user?.must_change_password ? <ChangePasswordView />
         : <Shell route={route} />}
