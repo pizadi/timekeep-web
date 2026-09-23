@@ -1,0 +1,85 @@
+# TimeKeep Web — CI
+# verify: typecheck (two tsc projects) + unit tests + SPA build
+# version-sync: package.json must match wrangler.jsonc's __APP_VERSION__ define
+# e2e: full e2e suite against a local `wrangler dev` (blocking, retried once
+#      for the known wrangler-dev proxy flake — see AGENTS.md)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # keep main history intact; only superseded PR runs get cancelled
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  version-sync:
+    name: Version sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # release discipline: bump package.json + __APP_VERSION__ in BOTH
+      # wrangler configs together (wrangler.local.jsonc is gitignored, so CI
+      # guards the committed one — see AGENTS.md "Deploy & versioning")
+      - run: node scripts/check-version.mjs
+
+  e2e:
+    name: E2E (wrangler dev)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # dist/client must exist for wrangler dev's Static Assets binding
+      - run: npm run build
+      # Ephemeral dev vars for the suite: fast KDF, console email provider,
+      # and login/admin rate-limit overrides — but NOT RL_TOKEN_IP:
+      # regression-check.mjs expects the verify-email hammer to actually 429
+      # (see AGENTS.md "Commands").
+      - name: Write .dev.vars
+        run: |
+          cat > .dev.vars <<'EOF'
+          PBKDF2_ITERATIONS=1000
+          EMAIL_DEV_MODE=1
+          FROM_EMAIL=TimeKeep <dev@localhost>
+          RL_LOGIN_IP=1000
+          RL_LOGIN_EMAIL=1000
+          RL_ADMIN_IP=1000
+          EOF
+      - name: E2E — attempt 1
+        run: bash scripts/run-e2e.sh
+      # One retry to absorb wrangler dev's local-proxy flake
+      # ("Network connection lost" — AGENTS.md); a genuine regression fails
+      # both attempts. run-e2e.sh rebuilds from a wiped local DB each time.
+      - name: E2E — retry (wrangler dev proxy flake)
+        if: failure()
+        run: bash scripts/run-e2e.sh

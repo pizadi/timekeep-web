@@ -1,5 +1,7 @@
 # TimeKeep Web
 
+[![CI](https://github.com/pizadi/timekeep-web/actions/workflows/ci.yml/badge.svg)](https://github.com/pizadi/timekeep-web/actions/workflows/ci.yml)
+
 A browser-based time-tracking and task-management application — a re-imagining of
 TimeKeep Desktop for **Cloudflare Workers + D1 + Durable Objects**, with user
 accounts and multi-device live sync as first-class concepts.

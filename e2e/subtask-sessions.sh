@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Ad-hoc verification: subtask attribution on sessions.
+# Subtask attribution on sessions (part of the CI e2e suite — see scripts/run-e2e.sh).
+# Creates its own throwaway user; requires `wrangler dev` on :8787.
 set -e
 BASE=http://127.0.0.1:8787/api
 ORIGIN=http://127.0.0.1:8787
@@ -39,7 +40,7 @@ req $J ui POST /timer/switch "{\"task_id\":\"$TID\",\"subtask_id\":\"$SB2\"}" >/
 req $J ui POST /timer/switch "{\"task_id\":\"$TID\",\"subtask_id\":\"$SB1\"}" >/dev/null   # switch 2: SB2→SB1
 echo "-- switch to a NON-subtask of the task must 422:"
 req $J ui POST /timer/switch "{\"task_id\":\"$TID\",\"subtask_id\":\"nope\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['error']['code'])" || true
-echo "== switch splits sessions: SB1→SB2→SB1 = three segments =="
+echo "== switch splits into four segments: SB1→SB2→SB1→SB2 =="
 req $J ui POST /timer/switch "{\"task_id\":\"$TID\",\"subtask_id\":\"$SB2\"}" >/dev/null
 sleep 0.1
 req $J ui POST /timer/stop >/dev/null
@@ -47,13 +48,17 @@ sleep 0.3
 req $J ui GET "/sessions?task_id=$TID" | python3 -c "
 import sys,json
 ss=json.load(sys.stdin)['sessions']
-print('segments:', len(ss), '| subtasks:', [(s.get('subtask_name')) for s in ss])"
+names=[s.get('subtask_name') for s in ss]
+assert len(ss)==4, f'expected 4 segments, got {len(ss)}: {names}'
+print('segments:', len(ss), '| subtasks:', names)"
 
 echo "== manual session with subtask + cross-task link rejected =="
+# the account is seconds old (rule: started_at >= account.created_at — see
+# smoke-test.sh), so use future-tolerant ranges within the now+5min window
 NOW=$(date +%s%3N)
-req $J ui POST /sessions "{\"task_id\":\"$TID\",\"subtask_id\":\"$SB2\",\"started_at\":$((NOW-600000)),\"ended_at\":$((NOW-300000))}" | python3 -c "import sys,json; s=json.load(sys.stdin)['session']; print('manual subtask:', s['subtask_id']=='$SB2')"
+req $J ui POST /sessions "{\"task_id\":\"$TID\",\"subtask_id\":\"$SB2\",\"started_at\":$((NOW+30000)),\"ended_at\":$((NOW+90000))}" | python3 -c "import sys,json; s=json.load(sys.stdin)['session']; print('manual subtask:', s['subtask_id']=='$SB2')"
 T2=$(req $J ui POST "/projects/$PID/tasks" '{"name":"Other"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task']['id'])")
-req $J ui POST /sessions "{\"task_id\":\"$T2\",\"subtask_id\":\"$SB1\",\"started_at\":$((NOW-900000)),\"ended_at\":$((NOW-800000))}" | python3 -c "import sys,json; print('cross-task link →', json.load(sys.stdin)['error']['code'])"
+req $J ui POST /sessions "{\"task_id\":\"$T2\",\"subtask_id\":\"$SB1\",\"started_at\":$((NOW+120000)),\"ended_at\":$((NOW+180000))}" | python3 -c "import sys,json; print('cross-task link →', json.load(sys.stdin)['error']['code'])"
 
 echo "== report: task row + nested subtasks =="
 TODAY=$(date -u +%F)
@@ -72,5 +77,7 @@ req $J ui DELETE "/subtasks/$SB1" >/dev/null
 req $J ui GET "/sessions?task_id=$TID" | python3 -c "
 import sys,json
 ss=json.load(sys.stdin)['sessions']
-print('sessions still present:', len(ss), '| any pointing at deleted SB1:', any(s.get('subtask_id')=='$SB1' for s in ss))"
+assert len(ss)>=4, f'sessions lost after subtask delete: {len(ss)}'
+assert not any(s.get('subtask_id')=='$SB1' for s in ss), 'a session still points at the deleted subtask'
+print('sessions still present:', len(ss), '| none pointing at deleted SB1')"
 echo DONE
