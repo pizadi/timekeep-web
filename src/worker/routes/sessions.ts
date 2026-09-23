@@ -39,14 +39,9 @@ sessionRoutes.get('/sessions', async (c) => {
   if (from === undefined || to === undefined)
     return jsonError(422, 'validation', 'from/to must be non-negative epoch-ms integers');
   const note = c.req.query('q');
-  const cursorRaw = c.req.query('cursor'); // "<started_at>_<id>"
-  let cursor: { sa: number; id: string } | null = null;
-  if (cursorRaw) {
-    const [sa, id] = cursorRaw.split('_');
-    const n = Number(sa);
-    if (!Number.isFinite(n) || !id) return jsonError(422, 'validation', 'invalid cursor');
-    cursor = { sa: n, id };
-  }
+  // page-based pagination: 1-based page + clamped page size
+  const page = Math.max(1, Math.floor(Number(c.req.query('page') ?? 1)) || 1);
+  const pageSize = Math.min(LIST_LIMIT, Math.max(1, Math.floor(Number(c.req.query('page_size') ?? LIST_LIMIT)) || LIST_LIMIT));
 
   const where: string[] = ['s.user_id = ?1'];
   const binds: unknown[] = [userId];
@@ -57,10 +52,16 @@ sessionRoutes.get('/sessions', async (c) => {
   if (from !== null) { where.push(`(s.ended_at IS NULL OR s.ended_at >= ?${++n})`); binds.push(from); }
   if (to !== null) { where.push(`s.started_at < ?${++n}`); binds.push(to); }
   if (note) { where.push(`s.note LIKE ?${++n} ESCAPE '\\'`); binds.push(escapeLike(note)); }
-  if (cursor) {
-    where.push(`(s.started_at < ?${++n} OR (s.started_at = ?${n} AND s.id < ?${++n}))`);
-    binds.push(cursor.sa, cursor.id);
-  }
+
+  const whereSql = where.join(' AND ');
+  const totalRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n
+     FROM time_sessions s
+     JOIN tasks t ON t.id = s.task_id
+     JOIN projects p ON p.id = t.project_id
+     WHERE ${whereSql}`
+  ).bind(...binds).first<{ n: number }>();
+  const total = Number(totalRow?.n ?? 0);
 
   const rows = await c.env.DB.prepare(
     `SELECT s.id, s.task_id, s.started_at, s.ended_at, s.source, s.note, s.subtask_id,
@@ -69,17 +70,16 @@ sessionRoutes.get('/sessions', async (c) => {
      JOIN tasks t ON t.id = s.task_id
      LEFT JOIN subtasks sb ON sb.id = s.subtask_id
      JOIN projects p ON p.id = t.project_id
-     WHERE ${where.join(' AND ')}
+     WHERE ${whereSql}
      ORDER BY s.started_at DESC, s.id DESC
-     LIMIT ?${++n}`
-  ).bind(...binds, LIST_LIMIT + 1).all<any>();
+     LIMIT ?${++n} OFFSET ?${++n}`
+  ).bind(...binds, pageSize, (page - 1) * pageSize).all<any>();
 
-  const hasMore = rows.results.length > LIST_LIMIT;
-  const results = hasMore ? rows.results.slice(0, LIST_LIMIT) : rows.results;
-  const last = results[results.length - 1];
   return c.json({
-    sessions: results,
-    next_cursor: hasMore && last ? `${last.started_at}_${last.id}` : null
+    sessions: rows.results,
+    total,
+    page,
+    page_size: pageSize
   });
 });
 

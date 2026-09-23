@@ -1,6 +1,6 @@
 // Session log (FR-S5/S6/S7): chronological, filterable (project/task/range/note),
-// paginated (server page size = LIMITS.logPageSize); editor for manual add/edit;
-// delete with undo (FR-T4).
+// page-based pagination (server page size = LIMITS.logPageSize); editor for
+// manual add/edit; delete with undo (FR-T4).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
@@ -27,7 +27,8 @@ export default function LogView() {
   const tz = user.timezone;
 
   const [rows, setRows] = useState<LogRow[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
   const [qInput, setQInput] = useState('');
@@ -35,6 +36,8 @@ export default function LogView() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [editing, setEditing] = useState<Partial<LogRow> | 'new' | null>(null);
+
+  const PAGE_SIZE = LIMITS.logPageSize;
 
   // debounce the note filter — a request per keystroke would trip the
   // per-user rate limit while typing
@@ -46,7 +49,7 @@ export default function LogView() {
   // audit: rapid filter changes could land out of order — a slower older fetch
   // overwrote newer results. A monotonic seq makes stale responses no-ops.
   const loadSeq = useRef(0);
-  const load = useCallback(async (reset: boolean) => {
+  const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     const params = new URLSearchParams();
     if (projectId) params.set('project_id', projectId);
@@ -56,18 +59,25 @@ export default function LogView() {
     // 23/25-hour days, unlike a fixed +24h)
     if (from) params.set('from', String(dayStartInstant(from, tz)));
     if (to) params.set('to', String(dayStartInstant(addDaysCivil(to, 1), tz)));
-    if (!reset && cursor) params.set('cursor', cursor);
+    params.set('page', String(page));
+    params.set('page_size', String(PAGE_SIZE));
     try {
-      const res = await api<{ sessions: LogRow[]; next_cursor: string | null }>(`/sessions?${params}`);
+      const res = await api<{ sessions: LogRow[]; total: number }>(`/sessions?${params}`);
       if (seq !== loadSeq.current) return; // superseded
-      setRows((prev) => reset ? res.sessions : [...prev, ...res.sessions]);
-      setCursor(res.next_cursor);
+      // a delete on the last row of the last page would otherwise show an
+      // empty viewport — step back one page instead
+      if (res.sessions.length === 0 && page > 1) { setPage(page - 1); return; }
+      setRows(res.sessions);
+      setTotal(res.total);
     } catch (e: any) {
       if (seq === loadSeq.current) pushToast('error', e.message);
     }
-  }, [projectId, taskId, q, from, to, cursor, tz]);
+  }, [projectId, taskId, q, from, to, page, tz, PAGE_SIZE]);
 
-  useEffect(() => { void load(true); }, [projectId, taskId, q, from, to, reportsVersion]);
+  // filter changes reset to page 1 (page itself is a dep of load, so a reset
+  // + filter change batch into ONE refetch)
+  useEffect(() => { setPage(1); }, [projectId, taskId, q, from, to, reportsVersion]);
+  useEffect(() => { void load(); }, [projectId, taskId, q, from, to, page, reportsVersion, load]);
 
   // heatmap drill-down (FR-R3): "click a day to inspect its sessions"
   useEffect(() => {
@@ -111,11 +121,10 @@ export default function LogView() {
     } catch (e: any) { pushToast('error', e.message); }
   }
 
-  // audit: "Load more" accumulated unbounded DOM — past this cap the oldest
-  // loaded rows are hidden (data is untouched; refine filters or export instead)
-  const MAX_RENDERED = 2000;
-  const hiddenCount = Math.max(0, rows.length - MAX_RENDERED);
-  const visibleRows = hiddenCount > 0 ? rows.slice(rows.length - MAX_RENDERED) : rows;
+  // audit: pagination replaced the old "Load more" accumulation (unbounded DOM) —
+  // each page renders at most LIMITS.logPageSize rows.
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div>
@@ -165,7 +174,7 @@ export default function LogView() {
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((r) => {
+            {rows.map((r) => {
               const isRunning = running?.id === r.id;
               const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
               return (
@@ -201,16 +210,15 @@ export default function LogView() {
             )}
           </tbody>
         </table>
-        {hiddenCount > 0 && (
-          <div className="muted" style={{ padding: 8, textAlign: 'center', fontSize: 12.5 }}>
-            {hiddenCount} older loaded rows hidden to keep the page responsive — narrow the filters or export to CSV.
-          </div>
-        )}
-        {cursor && (
-          <div style={{ padding: 10, textAlign: 'center' }}>
-            <button className="btn small" onClick={() => void load(false)}>Load more</button>
-          </div>
-        )}
+        <div className="pagination">
+          <button className="btn small" disabled={page <= 1} onClick={() => setPage(1)} aria-label="First page">«</button>
+          <button className="btn small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            Page {page} of {totalPages} · {total} session{total === 1 ? '' : 's'}
+          </span>
+          <button className="btn small" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
+          <button className="btn small" disabled={page >= totalPages} onClick={() => setPage(totalPages)} aria-label="Last page">»</button>
+        </div>
       </div>
 
       {editing && (
@@ -220,7 +228,7 @@ export default function LogView() {
           defaultTaskId={taskId || undefined}
           suggestEnd={editing === 'new' ? Date.now() : undefined}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load(true); store.bumpReports(); }}
+          onSaved={() => { setEditing(null); void load(); store.bumpReports(); }}
         />
       )}
     </div>

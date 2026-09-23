@@ -323,3 +323,80 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 .dd-check { color: var(--accent); flex: none; }
 
 .sessions-list { max-height: 320px; overflow: auto; }
+
+/* ---------- chat dock (per-group windows, bottom-right) ---------- */
+.chat-dock {
+  position: fixed; right: 12px; bottom: 0; z-index: 70;
+  display: flex; align-items: flex-end; justify-content: flex-end;
+  gap: 10px; pointer-events: none; max-width: calc(100vw - 24px);
+}
+.chat-dock > * { pointer-events: auto; }
+.chat-win {
+  width: 320px; max-width: calc(100vw - 24px); height: 420px;
+  background: var(--panel); border: 1px solid var(--border); border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.chat-win.collapsed { height: auto; }
+.chat-win-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px;
+  background: var(--panel-2); border-bottom: 1px solid var(--border);
+  cursor: pointer; user-select: none; font-size: 13.5px; flex: none;
+}
+.chat-win.collapsed .chat-win-head { border-bottom: 0; }
+.chat-win-head .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.chat-msgs {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 2px; padding: 8px;
+}
+.chat-msg { display: flex; align-items: flex-start; gap: 2px; font-size: 13px; padding: 2px 2px; border-radius: 4px; }
+.chat-msg:hover { background: var(--panel-2); }
+.chat-msg .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; padding-top: 2px; }
+.chat-loading { padding: 14px; }
+.chat-compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); flex: none; }
+.chat-launcher-wrap { position: relative; flex: none; }
+.chat-launcher {
+  width: 46px; height: 46px; border-radius: 50%; margin: 0 0 12px;
+  background: var(--accent); color: var(--accent-contrast);
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+  font-size: 19px; position: relative; display: inline-flex; align-items: center; justify-content: center;
+}
+.chat-launcher:hover { filter: brightness(1.08); }
+.chat-launcher-badge { position: absolute; top: -4px; right: -4px; }
+.chat-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--danger); color: #fff; font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.chat-pop {
+  position: absolute; right: 0; bottom: 64px; width: 260px; max-height: 340px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 4px;
+}
+.chat-pop-item {
+  display: flex; width: 100%; align-items: center; gap: 8px; text-align: left;
+  padding: 8px 9px; border: 0; background: transparent; border-radius: var(--radius-sm); color: var(--text);
+}
+.chat-pop-item:hover { background: var(--panel-2); }
+.chat-pop-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 639px) {
+  .chat-win { width: calc(100vw - 24px); }
+  .chat-dock { right: 12px; left: 12px; flex-wrap: wrap; }
+}
+
+/* ---------- group detail (tabbed) ---------- */
+.group-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.group-head .grow { flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-tabs { padding: 0; border-radius: var(--radius-sm); }
+.group-tabs button { flex: none; padding: 6px 14px; }
+.group-tab-body { display: flex; flex-direction: column; gap: 2px; }
+
+/* ---------- pagination (log) ---------- */
+.pagination {
+  display: flex; gap: 8px; align-items: center; justify-content: center;
+  padding: 10px; flex-wrap: wrap;
+}
+
+/* ---------- map arrows ---------- */
+.map-arrow.met { fill: var(--muted); }
+.map-arrow.unmet { fill: var(--warn); }

@@ -1,10 +1,11 @@
 // Dashboard (FR-R1–R8): stacked daily bars, project donut, calendar heatmap,
 // summary table — server-side aggregates, live-updated on events (FR-R5),
 // running session included and growing locally (FR-R6).
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
 import { api, nowMs } from '../lib/api';
-import { rangePreset, fmtDay } from '../lib/time';
+import { rangePreset, fmtDay, civilOf } from '../lib/time';
+import { addDaysCivil } from '../../shared/time';
 import { Chart, registerables } from 'chart.js';
 import Heatmap from '../components/Heatmap';
 import Dropdown from '../components/Dropdown';
@@ -14,10 +15,22 @@ Chart.register(...registerables);
 type Summary = {
   from: string; to: string; days: { day: string; project_id: string; minutes: number }[];
   donut: { project_id: string; minutes: number }[];
+  donut_subtasks: { project_id: string; task_id: string; task_name: string; subtask_id: string | null; subtask_name: string | null; minutes: number }[];
   table: { task_id: string; task_name: string; done: boolean; project_id: string; project_name: string; project_color: string; today: number; week: number; all: number }[];
   totals: { today: number; week: number; all: number };
   server_now: number;
 };
+
+type DaySummary = {
+  day: string; total_minutes: number;
+  projects: { project_id: string; minutes: number }[];
+  tasks: { task_id: string; task_name: string; done: boolean; project_id: string; project_name: string; project_color: string; minutes: number; total_minutes: number; subtasks: { subtask_id: string; name: string; done: boolean; minutes: number }[] }[];
+  server_now: number;
+};
+
+function fmtMinutes(m: number): string {
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+}
 
 const PRESETS = ['today', 'week', 'month', '30d', 'custom'] as const;
 type Preset = (typeof PRESETS)[number];
@@ -58,6 +71,16 @@ export default function DashboardView() {
 
   // refetch only the affected aggregates when relevant events land (FR-R5)
   useEffect(() => { void load(); }, [load, reportsVersion]);
+
+  // ---------- daily summary (per-day drill-down) ----------
+  const [day, setDay] = useState(() => civilOf(nowMs(), user.timezone));
+  const [dayData, setDayData] = useState<DaySummary | null>(null);
+  const loadDay = useCallback(async () => {
+    try {
+      setDayData(await api<DaySummary>(`/reports/day?date=${day}`));
+    } catch (e: any) { pushToast('error', e.message); }
+  }, [day]);
+  useEffect(() => { void loadDay(); }, [loadDay, reportsVersion]);
 
   useEffect(() => { localStorage.setItem('tk.range', preset); }, [preset]); // FR-R7
 
@@ -106,18 +129,45 @@ export default function DashboardView() {
 
     charts.current.donut?.destroy();
     if (donutRef.current) {
+      // donut separated by SUBTASK: every slice of a project wears the project
+      // color (thin panel-colored borders keep same-color slices readable), no
+      // labels — the hover tooltip identifies Task ▸ Subtask.
+      const subRows = summary.donut_subtasks ?? [];
+      const slices = subRows.length > 0 ? subRows : summary.donut.map((d) => ({
+        project_id: d.project_id, task_id: '', task_name: nameOf(d.project_id),
+        subtask_id: null, subtask_name: null, minutes: d.minutes
+      }));
       charts.current.donut = new Chart(donutRef.current, {
         type: 'doughnut',
         data: {
-          labels: summary.donut.map((d) => nameOf(d.project_id)),
+          labels: slices.map((d) => d.subtask_name ? `${d.task_name} ▸ ${d.subtask_name}` : d.task_name),
           datasets: [{
-            data: summary.donut.map((d) => d.minutes),
-            backgroundColor: summary.donut.map((d) => colorOf(d.project_id))
+            data: slices.map((d) => d.minutes),
+            backgroundColor: slices.map((d) => colorOf(d.project_id)),
+            borderColor: css.getPropertyValue('--panel').trim() || '#888',
+            borderWidth: 2
           }]
         },
         options: {
           responsive: true, maintainAspectRatio: false, cutout: '62%',
-          plugins: { legend: { position: 'right', labels: { color: text } } }
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const d = slices[items[0]!.dataIndex];
+                  if (!d) return '';
+                  return d.subtask_name ? `${d.task_name} ▸ ${d.subtask_name}` : d.task_name;
+                },
+                label: (ctx) => {
+                  const d = slices[ctx.dataIndex];
+                  if (!d) return '';
+                  const proj = nameOf(d.project_id);
+                  return `${proj === d.task_name ? '' : proj + ' — '}${fmtMinutes(d.minutes)}`;
+                }
+              }
+            }
+          }
         }
       });
     }
@@ -195,6 +245,68 @@ export default function DashboardView() {
           <div className="chart-box"><canvas ref={donutRef} aria-label="Project donut chart" role="img" /></div>
         </div>
       </div>
+
+      {/* daily summary: one day at a time, next/previous + date handle on top */}
+      {(() => {
+        const today = civilOf(nowMs(), user.timezone);
+        const isToday = day === today;
+        return (
+          <div className="card">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <h3 style={{ flex: 1, marginBottom: 0 }}>
+                Daily summary{isToday ? <span className="muted" style={{ fontWeight: 400 }}> — today</span> : ''}
+              </h3>
+              <button className="btn small" onClick={() => setDay((d) => addDaysCivil(d, -1))} aria-label="Previous day">‹ Prev</button>
+              <input className="input" style={{ width: 150 }} type="date" value={day} aria-label="Summary day"
+                onChange={(e) => { if (e.target.value) setDay(e.target.value); }} />
+              <button className="btn small" onClick={() => setDay((d) => addDaysCivil(d, 1))} aria-label="Next day">Next ›</button>
+              {!isToday && <button className="btn small" onClick={() => setDay(today)}>Today</button>}
+            </div>
+            {dayData && (
+              <>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', margin: '10px 0 4px', fontSize: 13.5 }}>
+                  <span>Total <b>{fmtMinutes(dayData.total_minutes + (isToday ? runningBoost : 0))}</b>
+                    {isToday && running && runningBoost > 0 ? <span className="muted"> (+{runningBoost}m running)</span> : ''}</span>
+                  {dayData.projects.map((p) => (
+                    <span key={p.project_id} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <span className="chip" style={{ background: colorOf(p.project_id) }} aria-hidden />
+                      {nameOf(p.project_id)} <b>{fmtMinutes(p.minutes)}</b>
+                    </span>
+                  ))}
+                  {dayData.total_minutes === 0 && <span className="muted">Nothing tracked this day.</span>}
+                </div>
+                {dayData.tasks.length > 0 && (
+                  <table className="tbl">
+                    <thead>
+                      <tr><th>Project</th><th>Task</th><th className="num">Time</th></tr>
+                    </thead>
+                    <tbody>
+                      {dayData.tasks.map((t) => (
+                        <Fragment key={t.task_id}>
+                          <tr>
+                            <td><span className="chip" style={{ background: t.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{t.project_name}</td>
+                            <td className={t.done ? 'done-text' : ''} title={t.task_name}>{t.task_name}</td>
+                            <td className="num">{fmtMinutes(t.total_minutes + (isToday && running?.task_id === t.task_id ? runningBoost : 0))}</td>
+                          </tr>
+                          {t.subtasks.map((sb) => (
+                            <tr key={sb.subtask_id}>
+                              <td />
+                              <td style={{ paddingLeft: 22 }} className={sb.done ? 'muted' : ''}>
+                                <span aria-hidden style={{ marginRight: 4 }}>↳</span>{sb.name}{sb.done ? <span className="muted"> (done)</span> : ''}
+                              </td>
+                              <td className="num muted">{fmtMinutes(sb.minutes)}</td>
+                            </tr>
+                          ))}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="card">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

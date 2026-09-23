@@ -57,6 +57,8 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - Version source of truth is `package.json`; the SPA gets it via the Vite `define` (Settings
   footer), the worker via the `__APP_VERSION__` define — present in BOTH wrangler configs'
   `define` blocks. On release: bump all three, commit, then annotated tag `vX.Y.Z`.
+- Version strings are always `x.x.x` (release) or `x.x.x.devN` (dev iteration — N incremental
+  from 1: `0.2.0.dev1`, `0.2.0.dev2`, …). No other spellings (`-dev.`, `devN` without the base).
 - **Never create a non-dev release unprompted.** Dev versions (`X.Y.Z.devN` commits/iterating)
   are fine, but a real release — a clean `X.Y.Z` version bump, release commit or `vX.Y.Z` tag —
   happens ONLY after the user live-tests the build and explicitly tells me to release.
@@ -125,6 +127,7 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 
 ## Commits
 
-- Keep commit messages short: a single subject line (optionally 1–2 body lines).
+- Commit messages are `<version> — <one-line description>`: the version being committed, an
+  em dash, then the description (optionally 1–2 body lines after that).
 - Detailed change notes go in `CHANGELOG.md` (included in the same commit), not in the
   commit message.

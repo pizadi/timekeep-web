@@ -4,12 +4,11 @@
 // project deletion (FR-P1). Subtask toggling never touches the timer (FR-T2).
 import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
-import { api, ApiError } from '../lib/api';
-import { PALETTE } from '../../shared/constants';
+import { api } from '../lib/api';
+import { PALETTE, GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../../shared/constants';
 import { openPrompt } from '../components/PromptModal';
-import { parseGroupPerms } from './GroupsPanel';
-import { GROUP_PERMS, type GroupPerm } from '../../shared/constants';
-import type { Project, Task, Subtask } from '../lib/store';
+import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer, resumeLastTask } from '../lib/actions';
+import type { Project } from '../lib/store';
 
 const ALL_PERMS: GroupPerm[] = [...GROUP_PERMS];
 
@@ -46,7 +45,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const selPerms = selProject ? permsFor(selProject) : null;
   const canAddTask = !!selProject && (!selProject.group_id || (selPerms?.includes('edit_tasks') ?? false));
 
-  // context-aware actions: N (new task), T (toggle timer), F2 (rename), Delete (undo-able).
+  // context-aware actions: N (new task), P (new project), S (new subtask),
+  // T (toggle timer), R (resume last task), F2 (rename), Delete (undo-able).
   // Suppressed while a modal is open (audit: shortcuts fired through modals).
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
@@ -57,20 +57,25 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
       }
       const modalOpen = document.querySelector('.modal-overlay, .qf-overlay');
       if (modalOpen) return;
+      const bare = !e.ctrlKey && !e.metaKey && !e.altKey;
       const selTask = tasks.find((t) => t.id === selectedTaskId);
-      if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key.toLowerCase() === 'n' && bare) {
         e.preventDefault();
         if (selectedProjectId) await addTask(selectedProjectId);
         else await addProject();
-      } else if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      } else if (e.key.toLowerCase() === 'p' && bare) {
         e.preventDefault();
         await addProject();
-      } else if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && selTask) {
+      } else if (e.key.toLowerCase() === 's' && bare && selTask) {
         e.preventDefault();
         await addSubtask(selTask.id);
-      } else if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey && !e.altKey && selTask) {
+      } else if (e.key.toLowerCase() === 't' && bare && selTask) {
         e.preventDefault();
-        await toggleTimer(selTask.id);
+        await toggleTaskTimer(selTask.id);
+      } else if (e.key.toLowerCase() === 'r' && bare) {
+        // resume: continue tracking on the most recently tracked task
+        e.preventDefault();
+        await resumeLastTask();
       } else if (e.key === 'F2') {
         e.preventDefault();
         if (selTask) setRenaming({ kind: 'task', id: selTask.id });
@@ -83,34 +88,6 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [tasks, selectedTaskId, selectedProjectId, running]);
 
-  async function addProject() {
-    // non-blocking modal instead of window.prompt
-    const name = await openPrompt({ title: 'New project', placeholder: 'Project name', confirmText: 'Create' });
-    if (!name?.trim()) return;
-    try {
-      const res = await api<{ project: any }>('/projects', { method: 'POST', body: { name: name.trim() } });
-      store.upsertLocal('project', res.project);
-      store.selectProject(res.project.id);
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  async function addTask(projectId: string) {
-    const name = await openPrompt({ title: 'New task', placeholder: 'Task name', confirmText: 'Create' });
-    if (!name?.trim()) return;
-    try {
-      const res = await api<{ task: any }>(`/projects/${projectId}/tasks`, { method: 'POST', body: { name: name.trim() } });
-      store.upsertLocal('task', res.task);
-      store.selectTask(res.task.id);
-    } catch (e: any) { pushToast('error', e.message); }
-  }  async function addSubtask(taskId: string) {
-    const name = await openPrompt({ title: 'New subtask', placeholder: 'Subtask name', confirmText: 'Create' });
-    if (!name?.trim()) return;
-    try {
-      const res = await api<{ subtask: any }>(`/tasks/${taskId}/subtasks`, { method: 'POST', body: { name: name.trim() } });
-      store.upsertLocal('subtask', res.subtask);
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
   async function rename(kind: 'project' | 'task' | 'subtask', id: string, name: string) {
     setRenaming(null);
     if (!name.trim()) return;
@@ -119,48 +96,6 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
       const res = await api<any>(path, { method: 'PATCH', body: { name: name.trim() } });
       store.upsertLocal(kind, res[kind]);
     } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  async function toggleTimer(taskId: string) {
-    if (running?.task_id === taskId) {
-      try { await api('/timer/stop', { method: 'POST' }); store.setRunning(null); }
-      catch (e: any) { pushToast('error', e.message); }
-      return;
-    }
-    try {
-      await store.startTimer(taskId); // applies setRunning + setPomo (one shared impl)
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  /** Timer on a SUBTASK: stop when that subtask is the one running; otherwise
-   *  start (or switch to) a session attributed to it — same-task switches
-   *  split the session server-side. */
-  async function toggleSubtaskTimer(task: Task, sb: Subtask) {
-    if (running?.subtask_id === sb.id) {
-      try { await api('/timer/stop', { method: 'POST' }); store.setRunning(null); }
-      catch (e: any) { pushToast('error', e.message); }
-      return;
-    }
-    try {
-      await store.startTimer(task.id, sb.id);
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  async function toggleTaskDone(task: any) {
-    try {
-      const res = await api<{ task: any }>(`/tasks/${task.id}`, { method: 'PATCH', body: { done: !task.done } });
-      store.upsertLocal('task', res.task);
-      store.bumpReports();
-    } catch (e: any) { pushToast('error', e.message); }
-  }
-
-  async function toggleSubtask(sb: any) {
-    // immediate visual feedback; rapid taps each persist (FR-M9 AC parity in tree)
-    store.upsertLocal('subtask', { ...sb, done: sb.done ? 0 : 1 });
-    try {
-      const res = await api<{ subtask: any }>(`/subtasks/${sb.id}`, { method: 'PATCH', body: { done: !sb.done } });
-      store.upsertLocal('subtask', res.subtask);
-    } catch (e: any) { pushToast('error', e.message); void store.refreshAll(); }
   }
 
   async function deleteTask(id: string) {
@@ -334,10 +269,10 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                 )}
                 {pct !== null && <span className="sub" aria-label={`${pct}% of subtasks done`}>{pct}%</span>}
                 <button className="icon-btn" aria-label={`Start timer on ${t.name}`} title="Timer (T)"
-                  onClick={(e) => { e.stopPropagation(); toggleTimer(t.id); }}>{isRunning ? '■' : '▶'}</button>
+                  onClick={(e) => { e.stopPropagation(); toggleTaskTimer(t.id); }}>{isRunning ? '■' : '▶'}</button>
                 {canEditTasks && (
                   <>
-                    <button className="icon-btn" aria-label={`Add subtask to ${t.name}`} title="Add subtask"
+                    <button className="icon-btn" aria-label={`Add subtask to ${t.name}`} title="Add subtask (S)"
                       onClick={(e) => { e.stopPropagation(); addSubtask(t.id); }}>＋</button>
                     <button className="icon-btn" aria-label={`Delete ${t.name}`} title="Delete (undo for 5s)"
                       onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>🗑</button>
@@ -347,7 +282,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
               {sbs.map((sb) => (
                 <div key={sb.id} className="row" style={{ paddingLeft: 38, minHeight: 26 }}>
                   <input type="checkbox" checked={!!sb.done} aria-label={`Done: ${sb.name}`} disabled={!canEditTasks}
-                    onChange={() => toggleSubtask(sb)} />
+                    onChange={() => void toggleSubtaskDone(sb)} />
                   {renaming?.kind === 'subtask' && renaming.id === sb.id ? (
                     <RenameInput initial={sb.name} onCommit={(v) => rename('subtask', sb.id, v)} onCancel={() => setRenaming(null)} />
                   ) : (
@@ -367,7 +302,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                       }}>✕</button>
                   )}
                   <button className="icon-btn" aria-label={`Track subtask ${sb.name}`} title="Track this subtask"
-                    onClick={(e) => { e.stopPropagation(); toggleSubtaskTimer(t, sb); }}>
+                    onClick={(e) => { e.stopPropagation(); toggleSubtaskTimer(t.id, sb.id); }}>
                     {running?.subtask_id === sb.id ? '■' : '▶'}
                   </button>
                 </div>
@@ -382,10 +317,13 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   return (
     <div className="tree" role="tree" aria-label="Projects">
       <div style={{ display: 'flex', gap: 6, padding: '2px 8px 8px' }}>
-        <button className="btn small primary" onClick={addProject}>＋ Project</button>
+        <button className="btn small primary" onClick={addProject}>＋ Project <span className="kbd" style={{ marginLeft: 4 }}>P</span></button>
         <button className="btn small" disabled={!selectedProjectId || !canAddTask}
-          title={selectedProjectId && !canAddTask ? "You don't have the edit_tasks permission in this group" : undefined}
+          title={selectedProjectId && !canAddTask ? "You don't have the edit_tasks permission in this group" : 'New task (context-aware)'}
           onClick={() => selectedProjectId && addTask(selectedProjectId)}>＋ Task <span className="kbd" style={{ marginLeft: 4 }}>N</span></button>
+        <button className="btn small" disabled={!selectedTaskId}
+          title="Resume tracking on the last tracked task"
+          onClick={() => void resumeLastTask()}>▶ Resume <span className="kbd" style={{ marginLeft: 4 }}>R</span></button>
       </div>
 
       {personal.length === 0 && groupProjects.size === 0 && <div className="muted" style={{ padding: '8px 10px' }}>No projects yet — create one above.</div>}

@@ -1,6 +1,61 @@
 # Changelog
 
-## 2026-09-21 — 0.2.0-dev.3: subtask attribution on sessions
+## 2026-09-23 — 0.3.0.dev1: chat dock, groups UI, subtask donut, daily summary, newest-first tasks view, map arrows, log pagination
+
+- **Chat dock** (per-group windows). Chats moved out of the group detail into
+  docked windows at the bottom-right of the shell — one window per group,
+  each individually collapsible to its header bar (unread badge shown while
+  collapsed) and closable. A round 💬 launcher (total unread badge) lists all
+  groups to open/close windows. At most 3 windows stay expanded (oldest
+  auto-collapse); open/collapsed state persists in localStorage. Message
+  lists lazy-load older history when scrolled to the top (server `before=`
+  cursor), keep the scroll position anchored across prepends, and autoscroll
+  on new messages. Live delivery, edit/delete and mark-read behavior are
+  unchanged (`components/ChatDock.tsx` replaces the inline `ChatPanel`).
+- **Groups UI revamp.** The group detail is a header (color chip, name, role,
+  member count, Chat / Leave / Delete actions) plus internal tabs —
+  **Projects | Members | Invites** (username invites + links merged). The
+  owner's per-member permission editor is unchanged.
+- **Dashboard donut separated by subtask.** `/reports/summary` now returns
+  `donut_subtasks[]` (range-scoped rows per task × subtask; sessions without a
+  subtask stay a task-level slice, so slices remain a disjoint partition of
+  the range total). Slices wear their project color with thin panel-colored
+  borders (same-color slices stay readable), no legend — hovering shows
+  `Task ▸ Subtask` + duration (+ project when it differs).
+- **Daily summary.** New `GET /reports/day?date=YYYY-MM-DD` (day total,
+  per-project minutes, per-task rows with subtask breakdown, running session
+  included) rendered as a dashboard card: `‹ Prev · date input · Next ›` +
+  "Today", project chips, and a per-task table with indented subtask rows.
+  Refetches on report events; the running session's tail is added live when
+  viewing today (`e2e/pagination-day-check.mjs` covers it).
+- **Tasks view is a real browser, newest first.** The main content area of the
+  Tasks view now lists projects and their tasks ordered by creation recency
+  (new → old) — independent of the sidebar's manual position ordering, which
+  keeps its ↑/↓ buttons. Project cards have ＋ Task; task rows select (syncing
+  sidebar/Map/log pickers), toggle done, start/stop the timer, add subtasks;
+  selecting a task expands its subtasks (toggle + per-subtask timer).
+- **Shortcuts surfaced + Resume.** `P` (new project) and `S` (new subtask) now
+  show `kbd` hints on the buttons like `N` always did; the new global `R`
+  shortcut (and a "▶ Resume" button in the idle timer bar) continues tracking
+  on the most recently tracked task — if another timer is running it switches
+  (the single-timer invariant is untouched). Documented in the `?` overlay
+  (which also corrected "1–4" → "1–5" for view switching).
+- **Map dependency arrows + cleaner wiring.** Edges now carry arrowheads
+  (prerequisite → dependent; warn-colored when the prerequisite is unmet) and
+  attach to the sides actually facing each other, so freely dragged (persisted)
+  layouts stay readable. Wiring semantics flipped to match the right-side
+  handle: dragging task A's port onto B now means **B depends on A** — the
+  edge leaves the handle and the arrow follows the drag direction.
+- **Log pagination.** `GET /sessions` switched from cursor + "Load more"
+  accumulation to page-based pagination (`page`, `page_size` clamped to
+  `LIMITS.logPageSize`, response carries `total`); the log renders
+  `‹ Prev · Page X of Y · Next ›` with first/last jumps, filter changes reset
+  to page 1, and deleting the last row of the last page steps back a page.
+  The 2000-row DOM cap hack is gone.
+- Verified: typecheck (worker + web), unit tests (56), build, e2e smoke test
+  and a new focused e2e (`e2e/pagination-day-check.mjs`) against `wrangler dev`.
+
+## 2026-09-21 — 0.2.0.dev3: subtask attribution on sessions
 
 A session can now record WHICH subtask it tracked (0..1 per session — NULL =
 task-level time). Migration `0009_session_subtasks.sql` — run

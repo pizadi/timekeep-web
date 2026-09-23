@@ -38,6 +38,15 @@ export const GROUP_PERMS = [
 ] as const;
 export type GroupPerm = (typeof GROUP_PERMS)[number];
 
+/** Parse a group_members.perms JSON column into a validated perm list
+ *  (shared so every client surface parses identically). */
+export function parseGroupPerms(raw: string): GroupPerm[] {
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((p) => GROUP_PERMS.includes(p)) : [];
+  } catch { return []; }
+}
+
 /** Password policy minimum (mirrored client-side — do not hardcode). */
 export const MIN_PASSWORD = 10;
 

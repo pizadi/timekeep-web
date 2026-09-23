@@ -18,8 +18,12 @@ import LogView from './views/LogView';
 import MapView from './views/MapView';
 import SocialView from './views/SocialView';
 import SettingsView from './views/SettingsView';
+import ChatDock from './components/ChatDock';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
+import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer } from './lib/actions';
+import { GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../shared/constants';
+import type { Project, Task } from './lib/store';
 
 // chart.js is only used here — lazy-loading roughly halves the initial bundle
 // (audit: 441 KB eager for a time tracker)
@@ -188,6 +192,7 @@ function Shell({ route }: { route: string }) {
         />
       )}
       <Toasts />
+      <ChatDock />
     </div>
   );
 }
@@ -200,24 +205,141 @@ function navigateHome(): void {
   go(pathForView(store.get().view));
 }
 
+// Tasks view (main content area): a read-light browser over the same data the
+// sidebar edits — ordered NEWEST → OLDEST (creation recency), independent of
+// the sidebar's manual position ordering. Selecting a row syncs the sidebar,
+// Map and log pickers; full editing (rename/move/delete) lives in the sidebar.
 function TreeMain() {
-  const selectedProjectId = useStore((s) => s.selectedProjectId);
   const projects = useStore((s) => s.projects);
-  const project = projects.find((p) => p.id === selectedProjectId);
+  const groups = useStore((s) => s.groups);
+  const selectedProjectId = useStore((s) => s.selectedProjectId);
+
+  const byNew = (a: { created_at: number }, b: { created_at: number }) => b.created_at - a.created_at;
+  const personal = projects.filter((p) => !p.group_id).sort(byNew);
+  const groupIds = [...new Set(projects.filter((p) => p.group_id).map((p) => p.group_id!))];
+
+  /** My perms inside the group that owns this project (null = personal). */
+  function permsFor(p: Project): GroupPerm[] | null {
+    if (!p.group_id) return null;
+    const g = groups.find((x) => x.id === p.group_id);
+    if (!g) return null;
+    return g.role === 'owner' ? [...GROUP_PERMS] : parseGroupPerms(g.perms);
+  }
+
   return (
     <div>
-      <div className="card">
-        <h3>{project ? project.name : 'Projects'}</h3>
-        <p className="muted" style={{ marginTop: 0 }}>
-          Your projects and tasks live in the sidebar — pick a task and press <span className="kbd">T</span> to start
-          tracking, or use the timer bar above. Open the <b>Map</b> to wire dependencies, or the <b>Dashboard</b> for
-          live charts. Everything syncs to every signed-in device within a second.
-        </p>
-        {!project && <p className="muted">Create your first project with the ＋ button in the sidebar.</p>}
+      <div className="card" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <h3 style={{ flex: 1, marginBottom: 0 }}>
+          Projects & tasks <span className="muted" style={{ fontWeight: 400 }}>— newest first</span>
+        </h3>
+        <button className="btn small primary" onClick={() => void addProject()}>＋ Project <span className="kbd" style={{ marginLeft: 4 }}>P</span></button>
+        <button className="btn small" disabled={!selectedProjectId}
+          title="New task in the selected project"
+          onClick={() => selectedProjectId && void addTask(selectedProjectId)}>＋ Task <span className="kbd" style={{ marginLeft: 4 }}>N</span></button>
       </div>
       <QuickStart />
+      {personal.map((p) => (
+        <ProjectBlock key={p.id} project={p} canEditTasks={permsFor(p) === null || permsFor(p)!.includes('edit_tasks')} />
+      ))}
+      {groupIds.map((gid) => {
+        const g = groups.find((x) => x.id === gid);
+        return (
+          <div key={gid}>
+            <div className="tree-section-title" title="Group project — visible to current members only">
+              👥 {g?.name ?? 'Group'}
+            </div>
+            {projects.filter((p) => p.group_id === gid).sort(byNew).map((p) => (
+              <ProjectBlock key={p.id} project={p} canEditTasks={permsFor(p)?.includes('edit_tasks') ?? false} />
+            ))}
+          </div>
+        );
+      })}
+      {personal.length === 0 && groupIds.length === 0 && (
+        <div className="card">
+          <p className="muted" style={{ margin: 0 }}>
+            No projects yet — press <span className="kbd">P</span> or use ＋ Project above to create one.
+          </p>
+        </div>
+      )}
     </div>
   );
+}
+
+/** One project card: header + its tasks, newest first. */
+function ProjectBlock({ project, canEditTasks }: { project: Project; canEditTasks: boolean }) {
+  const tasks = useStore((s) => s.tasks);
+  const list = tasks.filter((t) => t.project_id === project.id)
+    .sort((a, b) => b.created_at - a.created_at);
+  return (
+    <div className="card" style={{ padding: '8px 12px 10px' }}>
+      <div className="row" role="button" tabIndex={0} style={{ paddingLeft: 4 }}
+        onClick={() => store.selectProject(project.id)}
+        onKeyDown={(e) => { if (e.key === 'Enter') store.selectProject(project.id); }}>
+        <span className="chip" style={{ background: project.color }} aria-hidden />
+        <span className="grow"><b>{project.name}</b>{project.archived ? <span className="muted"> (archived)</span> : ''}</span>
+        <span className="muted" style={{ fontSize: 12 }} title="Created">{fmtCreated(project.created_at)}</span>
+        {canEditTasks && (
+          <button className="icon-btn" title="Add task (N)" aria-label={`Add task to ${project.name}`}
+            onClick={(e) => { e.stopPropagation(); void addTask(project.id); }}>＋</button>
+        )}
+      </div>
+      {list.map((t) => <TaskRow key={t.id} task={t} canEdit={canEditTasks} />)}
+      {list.length === 0 && <div className="muted" style={{ padding: '2px 8px 4px 24px', fontSize: 13 }}>No tasks yet.</div>}
+    </div>
+  );
+}
+
+/** One task row with its subtasks (expanded while selected). */
+function TaskRow({ task, canEdit }: { task: Task; canEdit: boolean }) {
+  const subtasks = useStore((s) => s.subtasks);
+  const selectedTaskId = useStore((s) => s.selectedTaskId);
+  const running = useStore((s) => s.running);
+  const sbs = subtasks.filter((s) => s.task_id === task.id);
+  const doneCount = sbs.filter((s) => !!s.done).length;
+  const pct = sbs.length ? Math.round((doneCount / sbs.length) * 100) : null;
+  const isRunning = running?.task_id === task.id;
+  const selected = selectedTaskId === task.id;
+  return (
+    <div>
+      <div className={`row${selected ? ' selected' : ''}`} role="treeitem" aria-selected={selected} tabIndex={0}
+        style={{ paddingLeft: 24 }}
+        onClick={() => store.selectTask(task.id)}
+        onKeyDown={(e) => { if (e.key === 'Enter') store.selectTask(task.id); }}>
+        {isRunning && <span className="dot-running" aria-label="tracking" />}
+        <input type="checkbox" checked={!!task.done} aria-label={`Done: ${task.name}`} disabled={!canEdit}
+          onClick={(e) => e.stopPropagation()} onChange={() => void toggleTaskDone(task)} />
+        <span className={`grow ${task.done ? 'done-text' : ''}`} title={task.name}>{task.name}</span>
+        {pct !== null && <span className="sub" aria-label={`${pct}% of subtasks done`}>{pct}%</span>}
+        <span className="muted" style={{ fontSize: 12 }} title="Created">{fmtCreated(task.created_at)}</span>
+        <button className="icon-btn" title="Timer (T)" aria-label={`Start timer on ${task.name}`}
+          onClick={(e) => { e.stopPropagation(); void toggleTaskTimer(task.id); }}>{isRunning ? '■' : '▶'}</button>
+        {canEdit && (
+          <button className="icon-btn" title="Add subtask (S)" aria-label={`Add subtask to ${task.name}`}
+            onClick={(e) => { e.stopPropagation(); void addSubtask(task.id); }}>＋</button>
+        )}
+      </div>
+      {selected && sbs.map((sb) => (
+        <div key={sb.id} className="row" style={{ paddingLeft: 42, minHeight: 26 }}>
+          <input type="checkbox" checked={!!sb.done} aria-label={`Done: ${sb.name}`} disabled={!canEdit}
+            onChange={() => void toggleSubtaskDone(sb)} />
+          <span className={`grow ${sb.done ? 'done-text' : ''}`}>{sb.name}</span>
+          <button className="icon-btn" title="Track this subtask" aria-label={`Track subtask ${sb.name}`}
+            onClick={(e) => { e.stopPropagation(); void toggleSubtaskTimer(task.id, sb.id); }}>
+            {running?.subtask_id === sb.id ? '■' : '▶'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function fmtCreated(ts: number): string {
+  const d = new Date(ts);
+  const diffDays = Math.floor((Date.now() - ts) / 86_400_000);
+  if (diffDays <= 0) return 'today';
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function QuickStart() {
@@ -276,10 +398,11 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           <tr><td><span className="kbd">N</span></td><td>New task (context-aware)</td></tr>
           <tr><td><span className="kbd">S</span></td><td>New subtask on the selected task</td></tr>
           <tr><td><span className="kbd">T</span></td><td>Toggle timer on selection</td></tr>
+          <tr><td><span className="kbd">R</span></td><td>Resume tracking on the last task</td></tr>
           <tr><td><span className="kbd">F2</span></td><td>Rename selection</td></tr>
           <tr><td><span className="kbd">Delete</span></td><td>Delete with 5s undo</td></tr>
           <tr><td><span className="kbd">Ctrl/Cmd</span> + <span className="kbd">K</span></td><td>Quick find</td></tr>
-          <tr><td><span className="kbd">1</span>–<span className="kbd">4</span></td><td>Switch views</td></tr>
+          <tr><td><span className="kbd">1</span>–<span className="kbd">5</span></td><td>Switch views</td></tr>
           <tr><td><span className="kbd">Enter</span></td><td>Open / commit</td></tr>
           <tr><td><span className="kbd">?</span></td><td>This overlay</td></tr>
         </tbody></table>

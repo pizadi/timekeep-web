@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
 import { api, nowMs, serverOffsetMs } from '../lib/api';
 import { fmtHMS } from '../lib/time';
+import { resumeLastTask } from '../lib/actions';
 import { SESSION_RULES } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 
 export default function TimerBar() {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
+  const recentIds = useStore((s) => s.recentTaskIds);
   const subtasks = useStore((s) => s.subtasks);
   const pomo = useStore((s) => s.pomo);
   const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
@@ -20,6 +22,8 @@ export default function TimerBar() {
   const task = running ? tasks.find((t) => t.id === running.task_id) : null;
   const subtask = running?.subtask_id ? subtasks.find((sb) => sb.id === running.subtask_id) ?? null : null;
   const runningLabel = task ? (subtask ? `${task.name} ▸ ${subtask.name}` : task.name) : 'Unknown task';
+  // "most recently tracked task" (R shortcut / Resume button)
+  const lastTask = recentIds.length > 0 ? tasks.find((t) => t.id === recentIds[0]) ?? null : null;
 
   // elapsed computed client-side from authoritative started_at + server offset (FR-S2);
   // keeps ticking even when the WS drops. Deps are [running] only — depending on
@@ -107,6 +111,13 @@ export default function TimerBar() {
         {pomoEnabled
           ? <>Pomodoro on — press <b style={{ margin: '0 6px' }}>T</b> on a selected task to start a focus block</>
           : <>No timer running — press <b style={{ margin: '0 6px' }}>T</b> on a selected task</>}
+        {lastTask && (
+          <button className="btn small" style={{ marginLeft: 10 }}
+            title="Resume tracking on the last task (R)"
+            onClick={() => void resumeLastTask()}>
+            ▶ Resume “{lastTask.name.length > 24 ? `${lastTask.name.slice(0, 23)}…` : lastTask.name}”
+          </button>
+        )}
       </div>
     );
   }

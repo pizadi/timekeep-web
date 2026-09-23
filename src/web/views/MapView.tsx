@@ -138,14 +138,16 @@ export default function MapView() {
       drag.current = null;
     }
     if (wiring) {
-      // dropping anywhere on the target card counts as the target (FR-M2)
+      // wiring direction = drag direction: dropping port-node A onto B means
+      // B DEPENDS ON A (the finished edge leaves A's right handle and the
+      // arrowhead points the way you dragged)
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const nodeG = el?.closest('[data-node]');
       const targetId = nodeG?.getAttribute('data-node');
       if (targetId && targetId !== wiring.from) {
         try {
-          const res = await api<{ dependency: any }>(`/tasks/${wiring.from}/deps`, {
-            method: 'POST', body: { depends_on_id: targetId }
+          const res = await api<{ dependency: any }>(`/tasks/${targetId}/deps`, {
+            method: 'POST', body: { depends_on_id: wiring.from }
           });
           store.upsertDep(res.dependency);
         } catch (err: any) {
@@ -252,7 +254,7 @@ export default function MapView() {
         <Dropdown style={{ width: 220 }} ariaLabel="Map project selector" value={selectedProjectId ?? ''}
           onChange={(v) => store.selectProject(v)}
           options={projects.filter((p) => !p.archived).map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))} />
-        <span className="muted">Drag a node's <b>●</b> port onto another task to add “depends on”. Click an edge to remove it. Ctrl+wheel zooms.</span>
+        <span className="muted">Drag a node's <b>●</b> port onto another task — the dropped task <b>depends on</b> the port's task (the arrow follows your drag). Click an edge to remove it. Ctrl+wheel zooms.</span>
         <div className="spacer" />
         <button className="btn small" onClick={resetLayout}>Reset layout</button>
       </div>
@@ -268,22 +270,38 @@ export default function MapView() {
           onPointerUp={onSvgPointerUp}
         >
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+            <defs>
+              {/* arrowheads: progression flows prerequisite → dependent (FR-M6) */}
+              <marker id="map-arrow-met" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth={6} markerHeight={6} orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" className="map-arrow met" />
+              </marker>
+              <marker id="map-arrow-unmet" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth={6} markerHeight={6} orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" className="map-arrow unmet" />
+              </marker>
+            </defs>
             {/* edges — real path hit-testing via a fat invisible stroke overlay (FR-M3) */}
             {projectDeps.map((d) => {
-              const a = layout[d.depends_on_id];
-              const b = layout[d.task_id];
+              const a = layout[d.depends_on_id];   // prerequisite
+              const b = layout[d.task_id];         // dependent (arrow points here)
               if (!a || !b) return null;
               const hA = nodeHeight(projectTasks.find((t) => t.id === d.depends_on_id)!) / 2;
               const hB = nodeHeight(projectTasks.find((t) => t.id === d.task_id)!) / 2;
-              const x1 = a.x + NODE_W, y1 = a.y + hA;
-              const x2 = b.x, y2 = b.y + hB;
+              const y1 = a.y + hA, y2 = b.y + hB;
+              // attach to the sides actually facing each other — freely dragged
+              // (persisted) layouts may reverse the column order
+              const dir = (b.x + NODE_W / 2) >= (a.x + NODE_W / 2) ? 1 : -1;
+              const x1 = dir === 1 ? a.x + NODE_W : a.x;
+              const x2 = dir === 1 ? b.x - 7 : b.x + NODE_W + 7; // leave room for the arrowhead
               const mid = (x1 + x2) / 2;
               const path = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
               const src = projectTasks.find((t) => t.id === d.depends_on_id);
               const unmet = src && !src.done;
               return (
                 <g key={`${d.task_id}-${d.depends_on_id}`} data-edge>
-                  <path className={`map-edge ${unmet ? 'unmet' : 'met'}`} d={path} />
+                  <path className={`map-edge ${unmet ? 'unmet' : 'met'}`} d={path}
+                    markerEnd={`url(#map-arrow-${unmet ? 'unmet' : 'met'})`} />
                   <path d={path} stroke="transparent" strokeWidth={14} fill="none" style={{ cursor: 'pointer' }}
                     tabIndex={0} role="button" aria-label={`Remove dependency ${src?.name ?? ''} → ${projectTasks.find((t) => t.id === d.task_id)?.name ?? ''}`}
                     onPointerDown={(e) => e.stopPropagation()}
