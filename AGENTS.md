@@ -4,6 +4,18 @@ Time tracking SPA (React/Vite) + API on Cloudflare Workers, D1, and Durable Obje
 One Worker serves everything: Hono handles `/api/*`, Static Assets serve the SPA
 (`run_worker_first: true`). Vite root is `src/web`; the SPA builds to `dist/client`.
 
+Detailed user-facing docs live in `docs/` (index, development, architecture,
+testing, deployment, admin-guide) — keep them in sync with real behavior.
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR: `verify`
+(typecheck + tests + build), `version-sync` (`scripts/check-version.mjs`
+guards package.json ↔ wrangler.jsonc `__APP_VERSION__`), and a blocking `e2e`
+job — `scripts/run-e2e.sh` wipes local state (only when `CI=true`), migrates,
+starts `wrangler dev`, and runs all ten e2e scripts in order, with one
+automatic retry for the proxy flake.
+
 ## Commands
 
 ```bash

@@ -1,0 +1,145 @@
+# Architecture
+
+How TimeKeep Web works, in depth. Requirement IDs (`FR-*`, `NFR-*`) refer to the
+requirements spec; coverage tables live in
+[requirement-coverage.md](requirement-coverage.md).
+
+## One Worker serves everything
+
+A single Cloudflare Worker is the whole backend and the whole frontend host:
+
+- `src/worker/index.ts` mounts a [Hono](https://hono.dev) app for `/api/*`
+  (including WebSocket upgrades at `/api/ws`).
+- Cloudflare **Static Assets** serve the built SPA (`dist/client`) with an
+  SPA fallback (`not_found_handling: "single-page-application"`).
+- `run_worker_first: true` sends every request through the Worker first, so
+  security headers apply uniformly to the SPA shell too (a deliberate
+  latency/cost tax — see trade-offs).
+
+Route modules (`src/worker/routes/`): `auth`, `me`, `admin`, `projects`,
+`tasks`, `sessions`, `timer`, `reports`, `export`, `friends`, `groups`,
+`chat`, `misc` (bootstrap/settings/layout/sync/version).
+
+## Storage: D1, KV, and the UserHub Durable Object
+
+| Store | Used for |
+|---|---|
+| **D1** (SQLite) | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters |
+| **KV** | cold rate-limit counters (per-IP / per-email buckets), misc cache |
+| **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter |
+
+## Single-timer invariant
+
+A user has at most one running timer, enforced twice:
+
+1. **Database** — a partial unique index on `time_sessions(user_id) WHERE
+   ended_at IS NULL`, so two rows can never both be open.
+2. **UserHub DO** — the operational authority. Timer start/stop/switch go
+   through the DO, which serializes them, so two devices can't race a start
+   (the loser gets `409 already_running`).
+
+Timer ticks are **never written** — a 24 h running session costs ~2 DB rows
+(open + close). Live duration is computed client-side from `started_at`.
+
+## Pomodoro
+
+`settings.pomodoro.enabled` (default off) turns the plain timer into a soft
+focus cycle owned by the DO: `idle → focus → decide → ready` with explicit
+breaks and skips. Soft timeouts only — nothing ever auto-stops; disabling
+mid-cycle resets the cycle but keeps the timer running. Sessions started in
+focus are tagged `source: 'pomodoro'`; `/timer/switch` re-anchors the cycle.
+
+## Sync & events
+
+Every mutation appends a row to `sync_log`, then the UserHub DO fans the event
+out to the user's connected devices over WebSockets (`src/worker/events.ts`,
+notified via `ctx.waitUntil`).
+
+- `sync_log` ids are **per-user AUTOINCREMENT**, so clients poll
+  `GET /api/sync?since=<lastId>` for reconnect deltas; a polling fallback
+  covers environments where WebSockets are blocked.
+- Events are **signals**: clients refetch the small social lists rather than
+  trusting payloads. The payload-carrying exceptions are `friend.timer`
+  (presence) and `group.message_*` (chat, relayed to open panels via a
+  `tk:group-message` CustomEvent).
+- The acting device **ignores its own WS echoes** (`ev.actor === deviceId`
+  guard in the store) — timer/pomodoro API responses carry `pomo`/`running`
+  payloads the caller must apply via `store.setPomo`/`store.setRunning`, or
+  the UI state goes stale.
+- **Transactionality**: the UserHub DO writes entity rows and events in ONE D1
+  batch; route handlers use two back-to-back batches (entity write, then
+  events). A crash between the two can drop the event — clients recover via
+  the reconcile poll / refetch.
+- Cross-user fan-out (friends, groups) uses `emitToUsers`: ONE sync_log row
+  per recipient + a notify of each recipient's UserHub.
+
+## Time handling
+
+- Instants are **epoch-ms UTC everywhere** — DB, API, clients.
+- Day/week bucketing for reports uses the `Intl`-based engine in
+  `src/shared/time.ts` (per-user IANA timezone + week-start day), pushed into
+  SQL via a `json_each()` day table — aggregation stays in the database and
+  API clients receive report buckets, never raw session rows.
+- DST edge cases are locked by unit-test fixtures (Tehran / New York) in
+  `test/time.test.ts`.
+
+## API surface
+
+- `src/shared/validation.ts` + `src/worker/validators.ts` — every request
+  body is Zod-validated; subtasks are exactly two levels deep (enforced in
+  validators and routes).
+- Ownership checks are always `WHERE user_id = ?`; foreign resources 404.
+- State-changing requests are CSRF-guarded (origin check + token +
+  `sec-fetch-site`).
+
+## Security model
+
+- **Password hashing**: PBKDF2 via `pbkdf2Chain` in `src/worker/auth.ts` —
+  600,000 iterations in production, chained as 6 × 100k rounds because the
+  Workers runtime caps a single `deriveBits` call at 100k. This matches the
+  work factor of PBKDF2-600k but is a chained construction (see trade-offs).
+- **Sessions**: opaque tokens, stored hashed, rotation on privilege changes,
+  list + revoke in the panel; deactivation/password-reset revokes everything.
+- **Rate limits**: bucketed (login per-IP/per-identifier, admin, token
+  endpoints, heavy API, social actions). The hot per-user `api_user` counter
+  lives in the user's UserHub DO (atomic); KV is the fallback and the counter
+  for cold per-IP/per-email limits.
+- **Accounts**: admin-managed — there is no self-signup (`/auth/signup`
+  returns 404 and no UI exists). Login identifier is the `username` column;
+  `users.email` is only an optional reset-mail address.
+- **Headers/CSP**: strict headers on every response; CSP carries
+  `style-src 'unsafe-inline'` for React inline styles (documented trade-off).
+
+## Social layer (friends → groups)
+
+- Friend-visible projects require `visibility='friends' AND group_id IS NULL`
+  — the two sharing mechanisms (friends ↔ groups) never cross.
+- Group authorization lives in `src/worker/group-auth.ts` (`requireGroup` →
+  404 for outsiders, `requireGroupPerm` → 403) over per-member permission
+  flags (`GROUP_PERMS` in shared/constants, stored as JSON on
+  `group_members.perms`); the owner implicitly has all permissions and is the
+  only one who grants/revokes them.
+- Group-project access resolution (`resolveProjectAccess` / `requireEditTasks`)
+  lives in `src/worker/access.ts` — group **tasks** are shared (any member
+  with `edit_tasks` edits), sessions stay strictly user-owned.
+- Presence/chat never expose raw session rows or notes; reports are buckets
+  only.
+- Group-project/group-task deletes are permanent (no undo payload across
+  member boundaries); personal deletes keep the 5-second undo.
+
+## Project layout
+
+```
+migrations/0001_init.sql    D1 schema (numbered, additive)
+src/shared/                 isomorphic code: ULID, timezone engine, validation
+src/worker/index.ts         Worker entry: Hono app + UserHub DO + cron
+src/worker/do/user-hub.ts   UserHub DO: WS hub, timer authority, pomodoro
+src/worker/routes/          API route modules (one per domain)
+src/web/                    React SPA: views/, components/, lib/
+test/                       Vitest unit tests (DST fixtures, validators, …)
+e2e/                        end-to-end verification scripts (see testing.md)
+scripts/                    CI helpers (version check, e2e runner)
+```
+
+More detail on the trade-offs behind these decisions:
+[requirement-coverage.md](requirement-coverage.md).
