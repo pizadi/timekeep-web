@@ -66,7 +66,7 @@
 		// CI sets the real deploy SHA; default keeps local dev honest
 		"__BUILD_SHA__": "\"dev\"",
 		// app semver — bump together with package.json "version" on release
-		"__APP_VERSION__": "\"0.3.0.dev3\""
+		"__APP_VERSION__": "\"0.3.0\""
 	},
 	"vars": {
 		// KDF iterations (NFR-3: >= 600_000). Workers caps a single PBKDF2 deriveBits

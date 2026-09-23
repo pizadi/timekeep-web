@@ -129,5 +129,8 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 
 - Commit messages are `<version> — <one-line description>`: the version being committed, an
   em dash, then the description (optionally 1–2 body lines after that).
-- Detailed change notes go in `CHANGELOG.md` (included in the same commit), not in the
-  commit message.
+- Each RELEASE (non-dev `x.x.x`) version ships a `CHANGELOG.md` that briefly describes
+  everything changed in the repo since the previous release.
+- Changelogs don't accumulate — the newest release's changelog overwrites the file
+  (git history keeps the old ones).
+- `AGENTS.md` is updated with every major change in the codebase.
