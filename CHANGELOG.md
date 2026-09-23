@@ -1,44 +1,31 @@
 # Changelog
 
-## 0.3.0 — 2026-09-23
+## 0.4.0 — 2026-09-23
 
-Everything since 0.2.0:
+Everything since 0.3.0:
 
-- **Chat dock.** Group chats moved out of the group detail into collapsible
-  docked windows at the bottom-right — one window per group (launcher 💬 with
-  unread badges, ≤3 expanded at once, state persisted). Message lists scroll,
-  lazy-load older history at the top, and autoscroll on new messages; live
-  delivery, edit/delete and read-marking unchanged.
-- **Groups UI.** Group detail is a header (color, name, role, member count,
-  Chat/Leave/Delete) plus internal tabs — Projects | Members | Invites.
-- **Dashboard drill-downs.** The donut is separated by subtask (project-colored
-  slices, no legend, hover = Task ▸ Subtask + time; `/reports/summary`
-  gained `donut_subtasks[]`). New daily summary card backed by
-  `GET /reports/day`: ‹ Prev · date · Next › navigation, day total with a live
-  running-session boost, per-project minutes, per-task rows with subtask
-  breakdown.
-- **Tasks view.** The main content area lists projects and tasks newest-first
-  (creation recency) — independent of the sidebar's manual ordering. Rows
-  select, toggle done, start/stop the timer, add tasks/subtasks, and expand
-  subtasks (toggle + per-subtask timer).
-- **Shortcuts.** `P` (new project) and `S` (new subtask) now show kbd hints on
-  the buttons; new global `R` (and a ▶ Resume button in the idle timer bar)
-  continues tracking on the most recently tracked task. Help overlay corrected
-  (views are 1–5) and documents all of it.
-- **Map.** Dependency edges carry arrowheads (prerequisite → dependent,
-  warn-colored when unmet) and attach to the sides actually facing each other;
-  wiring flipped to match the right-side handle — dragging A's port onto B
-  means B depends on A, the arrow following the drag.
-- **Log pagination.** `GET /sessions` is page-based (`page`, `page_size`,
-  `total`); the log renders Prev/Next with first/last jumps and a page
-  indicator, filters reset to page 1, no more "Load more" DOM accumulation.
-- **Login crash fix.** Logging in from an expired session rendered the shell
-  before boot filled the profile → "Something broke" until refresh; the app
-  now waits for the user profile. The error-boundary fallback shows the
-  exception message.
-- **Sign-out + mobile sidebar.** ⏻ sign-out button in the topbar (revokes the
-  session, always clears local state). The off-canvas sidebar can be hidden
-  again on narrow screens (tap-outside backdrop + in-drawer close button).
-- **Tooling/docs.** Version strings standardized to `x.x.x` / `x.x.x.devN`;
-  commit messages are `<version> — <description>`; `AUDIT.md` removed (its
-  fixes shipped); new focused e2e `e2e/pagination-day-check.mjs`.
+- **CI (GitHub Actions).** New `.github/workflows/ci.yml`, running on every
+  push/PR: `verify` (typecheck for both tsc projects + unit tests + SPA
+  build), `version-sync` (`scripts/check-version.mjs` fails when
+  `package.json` and the `__APP_VERSION__` define in `wrangler.jsonc` drift
+  apart), and a blocking `e2e` job — `scripts/run-e2e.sh` wipes local state
+  (CI only), applies migrations, starts `wrangler dev`, runs all ten e2e
+  scripts in dependency order, and retries once to absorb the known
+  wrangler-dev proxy flake.
+- **E2E fix.** `e2e/subtask-sessions.sh` could never pass on a fresh
+  database: it posted a manual session 10 minutes into the past for a user
+  created seconds earlier, tripping the `start is before the account
+  existed` guard. It now uses future-tolerant windows like `smoke-test.sh`,
+  and its print-only checks (four switch segments, no links to a deleted
+  subtask) became hard asserts.
+- **Shortened README, new `docs/` directory.** The README keeps the general
+  description and the local/Cloudflare quick starts; everything in depth
+  moved to `docs/`: `development.md` (dev servers, `.dev.vars`, migrations
+  and the D1 table-rebuild gotcha, versioning & release process, commit
+  format), `architecture.md` (one-Worker design, single-timer invariant,
+  sync/event fan-out, timezone engine, security model, social layer),
+  `testing.md` (unit tests + the full e2e catalog with run order),
+  `deployment.md` (resource setup, config reference, upgrades, rollback,
+  admin recovery), `admin-guide.md` (users, groups & permissions, backups),
+  and the existing `requirement-coverage.md`. `e2e/README.md` is now a
+  pointer into `docs/testing.md`.
