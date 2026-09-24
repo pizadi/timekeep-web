@@ -127,6 +127,50 @@ notified via `ctx.waitUntil`).
 - Group-project/group-task deletes are permanent (no undo payload across
   member boundaries); personal deletes keep the 5-second undo.
 
+## Responsive & touch UI
+
+The SPA adapts to three width tiers and two pointer classes; the tiers are
+defined once in `styles.css` (header comment) and mirrored by `BREAKPOINTS`
+in `src/web/lib/responsive.ts`:
+
+- **< 640 px (phone)** — single column; modals render as full-screen sheets
+  (`100dvh`); the session log renders as stacked cards instead of its 8-column
+  table; the daily bar chart keeps a 520 px minimum width and scrolls inside
+  its card; the topbar hides the account name.
+- **640–1023 px (tablet)** — the project sidebar becomes an off-canvas drawer
+  (hamburger + backdrop + close button).
+- **≥ 1024 px (desktop)** — persistent sidebar, anchored popover menus.
+
+Pointer classes (CSS media queries, no JS sniffing):
+
+- `(pointer: coarse)` — touch-target scale: 40–44 px icon buttons/rows, 16 px
+  inputs (prevents iOS focus zoom), keyboard-hint chips (`.kbd` in buttons)
+  and view-tab shortcut hints hidden.
+- `(hover: hover) and (pointer: fine)` — all `:hover` effects are gated here
+  (no sticky hover on touch), and truncated text unwraps on hover.
+
+Every interaction has a non-keyboard path:
+
+- Sidebar rows collapse secondary actions (color, reorder, visibility,
+  archive, delete, rename) into a per-row **⋯ menu** below 1024 px
+  (`RowMenu`: anchored popover on desktop, bottom sheet on phones); the timer
+  stays inline. Rename is reachable without F2/double-click.
+- The Map has zoom buttons and two-pointer pinch (capture-phase pointer
+  tracking that cancels in-flight drags), plus a per-node **⋯ menu** so
+  right-click/double-click are never required.
+- The timer bar's idle copy switches between "press **T**…" and "tap ▶…" via
+  `useHasHover()`.
+
+Truncation policy: tight strips keep the one-line ellipsis; hover-capable
+devices **unwrap the full text on hover** (chosen over hover-scrollbars — no
+layout shift, nothing hidden); touch clamps `.row .grow` to two lines so
+truncation is visible; every truncation site carries a `title` tooltip.
+
+Mobile platform hygiene: `100dvh` app shell, `env(safe-area-inset-*)` padding
+on the topbar/toasts/chat dock, `touch-action: manipulation` on controls
+(the map canvas keeps `touch-action: none` for pan/wiring), toasts lift above
+the chat launcher on phones.
+
 ## Project layout
 
 ```

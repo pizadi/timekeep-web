@@ -144,6 +144,15 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - No native `<datalist>` pickers — use `src/web/components/Combobox.tsx`. Inside modals/grids,
   `.input` needs `min-width: 0` and `1fr` tracks must be `minmax(0, 1fr)` (a `datetime-local`'s
   intrinsic width overflows the dialog otherwise — the v0.1.0 dialog-clip fix).
+- Responsive UI (details in `docs/architecture.md`): three width tiers (<640 phone,
+  640–1023 tablet/drawer, ≥1024 desktop) live in `styles.css` and mirror `BREAKPOINTS`
+  in `src/web/lib/responsive.ts`. `(pointer: coarse)` scales touch targets (44px class)
+  and forces 16px inputs (iOS focus zoom); all `:hover` effects are gated behind
+  `(hover: hover)`. Every keyboard/hover interaction has a touch path — sidebar row ⋯
+  menus, map node ⋯ menu + pinch/zoom buttons, log card rows on phones, full-screen
+  modal sheets. Truncation policy: ellipsis → hover-unwrap on fine pointers, 2-line
+  clamp on touch, `title` tooltip on every truncation site. Don't add hover- or
+  keyboard-only affordances without their touch equivalent.
 
 ## Commits
 
