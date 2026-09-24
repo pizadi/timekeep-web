@@ -3,10 +3,13 @@
 // Delete-with-undo toast, no modal for renames; typed confirmation only for
 // project deletion (FR-P1). Subtask toggling never touches the timer (FR-T2).
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api } from '../lib/api';
 import { PALETTE, GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../../shared/constants';
 import { openPrompt } from '../components/PromptModal';
+import { useModalA11y } from '../lib/modal';
+import { useBreakpoint } from '../lib/responsive';
 import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer, resumeLastTask } from '../lib/actions';
 import type { Project } from '../lib/store';
 
@@ -24,6 +27,10 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const [renaming, setRenaming] = useState<{ kind: 'project' | 'task' | 'subtask'; id: string } | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [colorFor, setColorFor] = useState<string | null>(null);
+  // narrow screens: secondary row actions collapse into a ⋯ menu (targets get
+  // cramped and double-click/right-click don't exist on touch anyway)
+  const [menu, setMenu] = useState<{ kind: 'project' | 'task'; id: string; x: number; y: number } | null>(null);
+  const compact = useBreakpoint() !== 'desktop';
 
   const personal = projects.filter((p) => !p.archived && !p.group_id);
   const archived = projects.filter((p) => !!p.archived && !p.group_id);
@@ -191,6 +198,13 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     };
   }
 
+  /** Anchor the ⋯ action menu just below its button (viewport-clamped in RowMenu). */
+  function openMenu(kind: 'project' | 'task', id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenu({ kind, id, x: r.left, y: r.bottom + 4 });
+  }
+
   /** One project (personal or group) with permission-gated controls. */
   function projectRow(p: Project) {
     const perms = permsFor(p);           // null = personal (full control)
@@ -209,29 +223,36 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
           ) : (
             <span className="grow" title={p.name}>{p.name}</span>
           )}
-          {canManage && (
-            <button className="icon-btn" aria-label={`Color for ${p.name}`} title="Color"
-              onClick={(e) => { e.stopPropagation(); setColorFor(colorFor === p.id ? null : p.id); }}>◐</button>
-          )}
-          {!isGroup && (
+          {compact ? (
+            <button className="icon-btn" aria-label={`More actions for ${p.name}`} title="More actions"
+              onClick={(e) => openMenu('project', p.id, e)}>⋯</button>
+          ) : (
             <>
-              <button className="icon-btn" aria-label={`Move ${p.name} up`} title="Move up"
-                onClick={(e) => { e.stopPropagation(); moveProject(p.id, -1); }}>↑</button>
-              <button className="icon-btn" aria-label={`Move ${p.name} down`} title="Move down"
-                onClick={(e) => { e.stopPropagation(); moveProject(p.id, 1); }}>↓</button>
-              <button className="icon-btn" aria-label={`Visibility for ${p.name}: ${p.visibility === 'friends' ? 'friends' : 'private'}`}
-                title={p.visibility === 'friends' ? 'Visible to friends — click to make private' : 'Private — click to share with friends'}
-                onClick={(e) => { e.stopPropagation(); setVisibility(p.id, p.visibility !== 'friends'); }}>
-                {p.visibility === 'friends' ? '👀' : '🔒'}
-              </button>
-            </>
-          )}
-          {canManage && (
-            <>
-              <button className="icon-btn" aria-label={`Archive ${p.name}`} title="Archive"
-                onClick={(e) => { e.stopPropagation(); setArchive(p.id, true); }}>📦</button>
-              <button className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete (typed confirmation)"
-                onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}>🗑</button>
+              {canManage && (
+                <button className="icon-btn" aria-label={`Color for ${p.name}`} title="Color"
+                  onClick={(e) => { e.stopPropagation(); setColorFor(colorFor === p.id ? null : p.id); }}>◐</button>
+              )}
+              {!isGroup && (
+                <>
+                  <button className="icon-btn" aria-label={`Move ${p.name} up`} title="Move up"
+                    onClick={(e) => { e.stopPropagation(); moveProject(p.id, -1); }}>↑</button>
+                  <button className="icon-btn" aria-label={`Move ${p.name} down`} title="Move down"
+                    onClick={(e) => { e.stopPropagation(); moveProject(p.id, 1); }}>↓</button>
+                  <button className="icon-btn" aria-label={`Visibility for ${p.name}: ${p.visibility === 'friends' ? 'friends' : 'private'}`}
+                    title={p.visibility === 'friends' ? 'Visible to friends — click to make private' : 'Private — click to share with friends'}
+                    onClick={(e) => { e.stopPropagation(); setVisibility(p.id, p.visibility !== 'friends'); }}>
+                    {p.visibility === 'friends' ? '👀' : '🔒'}
+                  </button>
+                </>
+              )}
+              {canManage && (
+                <>
+                  <button className="icon-btn" aria-label={`Archive ${p.name}`} title="Archive"
+                    onClick={(e) => { e.stopPropagation(); setArchive(p.id, true); }}>📦</button>
+                  <button className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete (typed confirmation)"
+                    onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}>🗑</button>
+                </>
+              )}
             </>
           )}
         </div>
@@ -270,13 +291,20 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                 {pct !== null && <span className="sub" aria-label={`${pct}% of subtasks done`}>{pct}%</span>}
                 <button className="icon-btn" aria-label={`Start timer on ${t.name}`} title="Timer (T)"
                   onClick={(e) => { e.stopPropagation(); toggleTaskTimer(t.id); }}>{isRunning ? '■' : '▶'}</button>
-                {canEditTasks && (
-                  <>
-                    <button className="icon-btn" aria-label={`Add subtask to ${t.name}`} title="Add subtask (S)"
-                      onClick={(e) => { e.stopPropagation(); addSubtask(t.id); }}>＋</button>
-                    <button className="icon-btn" aria-label={`Delete ${t.name}`} title="Delete (undo for 5s)"
-                      onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>🗑</button>
-                  </>
+                {compact ? (
+                  canEditTasks && (
+                    <button className="icon-btn" aria-label={`More actions for ${t.name}`} title="More actions"
+                      onClick={(e) => openMenu('task', t.id, e)}>⋯</button>
+                  )
+                ) : (
+                  canEditTasks && (
+                    <>
+                      <button className="icon-btn" aria-label={`Add subtask to ${t.name}`} title="Add subtask (S)"
+                        onClick={(e) => { e.stopPropagation(); addSubtask(t.id); }}>＋</button>
+                      <button className="icon-btn" aria-label={`Delete ${t.name}`} title="Delete (undo for 5s)"
+                        onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>🗑</button>
+                    </>
+                  )
                 )}
               </div>
               {sbs.map((sb) => (
@@ -316,7 +344,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="tree" role="tree" aria-label="Projects">
-      <div style={{ display: 'flex', gap: 6, padding: '2px 8px 8px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 8px 8px' }}>
         <button className="btn small primary" onClick={addProject}>＋ Project <span className="kbd" style={{ marginLeft: 4 }}>P</span></button>
         <button className="btn small" disabled={!selectedProjectId || !canAddTask}
           title={selectedProjectId && !canAddTask ? "You don't have the edit_tasks permission in this group" : 'New task (context-aware)'}
@@ -364,6 +392,74 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
           ))}
         </>
       )}
+
+      {menu && menuFor(menu)}
+    </div>
+  );
+
+  /** Resolves the open ⋯ menu to its row's action list. */
+  function menuFor(m: NonNullable<typeof menu>) {
+    const close = () => setMenu(null);
+    if (m.kind === 'project') {
+      const p = projects.find((x) => x.id === m.id);
+      if (!p) return null;
+      const isGroup = !!p.group_id;
+      const perms = permsFor(p);
+      const canManage = !isGroup || (perms?.includes('manage_projects') ?? false);
+      return (
+        <RowMenu x={m.x} y={m.y} label={`Actions for ${p.name}`} onClose={close}>
+          <button className="btn small" onClick={() => { close(); setRenaming({ kind: 'project', id: p.id }); }}>✎ Rename</button>
+          {canManage && (
+            <button className="btn small" onClick={() => { close(); setColorFor(colorFor === p.id ? null : p.id); }}>◐ Color…</button>
+          )}
+          {!isGroup && (
+            <>
+              <button className="btn small" onClick={() => { close(); moveProject(p.id, -1); }}>↑ Move up</button>
+              <button className="btn small" onClick={() => { close(); moveProject(p.id, 1); }}>↓ Move down</button>
+              <button className="btn small" onClick={() => { close(); setVisibility(p.id, p.visibility !== 'friends'); }}>
+                {p.visibility === 'friends' ? '🔒 Make private' : '👀 Share with friends'}
+              </button>
+            </>
+          )}
+          {canManage && (
+            <>
+              <button className="btn small" onClick={() => { close(); setArchive(p.id, true); }}>📦 Archive</button>
+              <button className="btn small danger" onClick={() => { close(); void deleteProject(p.id); }}>🗑 Delete project</button>
+            </>
+          )}
+        </RowMenu>
+      );
+    }
+    const t = tasks.find((x) => x.id === m.id);
+    if (!t) return null;
+    return (
+      <RowMenu x={m.x} y={m.y} label={`Actions for ${t.name}`} onClose={close}>
+        <button className="btn small" onClick={() => { close(); setRenaming({ kind: 'task', id: t.id }); }}>✎ Rename</button>
+        <button className="btn small" onClick={() => { close(); void addSubtask(t.id); }}>＋ Add subtask</button>
+        <button className="btn small danger" onClick={() => { close(); void deleteTask(t.id); }}>🗑 Delete task</button>
+      </RowMenu>
+    );
+  }
+}
+
+/** Action menu for a sidebar row: anchored popover on desktop, bottom sheet
+ *  on phones (positioning handled by .row-menu CSS). */
+function RowMenu({ x, y, label, onClose, children }: {
+  x: number; y: number; label: string; onClose: () => void; children: ReactNode;
+}) {
+  const phone = useBreakpoint() === 'phone';
+  const ref = useModalA11y(onClose);
+  const style: CSSProperties | undefined = phone ? undefined : {
+    left: Math.min(Math.max(8, x), window.innerWidth - 268),
+    top: Math.min(Math.max(8, y), window.innerHeight - 240),
+  };
+  return (
+    <div className="modal-overlay row-menu-overlay" onClick={onClose}
+      onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
+      <div ref={ref} className="modal row-menu" style={style} role="menu" aria-label={label}
+        onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
     </div>
   );
 }

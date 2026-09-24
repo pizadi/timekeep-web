@@ -10,6 +10,7 @@ import { LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 import Combobox from '../components/Combobox';
 import Dropdown, { ColorChip } from '../components/Dropdown';
+import { useBreakpoint } from '../lib/responsive';
 
 interface LogRow {
   id: string; task_id: string; subtask_id?: string | null; subtask_name?: string | null;
@@ -25,6 +26,7 @@ export default function LogView() {
   const running = useStore((s) => s.running);
   const reportsVersion = useStore((s) => s.reportsVersion);
   const tz = user.timezone;
+  const bp = useBreakpoint();
 
   const [rows, setRows] = useState<LogRow[]>([]);
   const [page, setPage] = useState(1);
@@ -128,88 +130,125 @@ export default function LogView() {
 
   return (
     <div>
-      <div className="card">
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label className="field" style={{ width: 170, marginBottom: 0 }}>
-            <span>Project</span>
-            <Dropdown ariaLabel="Filter by project" value={projectId}
-              onChange={(v) => { setProjectId(v); setTaskId(''); }}
-              options={[
-                { value: '', label: 'All projects', icon: '☰' },
-                ...projects.map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))
-              ]} />
-          </label>
-          <label className="field" style={{ width: 190, marginBottom: 0 }}>
-            <span>Task</span>
-            <Dropdown ariaLabel="Filter by task" value={taskId} onChange={(v) => setTaskId(v)}
-              options={[
-                { value: '', label: 'All tasks', icon: '☰' },
-                ...tasks.filter((t) => !projectId || t.project_id === projectId)
-                  .map((t) => ({ value: t.id, label: t.name, icon: <ColorChip color={projects.find((p) => p.id === t.project_id)?.color ?? '#888'} /> }))
-              ]} />
-          </label>
-          <label className="field" style={{ width: 150, marginBottom: 0 }}>
-            <span>From</span>
-            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </label>
-          <label className="field" style={{ width: 150, marginBottom: 0 }}>
-            <span>To</span>
-            <input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-          </label>
-          <label className="field" style={{ width: 170, marginBottom: 0 }}>
-            <span>Note search</span>
-            <input className="input" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="contains…" />
-          </label>
-          <div className="spacer" />
-          <button className="btn primary" onClick={() => setEditing('new')}>＋ Manual session</button>
-        </div>
+      <div className="card filters-grid">
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span>Project</span>
+          <Dropdown ariaLabel="Filter by project" value={projectId}
+            onChange={(v) => { setProjectId(v); setTaskId(''); }}
+            options={[
+              { value: '', label: 'All projects', icon: '☰' },
+              ...projects.map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))
+            ]} />
+        </label>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span>Task</span>
+          <Dropdown ariaLabel="Filter by task" value={taskId} onChange={(v) => setTaskId(v)}
+            options={[
+              { value: '', label: 'All tasks', icon: '☰' },
+              ...tasks.filter((t) => !projectId || t.project_id === projectId)
+                .map((t) => ({ value: t.id, label: t.name, icon: <ColorChip color={projects.find((p) => p.id === t.project_id)?.color ?? '#888'} /> }))
+            ]} />
+        </label>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span>From</span>
+          <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span>To</span>
+          <input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </label>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span>Note search</span>
+          <input className="input" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="contains…" />
+        </label>
+        <button className="btn primary span-2" style={{ justifySelf: 'start' }} onClick={() => setEditing('new')}>＋ Manual session</button>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Project</th><th>Task</th><th>Start</th><th>End</th>
-              <th className="num">Duration</th><th>Source</th><th>Note</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
+        {bp === 'phone' ? (
+          // phone: stacked cards — the 8-column table can't fit without hiding text
+          <div className="log-cards">
             {rows.map((r) => {
               const isRunning = running?.id === r.id;
               const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
               return (
-                <tr key={r.id} tabIndex={0}
-                  onDoubleClick={() => setEditing(r)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') setEditing(r);
-                    if (e.key === 'Delete' && !isRunning) del(r);
-                  }}>
-                  <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
-                  <td title={r.subtask_name ? `${r.task_name} ▸ ${r.subtask_name}` : r.task_name}>
-                    {r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
-                  </td>
-                  <td>{fmtDateTime(r.started_at, tz)}</td>
-                  <td>{isRunning ? <span className="muted">running…</span> : r.ended_at ? fmtClock(r.ended_at, tz) : ''}</td>
-                  <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>
-                  <td><span className={`badge ${r.source}`}>{r.source}</span></td>
-                  <td className="muted" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.note}</td>
-                  <td>
+                <div key={r.id} className="log-card" role="button" tabIndex={0}
+                  onClick={() => setEditing(r)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setEditing(r); }}>
+                  <div className="log-card-head">
+                    <span className="chip" style={{ background: r.project_color }} aria-hidden />
+                    <span className="grow">{r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}</span>
+                    {isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}m</b> : <b>{mins}m</b>}
+                  </div>
+                  <div className="log-card-meta">
+                    <span>{r.project_name}</span>
+                    <span aria-hidden>·</span>
+                    <span>{fmtDateTime(r.started_at, tz)} → {isRunning ? 'running…' : r.ended_at ? fmtClock(r.ended_at, tz) : '—'}</span>
+                    <span className={`badge ${r.source}`}>{r.source}</span>
+                  </div>
+                  {r.note && <div className="log-card-note">{r.note}</div>}
+                  <div className="log-card-actions">
                     <button className="btn ghost small" aria-label={`Edit session on ${r.task_name}`}
-                      onClick={() => setEditing(r)}>✎</button>
+                      onClick={(e) => { e.stopPropagation(); setEditing(r); }}>✎ Edit</button>
                     <button className="btn ghost small" aria-label={`Delete session on ${r.task_name}`}
                       disabled={isRunning}
-                      onClick={() => del(r)}>🗑</button>
-                  </td>
-                </tr>
+                      onClick={(e) => { e.stopPropagation(); del(r); }}>🗑</button>
+                  </div>
+                </div>
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 24 }}>
-                No sessions match these filters.
-              </td></tr>
+              <div className="muted" style={{ textAlign: 'center', padding: 24 }}>No sessions match these filters.</div>
             )}
-          </tbody>
-        </table>
+          </div>
+        ) : (
+          <div className="tbl-scroll">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Project</th><th>Task</th><th>Start</th><th>End</th>
+                  <th className="num">Duration</th><th>Source</th><th>Note</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const isRunning = running?.id === r.id;
+                  const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
+                  return (
+                    <tr key={r.id} tabIndex={0}
+                      onDoubleClick={() => setEditing(r)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') setEditing(r);
+                        if (e.key === 'Delete' && !isRunning) del(r);
+                      }}>
+                      <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
+                      <td title={r.subtask_name ? `${r.task_name} ▸ ${r.subtask_name}` : r.task_name}>
+                        {r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
+                      </td>
+                      <td>{fmtDateTime(r.started_at, tz)}</td>
+                      <td>{isRunning ? <span className="muted">running…</span> : r.ended_at ? fmtClock(r.ended_at, tz) : ''}</td>
+                      <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>
+                      <td><span className={`badge ${r.source}`}>{r.source}</span></td>
+                      <td className="muted" title={r.note || undefined} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.note}</td>
+                      <td>
+                        <button className="btn ghost small" aria-label={`Edit session on ${r.task_name}`}
+                          onClick={() => setEditing(r)}>✎</button>
+                        <button className="btn ghost small" aria-label={`Delete session on ${r.task_name}`}
+                          disabled={isRunning}
+                          onClick={() => del(r)}>🗑</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {rows.length === 0 && (
+                  <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 24 }}>
+                    No sessions match these filters.
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
         <div className="pagination">
           <button className="btn small" disabled={page <= 1} onClick={() => setPage(1)} aria-label="First page">«</button>
           <button className="btn small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
@@ -362,7 +401,7 @@ function SessionEditor({
                 .map((sb) => ({ value: sb.id, label: sb.name, icon: sb.done ? '☑' : '☐' }))
             ]} />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
+        <div className="grid-2col">
           <label className="field">
             <span>Start ({user.timezone})</span>
             <input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
