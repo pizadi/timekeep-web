@@ -98,6 +98,7 @@ function Shell({ route }: { route: string }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(route === '/settings');
 
   // views are routes: URL → store state (back/forward buttons work)
@@ -141,6 +142,8 @@ function Shell({ route }: { route: string }) {
           <strong style={{ flex: 1 }}>TimeKeep</strong>
           <button className="icon-btn" title="Quick find (Ctrl+K)" aria-label="Quick find"
             onClick={() => setQuickFindOpen(true)}>⌕</button>
+          <button className="icon-btn" title="About" aria-label="About TimeKeep"
+            onClick={() => setAboutOpen(true)}>ⓘ</button>
           <button className="icon-btn" title="Settings" aria-label="Settings"
             onClick={() => { setSettingsOpen(true); go('/settings'); }}>⚙</button>
           {/* narrow screens only: the fixed drawer covers the main topbar's
@@ -203,6 +206,7 @@ function Shell({ route }: { route: string }) {
 
       {quickFindOpen && <QuickFind onClose={() => setQuickFindOpen(false)} />}
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
+      {aboutOpen && <AboutOverlay onClose={() => setAboutOpen(false)} />}
       {settingsOpen && (
         <SettingsView
           onClose={() => { setSettingsOpen(false); if (route === '/settings') navigateHome(); }}
@@ -436,6 +440,32 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           <tr><td><span className="kbd">Enter</span></td><td>Open / commit</td></tr>
           <tr><td><span className="kbd">?</span></td><td>This overlay</td></tr>
         </tbody></table>
+        <div style={{ marginTop: 14, textAlign: 'right' }}>
+          <button className="btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** About dialog: app identity, version (build-time injected) and project link. */
+function AboutOverlay({ onClose }: { onClose: () => void }) {
+  const modalRef = useModalA11y(onClose);
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="About TimeKeep" onClick={onClose}>
+      <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>TimeKeep</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Personal time tracking and task management — projects, checklists, dependency maps,
+          reports and group collaboration.
+        </p>
+        <p style={{ margin: '10px 0' }}>
+          Version <b>v{__APP_VERSION__}</b>
+        </p>
+        <p style={{ margin: '10px 0' }}>
+          <a href="https://github.com/pizadi/timekeep-web" target="_blank" rel="noopener noreferrer">
+            GitHub — pizadi/timekeep-web</a>
+        </p>
         <div style={{ marginTop: 14, textAlign: 'right' }}>
           <button className="btn" onClick={onClose}>Close</button>
         </div>
