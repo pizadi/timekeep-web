@@ -156,7 +156,7 @@ function FriendsSection() {
                 onClick={() => setExpanded(expanded === f.id ? null : f.id)}
                 onKeyDown={(e) => { if (e.key === 'Enter') setExpanded(expanded === f.id ? null : f.id); }}>
                 {live && <span className="dot-running" aria-label="tracking now" />}
-                <span className="grow">
+                <span className="grow" title={`${f.name || f.username}${live ? ` — tracking “${live.task_name}”` : ''}`}>
                   <b>{f.name || f.username}</b> <span className="muted">@{f.username}</span>
                   {live && <span className="muted"> — tracking “{live.task_name}”</span>}
                 </span>

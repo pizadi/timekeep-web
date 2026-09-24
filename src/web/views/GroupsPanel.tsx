@@ -161,7 +161,7 @@ function GroupDetail({ group }: { group: GroupSummary }) {
     <div style={{ padding: '6px 12px 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div className="group-head">
         <span className="chip" style={{ background: group.color }} aria-hidden />
-        <b className="grow">{group.name}</b>
+        <b className="grow" title={group.name}>{group.name}</b>
         <span className="muted" style={{ fontSize: 12.5 }}>
           {isOwner ? 'you own this group' : `you are ${myRole}`} · {group.member_count} member{group.member_count === 1 ? '' : 's'}
         </span>

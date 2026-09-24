@@ -118,7 +118,7 @@ export default function ChatDock() {
               onKeyDown={(e) => { if (e.key === 'Enter') chatDock.toggleCollapsed(g.id); }}
             >
               <span className="chip" style={{ background: g.color }} aria-hidden />
-              <span className="grow">{g.name}</span>
+              <span className="grow" title={g.name}>{g.name}</span>
               {collapsed && g.unread > 0 && <span className="chat-badge">{g.unread > 99 ? '99+' : g.unread}</span>}
               <button className="icon-btn" aria-label={collapsed ? 'Expand chat' : 'Collapse chat'}
                 onClick={(e) => { e.stopPropagation(); chatDock.toggleCollapsed(g.id); }}>

@@ -115,12 +115,12 @@ export default function SettingsView({ onClose, currentTheme }: {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={modalRef} className="modal" style={{ maxWidth: 620, maxHeight: '88vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Settings">
+      <div ref={modalRef} className="modal modal-wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Settings">
 
         <h3>Profile</h3>
         <label className="field"><span>Display name</span>
           <input className="input" defaultValue={user.name} onBlur={(e) => e.target.value !== user.name && saveProfile({ name: e.target.value })} /></label>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
+        <div className="grid-2col">
           <label className="field"><span>Timezone (IANA — drives all report bucketing)</span>
             <Combobox
               ariaLabel="Timezone"
@@ -165,10 +165,7 @@ export default function SettingsView({ onClose, currentTheme }: {
             onChange={(e) => enablePomodoro(e.target.checked)} />
           <span>Pomodoro timer — the simple timer becomes focus blocks with break prompts (endings notify you)</span>
         </label>
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 10,
-          opacity: settings.pomodoro.enabled ? 1 : 0.55
-        }}>
+        <div className="grid-3col" style={{ opacity: settings.pomodoro.enabled ? 1 : 0.55 }}>
           <label className="field"><span>Focus ({settings.pomodoro.focus_min} min)</span>
             <input type="range" min={POMODORO_LIMITS.focusMinMin} max={POMODORO_LIMITS.focusMinMax} step={5} defaultValue={settings.pomodoro.focus_min}
               onMouseUp={(e) => save({ pomodoro: { focus_min: Number((e.target as HTMLInputElement).value) } })}
@@ -231,15 +228,15 @@ export default function SettingsView({ onClose, currentTheme }: {
         <p className="muted" style={{ marginTop: 0 }}>
           Export everything (JSON + sessions CSV) — the round-trip export → import preserves ids (FR-D1).
         </p>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <a className="btn" href="/api/export?format=json" download>Export JSON</a>
           <a className="btn" href="/api/export?format=csv" download>Export sessions CSV</a>
         </div>
 
         <h3 style={{ marginTop: 22, color: 'var(--danger)' }}>Danger zone</h3>
         <p className="muted">Deletes your account and every project, task, checklist, dependency and session. This cannot be undone after backups age out (30 days).</p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input className="input" style={{ width: 240 }} placeholder="Type DELETE to confirm"
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Type DELETE to confirm"
             value={confirmDelete} onChange={(e) => setConfirmDelete(e.target.value)} aria-label="Confirm account deletion" />
           <button className="btn danger" disabled={confirmDelete !== 'DELETE'} onClick={deleteAccount}>Delete account</button>
         </div>
@@ -353,8 +350,8 @@ function AdminPanel() {
           </tbody>
         </table>
         {resetFor && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input className="input" style={{ width: 240 }} type="password" placeholder={`Temporary password (min ${MIN_PASSWORD} chars)`}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            <input className="input" style={{ flex: 1, minWidth: 160 }} type="password" placeholder={`Temporary password (min ${MIN_PASSWORD} chars)`}
               value={resetPw} onChange={(e) => setResetPw(e.target.value)} aria-label="Temporary password" />
             <button className="btn small" disabled={busy || resetPw.length < MIN_PASSWORD}
               onClick={() => { const u = users!.find((x) => x.id === resetFor); if (u) void resetPassword(u); }}>
@@ -363,7 +360,7 @@ function AdminPanel() {
           </div>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 12 }}>
+      <div className="grid-2col" style={{ marginTop: 12 }}>
         <label className="field"><span>Username (new user)</span>
           <input className="input" value={newUsername} onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
             placeholder="e.g. sara" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>

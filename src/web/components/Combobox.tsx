@@ -157,6 +157,7 @@ export default function Combobox({
                 id={`${listId}-opt-${it.index}`}
                 role="option"
                 aria-selected={it.index === active}
+                title={it.option.label}
                 className={`combobox-opt${it.index === active ? ' active' : ''}`}
                 onMouseEnter={() => setActive(it.index)}
                 onClick={() => commit(it)}

@@ -70,6 +70,7 @@ export default function Dropdown({ value, onChange, options, ariaLabel, style, d
     <div ref={rootRef} className="dd" style={style}>
       <button type="button" ref={btnRef} className="input dd-trigger" aria-haspopup="listbox"
         aria-expanded={open} aria-label={ariaLabel} disabled={disabled}
+        title={current?.label}
         onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}>
         {current?.icon && <span className="dd-icon">{current.icon}</span>}
         <span className="dd-label">{current?.label ?? '—'}</span>
@@ -80,6 +81,7 @@ export default function Dropdown({ value, onChange, options, ariaLabel, style, d
           {options.map((o, i) => (
             <div key={o.value} role="option" id={`dd-opt-${i}`}
               aria-selected={o.value === value}
+              title={o.label}
               className={`dd-item${i === active ? ' active' : ''}${o.value === value ? ' selected' : ''}`}
               onMouseEnter={() => setActive(i)}
               onClick={() => commit(o)}>

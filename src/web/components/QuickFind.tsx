@@ -56,6 +56,7 @@ export default function QuickFind({ onClose }: { onClose: () => void }) {
         />
         {results.map((r, i) => (
           <div key={`${r.kind}-${r.id}`} className={`item${i === active ? ' active' : ''}`}
+            title={r.name}
             onMouseEnter={() => setActive(i)} onClick={() => commit(i)}>
             <span className="chip" style={{ background: r.color }} />
             <span className="grow">{r.name}</span>
