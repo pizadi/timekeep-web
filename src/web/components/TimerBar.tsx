@@ -7,6 +7,7 @@ import { fmtHMS } from '../lib/time';
 import { resumeLastTask } from '../lib/actions';
 import { SESSION_RULES } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
+import { useHasHover } from '../lib/responsive';
 
 export default function TimerBar() {
   const running = useStore((s) => s.running);
@@ -15,6 +16,7 @@ export default function TimerBar() {
   const subtasks = useStore((s) => s.subtasks);
   const pomo = useStore((s) => s.pomo);
   const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
+  const hasHover = useHasHover(); // "press T" presumes a keyboard
   const [elapsed, setElapsed] = useState(0);
   const [recovering, setRecovering] = useState(false);
   const promptedRef = useRef(false);
@@ -109,11 +111,15 @@ export default function TimerBar() {
     return (
       <div className="timerbar muted" style={{ justifyContent: 'center' }}>
         {pomoEnabled
-          ? <>Pomodoro on — press <b style={{ margin: '0 6px' }}>T</b> on a selected task to start a focus block</>
-          : <>No timer running — press <b style={{ margin: '0 6px' }}>T</b> on a selected task</>}
+          ? (hasHover
+              ? <>Pomodoro on — press <b style={{ margin: '0 6px' }}>T</b> on a selected task to start a focus block</>
+              : <>Pomodoro on — tap ▶ on a task to start a focus block</>)
+          : (hasHover
+              ? <>No timer running — press <b style={{ margin: '0 6px' }}>T</b> on a selected task</>
+              : <>No timer running — tap ▶ on a task</>)}
         {lastTask && (
           <button className="btn small" style={{ marginLeft: 10 }}
-            title="Resume tracking on the last task (R)"
+            title={lastTask.name.length > 24 ? `Resume tracking on “${lastTask.name}”` : 'Resume tracking on the last task (R)'}
             onClick={() => void resumeLastTask()}>
             ▶ Resume “{lastTask.name.length > 24 ? `${lastTask.name.slice(0, 23)}…` : lastTask.name}”
           </button>

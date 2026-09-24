@@ -22,6 +22,7 @@ import ChatDock from './components/ChatDock';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
 import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer } from './lib/actions';
+import { useHasHover } from './lib/responsive';
 import { GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../shared/constants';
 import type { Project, Task } from './lib/store';
 
@@ -93,6 +94,7 @@ function Shell({ route }: { route: string }) {
   const view = useStore((s) => s.view);
   const connection = useStore((s) => s.connection);
   const user = useStore((s) => s.user)!;
+  const hasHover = useHasHover(); // keyboard-shortcut hints only make sense with a keyboard
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -158,7 +160,7 @@ function Shell({ route }: { route: string }) {
           <TimerBar />
           <span className={`conn-dot ${connection}`} role="img"
             aria-label={`Connection: ${connection}`} title={`Connection: ${connection}`} />
-          <span className="muted" style={{ fontSize: 12.5 }} title={`Signed in as ${user.username}`}>
+          <span className="muted topbar-user" style={{ fontSize: 12.5 }} title={`Signed in as ${user.username}`}>
             {user.name || user.username}
           </span>
           <button className="icon-btn" title="Sign out" aria-label="Sign out"
@@ -181,7 +183,7 @@ function Shell({ route }: { route: string }) {
         <nav className="view-tabs" role="tablist" aria-label="Views">
           {(['tree', 'log', 'map', 'dashboard', 'social'] as const).map((v, i) => (
             <button key={v} role="tab" aria-selected={view === v} onClick={() => store.navigateToView(v)}>
-              {labelFor(v)} <span aria-hidden> ({i + 1})</span>
+              {labelFor(v)} {hasHover && <span aria-hidden> ({i + 1})</span>}
             </button>
           ))}
         </nav>
@@ -238,6 +240,7 @@ function TreeMain() {
   const projects = useStore((s) => s.projects);
   const groups = useStore((s) => s.groups);
   const selectedProjectId = useStore((s) => s.selectedProjectId);
+  const hasHover = useHasHover();
 
   const byNew = (a: { created_at: number }, b: { created_at: number }) => b.created_at - a.created_at;
   const personal = projects.filter((p) => !p.group_id).sort(byNew);
@@ -282,7 +285,9 @@ function TreeMain() {
       {personal.length === 0 && groupIds.length === 0 && (
         <div className="card">
           <p className="muted" style={{ margin: 0 }}>
-            No projects yet — press <span className="kbd">P</span> or use ＋ Project above to create one.
+            {hasHover
+              ? <>No projects yet — press <span className="kbd">P</span> or use ＋ Project above to create one.</>
+              : <>No projects yet — use ＋ Project above to create one.</>}
           </p>
         </div>
       )}
