@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { store } from '../lib/store';
 import { fmtDay } from '../lib/time';
+import { useIsTouch } from '../lib/responsive';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // indexed by getDay()
 
@@ -22,6 +23,7 @@ export default function Heatmap({
 
   const max = Math.max(1, ...days.map((d) => d.minutes));
   const [hover, setHover] = useState<string | null>(null);
+  const touch = useIsTouch(); // hover captions never fire on a finger — the copy says "tap"
 
   // one column per ISO week; rows = weekdays starting at `weekStart`
   const weeks = useMemo(() => {
@@ -85,7 +87,7 @@ export default function Heatmap({
         </div>
       </div>
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        {hover ? `${fmtDay(hover)} · ${byDay.get(hover) ?? 0} min (times shown in ${timezone})` : `Click a day to inspect its sessions`}
+        {hover ? `${fmtDay(hover)} · ${byDay.get(hover) ?? 0} min (times shown in ${timezone})` : `${touch ? 'Tap' : 'Click'} a day to inspect its sessions`}
       </div>
     </div>
   );

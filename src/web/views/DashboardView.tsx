@@ -9,6 +9,7 @@ import { addDaysCivil } from '../../shared/time';
 import { Chart, registerables } from 'chart.js';
 import Heatmap from '../components/Heatmap';
 import Dropdown from '../components/Dropdown';
+import { useIsTouch } from '../lib/responsive';
 
 Chart.register(...registerables);
 
@@ -209,7 +210,7 @@ export default function DashboardView() {
 
   return (
     <div>
-      <div className="card" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+      <div className="card filters-grid">
         <label className="field" style={{ marginBottom: 0 }}>
           <span>Range</span>
           <Dropdown ariaLabel="Report range" value={preset} onChange={(v) => setPreset(v as Preset)}
@@ -229,16 +230,18 @@ export default function DashboardView() {
               <input className="input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></label>
           </>
         )}
-        <div className="spacer" />
-        <div className="muted" style={{ fontSize: 13 }}>
+        <div className="muted span-2" style={{ fontSize: 13 }}>
           Today <b>{(summary?.totals.today ?? 0) + (running ? runningBoost : 0)}m</b> · This week <b>{summary?.totals.week ?? 0}m</b> · All time <b>{summary?.totals.all ?? 0}m</b>
         </div>
       </div>
 
-      <div className="grid-2 charts-scroll">
+      <div className="grid-2">
         <div className="card">
           <h3>Daily minutes by project</h3>
-          <div className="chart-box"><canvas ref={barRef} aria-label="Stacked daily bar chart" role="img" /></div>
+          {/* the bar chart keeps a phone-legible width and scrolls inside its card */}
+          <div className="charts-scroll">
+            <div className="chart-box chart-box-bar"><canvas ref={barRef} aria-label="Stacked daily bar chart" role="img" /></div>
+          </div>
         </div>
         <div className="card">
           <h3>Project share{totalRange ? ` — ${Math.floor(totalRange / 60)}h ${totalRange % 60}m` : ''}</h3>
@@ -276,31 +279,33 @@ export default function DashboardView() {
                   {dayData.total_minutes === 0 && <span className="muted">Nothing tracked this day.</span>}
                 </div>
                 {dayData.tasks.length > 0 && (
-                  <table className="tbl">
-                    <thead>
-                      <tr><th>Project</th><th>Task</th><th className="num">Time</th></tr>
-                    </thead>
-                    <tbody>
-                      {dayData.tasks.map((t) => (
-                        <Fragment key={t.task_id}>
-                          <tr>
-                            <td><span className="chip" style={{ background: t.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{t.project_name}</td>
-                            <td className={t.done ? 'done-text' : ''} title={t.task_name}>{t.task_name}</td>
-                            <td className="num">{fmtMinutes(t.total_minutes + (isToday && running?.task_id === t.task_id ? runningBoost : 0))}</td>
-                          </tr>
-                          {t.subtasks.map((sb) => (
-                            <tr key={sb.subtask_id}>
-                              <td />
-                              <td style={{ paddingLeft: 22 }} className={sb.done ? 'muted' : ''}>
-                                <span aria-hidden style={{ marginRight: 4 }}>↳</span>{sb.name}{sb.done ? <span className="muted"> (done)</span> : ''}
-                              </td>
-                              <td className="num muted">{fmtMinutes(sb.minutes)}</td>
+                  <div className="tbl-scroll">
+                    <table className="tbl">
+                      <thead>
+                        <tr><th>Project</th><th>Task</th><th className="num">Time</th></tr>
+                      </thead>
+                      <tbody>
+                        {dayData.tasks.map((t) => (
+                          <Fragment key={t.task_id}>
+                            <tr>
+                              <td><span className="chip" style={{ background: t.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{t.project_name}</td>
+                              <td className={t.done ? 'done-text' : ''} title={t.task_name}>{t.task_name}</td>
+                              <td className="num">{fmtMinutes(t.total_minutes + (isToday && running?.task_id === t.task_id ? runningBoost : 0))}</td>
                             </tr>
-                          ))}
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
+                            {t.subtasks.map((sb) => (
+                              <tr key={sb.subtask_id}>
+                                <td />
+                                <td style={{ paddingLeft: 22 }} className={sb.done ? 'muted' : ''}>
+                                  <span aria-hidden style={{ marginRight: 4 }}>↳</span>{sb.name}{sb.done ? <span className="muted"> (done)</span> : ''}
+                                </td>
+                                <td className="num muted">{fmtMinutes(sb.minutes)}</td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </>
             )}
@@ -321,7 +326,7 @@ export default function DashboardView() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', padding: '12px 14px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, padding: '12px 14px 0' }}>
           <h3 style={{ flex: 1 }}>Per-task totals</h3>
           <label className="muted" style={{ fontSize: 12.5 }}>
             Sort by{' '}
@@ -335,17 +340,19 @@ export default function DashboardView() {
               ]} />
           </label>
         </div>
-        <table className="tbl">
-          <thead>
-            <tr><th>Project</th><th>Task</th><th className="num">Today</th><th className="num">Week</th><th className="num">All time</th></tr>
-          </thead>
-          <tbody>
-            {tableSorted.map((r) => (
-              <SubtaskRows key={r.task_id} r={r} runningTaskId={running?.task_id ?? null} runningBoost={runningBoost} />
-            ))}
-            {tableSorted.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>No tracked time yet.</td></tr>}
-          </tbody>
-        </table>
+        <div className="tbl-scroll">
+          <table className="tbl">
+            <thead>
+              <tr><th>Project</th><th>Task</th><th className="num">Today</th><th className="num">Week</th><th className="num">All time</th></tr>
+            </thead>
+            <tbody>
+              {tableSorted.map((r) => (
+                <SubtaskRows key={r.task_id} r={r} runningTaskId={running?.task_id ?? null} runningBoost={runningBoost} />
+              ))}
+              {tableSorted.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>No tracked time yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

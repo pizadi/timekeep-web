@@ -6,6 +6,7 @@ import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
 import Dropdown, { ColorChip } from '../components/Dropdown';
+import { useBreakpoint, useIsTouch } from '../lib/responsive';
 
 interface Pos { x: number; y: number }
 const NODE_W = 210, HEADER_H = 30, ROW_H = 19, PAD = 10, PORT_R = 6;
@@ -27,6 +28,57 @@ export default function MapView() {
   const panRef = useRef<{ x: number; y: number; mx: number; my: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const saveTimer = useRef<number | null>(null);
+  const touch = useIsTouch();
+
+  // ---------- pinch zoom (touch) ----------
+  // Two-pointer tracking on the wrap div, capture phase — so it sees pointers
+  // even when node handlers stopPropagation. A 2nd pointer down cancels any
+  // single-pointer drag/pan/wiring in flight; the distance ratio drives zoom.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const pointers = useRef(new Map<number, Pos>());
+  const pinch = useRef<{ dist: number; zoom: number } | null>(null);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const down = (e: PointerEvent) => {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.current.size === 2) {
+        const [a, b] = [...pointers.current.values()];
+        pinch.current = { dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), zoom: zoomRef.current };
+        drag.current = null;
+        panRef.current = null;
+        setWiring(null);
+      }
+    };
+    const move = (e: PointerEvent) => {
+      if (!pointers.current.has(e.pointerId)) return;
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p = pinch.current;
+      if (p && pointers.current.size >= 2) {
+        const [a, b] = [...pointers.current.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (d > 1) setZoom(Math.min(2, Math.max(0.5, p.zoom * (d / p.dist))));
+      }
+    };
+    const up = (e: PointerEvent) => {
+      pointers.current.delete(e.pointerId);
+      if (pointers.current.size < 2) pinch.current = null;
+    };
+    el.addEventListener('pointerdown', down, true);
+    el.addEventListener('pointermove', move, true);
+    el.addEventListener('pointerup', up, true);
+    el.addEventListener('pointercancel', up, true);
+    return () => {
+      el.removeEventListener('pointerdown', down, true);
+      el.removeEventListener('pointermove', move, true);
+      el.removeEventListener('pointerup', up, true);
+      el.removeEventListener('pointercancel', up, true);
+    };
+  }, []);
+
+  const clampZoom = (z: number): number => Math.min(2, Math.max(0.5, z));
 
   const project = projects.find((p) => p.id === selectedProjectId);
   const projectTasks = useMemo(
@@ -103,7 +155,7 @@ export default function MapView() {
 
   // ---------- pointer handlers ----------
   const onNodePointerDown = (e: React.PointerEvent, taskId: string) => {
-    if ((e.target as Element).closest('[data-port]') || (e.target as Element).closest('[data-subrow]')) return;
+    if ((e.target as Element).closest('[data-port]') || (e.target as Element).closest('[data-subrow]') || (e.target as Element).closest('[data-menu]')) return;
     e.stopPropagation();
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const p = toSvg(e.clientX, e.clientY);
@@ -251,15 +303,21 @@ export default function MapView() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Dropdown style={{ width: 220 }} ariaLabel="Map project selector" value={selectedProjectId ?? ''}
+        <Dropdown style={{ flex: 1, minWidth: 0, maxWidth: 260 }} ariaLabel="Map project selector" value={selectedProjectId ?? ''}
           onChange={(v) => store.selectProject(v)}
           options={projects.filter((p) => !p.archived).map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))} />
-        <span className="muted">Drag a node's <b>●</b> port onto another task — the dropped task <b>depends on</b> the port's task (the arrow follows your drag). Click an edge to remove it. Ctrl+wheel zooms.</span>
+        {touch ? (
+          <span className="muted">Drag <b>●</b> to link tasks · tap a node's <b>⋯</b> for actions</span>
+        ) : (
+          <span className="muted">Drag a node's <b>●</b> port onto another task — the dropped task <b>depends on</b> the port's task (the arrow follows your drag). Click an edge to remove it. Ctrl+wheel zooms.</span>
+        )}
         <div className="spacer" />
+        <button className="btn small" aria-label="Zoom out" onClick={() => setZoom((z) => clampZoom(z / 1.25))}>－</button>
+        <button className="btn small" aria-label="Zoom in" onClick={() => setZoom((z) => clampZoom(z * 1.25))}>＋</button>
         <button className="btn small" onClick={resetLayout}>Reset layout</button>
       </div>
 
-      <div className="map-wrap" style={{ flex: 1, minHeight: 320 }}>
+      <div className="map-wrap" ref={wrapRef} style={{ flex: 1, minHeight: 320 }}>
         <svg
           ref={svgRef}
           className="map-svg"
@@ -345,9 +403,23 @@ export default function MapView() {
                   {/* project-colored spine */}
                   <rect x={0} y={0} width={5} height={h} rx={2.5} fill={project.color} />
                   {isRunning && <circle className="running-dot" cx={NODE_W - 14} cy={HEADER_H / 2 + 2} r={4.5} />}
+                  {/* explicit task-actions affordance — touch has no right-click,
+                      and the ⋯ menu also carries Rename where F2 is unreachable.
+                      Sits between the name (sliced shorter to make room) and the
+                      blocked badge / running dot at the card's right edge. */}
+                  <g data-menu onPointerDown={(e) => e.stopPropagation()} onClick={(e) => {
+                    e.stopPropagation();
+                    const r = (e.currentTarget as SVGGElement).getBoundingClientRect();
+                    setMenu({ taskId: t.id, x: r.left, y: r.bottom + 4 });
+                  }} style={{ cursor: 'pointer' }}>
+                    <title>Task actions</title>
+                    <rect x={NODE_W - 64} y={3} width={26} height={24} rx={6} fill="transparent" />
+                    <text x={NODE_W - 51} y={HEADER_H / 2 + 5} fontSize={13} textAnchor="middle"
+                      fill="var(--muted)" style={{ pointerEvents: 'none' }}>⋯</text>
+                  </g>
                   <text x={14} y={HEADER_H / 2 + 4} fontSize={12.5} fontWeight={700}
                     style={{ pointerEvents: 'none' }}>
-                    {t.name.length > 24 ? `${t.name.slice(0, 23)}…` : t.name}
+                    {t.name.length > 20 ? `${t.name.slice(0, 19)}…` : t.name}
                   </text>
                   {blocked > 0 && (
                     <text className="blocked-badge" x={NODE_W - (blocked > 9 ? 30 : 24)} y={HEADER_H / 2 + 5}>▲{blocked}</text>
@@ -439,19 +511,27 @@ function NodeMenu(props: {
   onToggleTrack: () => void; onToggleDone: () => void; onRename: () => void;
   onAddSubtask: () => void; onDelete: () => void; onClose: () => void;
 }) {
+  const phone = useBreakpoint() === 'phone';
+  // anchored popover on desktop (viewport-clamped — the menu previously could
+  // open offscreen when the node sat near the right/bottom edge); the phone
+  // layout becomes a bottom sheet via .row-menu CSS
+  const style = phone ? undefined : {
+    left: Math.min(Math.max(8, props.x), window.innerWidth - 268),
+    top: Math.min(Math.max(8, props.y), window.innerHeight - 240),
+  };
   return (
-    <div className="modal-overlay" style={{ background: 'transparent', alignItems: 'flex-start', justifyContent: 'flex-start' }}
+    <div className="modal-overlay node-menu-overlay row-menu-overlay" style={{ background: 'transparent', alignItems: 'flex-start', justifyContent: 'flex-start' }}
       onClick={props.onClose} onContextMenu={(e) => { e.preventDefault(); props.onClose(); }}>
-      <div className="modal" style={{ position: 'fixed', left: props.x, top: props.y, maxWidth: 260, padding: 8 }}
+      <div className="modal row-menu" style={style}
         onClick={(e) => e.stopPropagation()} role="menu" aria-label="Task context menu">
-        <button className="btn small" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }} role="menuitem" onClick={props.onToggleTrack}>▶ Toggle tracking</button>
-        <button className="btn small" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }} role="menuitem" onClick={props.onToggleDone}>✓ Toggle done</button>
-        <button className="btn small" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }} role="menuitem" onClick={props.onRename}>✎ Rename</button>
-        <button className="btn small" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }} role="menuitem" onClick={props.onAddSubtask}>＋ Add subtask</button>
+        <button className="btn small" role="menuitem" onClick={props.onToggleTrack}>▶ Toggle tracking</button>
+        <button className="btn small" role="menuitem" onClick={props.onToggleDone}>✓ Toggle done</button>
+        <button className="btn small" role="menuitem" onClick={props.onRename}>✎ Rename</button>
+        <button className="btn small" role="menuitem" onClick={props.onAddSubtask}>＋ Add subtask</button>
         {props.depsOf.length > 0 && (
           <div className="muted" style={{ fontSize: 11.5, padding: '4px 2px' }}>depends on: {props.depsOf.join(', ')}</div>
         )}
-        <button className="btn small danger" style={{ display: 'block', width: '100%', textAlign: 'left' }} role="menuitem" onClick={props.onDelete}>🗑 Delete task</button>
+        <button className="btn small danger" role="menuitem" onClick={props.onDelete}>🗑 Delete task</button>
       </div>
     </div>
   );
