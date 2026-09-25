@@ -79,8 +79,26 @@ export async function toggleSubtaskTimer(taskId: string, subtaskId: string): Pro
   } catch (e: any) { pushToast('error', e.message); }
 }
 
-/** Resume (R): continue tracking on the most recently tracked task. If another
- *  timer is running, startTimer's switch-fallback moves it — never two timers. */
+/** Stop the active timer. Kept separate from resume so every caller can share
+ *  the same authoritative stop/update behavior. */
+export async function stopTimer(): Promise<void> {
+  if (!store.get().running) return;
+  try {
+    await api('/timer/stop', { method: 'POST' });
+    store.setRunning(null);
+  } catch (e: any) { pushToast('error', e.message); }
+}
+
+/** Resume (R) when idle, stop the active timer when running. */
+export async function toggleLastTask(): Promise<void> {
+  if (store.get().running) {
+    await stopTimer();
+    return;
+  }
+  await resumeLastTask();
+}
+
+/** Resume the most recently tracked task. */
 export async function resumeLastTask(): Promise<void> {
   const s = store.get();
   const lastId = s.recentTaskIds[0];

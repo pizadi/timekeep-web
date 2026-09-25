@@ -220,11 +220,13 @@ export const store = {
     try {
       const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body });
       store.setRunning(res.session);
+      store.markRecentTask(taskId);
       if (res.pomo) store.setPomo(res.pomo);
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'already_running') {
         const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body });
         store.setRunning(res.started);
+        store.markRecentTask(taskId);
         if (res.pomo) store.setPomo(res.pomo);
       } else throw e;
     }
@@ -242,6 +244,7 @@ export const store = {
       next[i] = { ...next[i]!, ...item };
       return next;
     };
+    const markRecent = (taskId: string): string[] => [taskId, ...state.recentTaskIds.filter((id) => id !== taskId)].slice(0, 6);
 
     switch (ev.type) {
       case 'hello': {
@@ -250,9 +253,17 @@ export const store = {
         patch.connection = 'online';
         break;
       }
-      case 'timer.started': patch.running = d.session; patch.reportsVersion = state.reportsVersion + 1; break;
+      case 'timer.started':
+        patch.running = d.session;
+        patch.recentTaskIds = markRecent(d.session.task_id);
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
       case 'timer.stopped': patch.running = null; patch.reportsVersion = state.reportsVersion + 1; break;
-      case 'timer.switched': patch.running = d.started; patch.reportsVersion = state.reportsVersion + 1; break;
+      case 'timer.switched':
+        patch.running = d.started;
+        patch.recentTaskIds = markRecent(d.started.task_id);
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
       case 'timer.nudge': pushToast('info', 'This timer has been running for more than 12 hours'); break;
 
       case 'session.created': case 'session.updated': patch.reportsVersion = state.reportsVersion + 1; break;
@@ -270,6 +281,8 @@ export const store = {
         patch.tasks = state.tasks.filter((t) => !removedIds.has(t.id));
         patch.subtasks = state.subtasks.filter((s) => !removedIds.has(s.task_id));
         patch.deps = state.deps.filter((dep) => !removedIds.has(dep.task_id) && !removedIds.has(dep.depends_on_id));
+        if (state.selectedProjectId === d.project.id) patch.selectedProjectId = null;
+        if (state.selectedTaskId && removedIds.has(state.selectedTaskId)) patch.selectedTaskId = null;
         // the cascade deleted the session rows too — drop a stranded timer
         if (state.running && removedIds.has(state.running.task_id)) patch.running = null;
         if (state.pomo && state.pomo.taskId && removedIds.has(state.pomo.taskId)) patch.pomo = null;
@@ -365,6 +378,7 @@ export const store = {
       tasks: state.tasks.filter((t) => t.id !== id),
       subtasks: state.subtasks.filter((s) => s.task_id !== id),
       deps: state.deps.filter((d) => d.task_id !== id && d.depends_on_id !== id),
+      selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId,
       reportsVersion: state.reportsVersion + 1
     });
   },
@@ -376,6 +390,8 @@ export const store = {
       tasks: state.tasks.filter((t) => t.project_id !== id),
       subtasks: state.subtasks.filter((s) => !ids.has(s.task_id)),
       deps: state.deps.filter((d) => !ids.has(d.task_id) && !ids.has(d.depends_on_id)),
+      selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
+      selectedTaskId: state.selectedTaskId && ids.has(state.selectedTaskId) ? null : state.selectedTaskId,
       reportsVersion: state.reportsVersion + 1
     });
   },
@@ -388,6 +404,9 @@ export const store = {
     set({ deps: state.deps.filter((d) => !(d.task_id === taskId && d.depends_on_id === dependsOnId)) });
   },
   setRunning(session: RunningSession | null) { set({ running: session, reportsVersion: state.reportsVersion + 1 }); },
+  markRecentTask(id: string) {
+    set({ recentTaskIds: [id, ...state.recentTaskIds.filter((taskId) => taskId !== id)].slice(0, 6) });
+  },
   setPomo(pomo: PomoState | null) { set({ pomo }); },
   setSettings(s: Settings) { set({ settings: s }); },
   setUser(u: UserProfile) { set({ user: u }); },

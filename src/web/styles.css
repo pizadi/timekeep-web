@@ -191,7 +191,14 @@ label.field { display: block; margin-bottom: 12px; }
 label.field > span { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; font-weight: 600; }
 
 /* ---------- tree (sidebar) ---------- */
-.tree { flex: 1; overflow: auto; padding: 10px 8px; }
+.tree {
+  flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px; overflow: hidden; padding: 10px 8px;
+}
+.tree-project-list, .tree-selected-details { min-height: 0; overflow: auto; }
+.tree-project-list { padding-right: 2px; }
+.tree-selected-details { border-top: 1px solid var(--border); padding-top: 4px; }
+.tree-selected-heading { display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px; }
 .tree-project { margin-bottom: 2px; }
 .row {
   display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: var(--radius-sm);
@@ -488,7 +495,8 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 
 /* ---------- anchored row-action menus (sidebar overflow ⋯, map node menu) ---------- */
 .row-menu-overlay, .node-menu-overlay { background: transparent; }
-.row-menu { position: fixed; min-width: 200px; max-width: 260px; padding: 8px; }
+.row-menu-overlay { position: fixed; inset: 0; width: 100vw; height: 100dvh; }
+.row-menu { position: fixed; min-width: 200px; max-width: 260px; max-height: calc(100dvh - 16px); overflow: auto; padding: 8px; }
 .row-menu .btn { display: block; width: 100%; text-align: left; margin-bottom: 4px; }
 .row-menu .btn:last-child { margin-bottom: 0; }
 @media (max-width: 639px) {
@@ -503,12 +511,30 @@ table.tbl tr[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-
 
 /* ---------- truncation policy ----------
    Tight strips keep the one-line ellipsis. Hover-capable devices reveal the
-   full text by unwrapping on hover (chosen over a scrollbar: no layout shift,
-   no hidden-scroll discoverability problem); touch devices clamp to two
-   lines so truncated text is visibly continued instead of silently lost. */
-.u-trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+   rest of the text in a horizontal scroll area without changing the row
+   layout; touch devices clamp to two lines so truncation is visibly continued
+   instead of silently lost. */
+.u-trunc, .hover-scroll {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hover-scroll-content { display: inline-block; max-width: none; white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) {
-  .u-trunc:hover, .row .grow:hover { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+  .u-trunc:hover, .hover-scroll:hover, .row .grow:hover {
+    overflow-x: auto; overflow-y: hidden; white-space: nowrap; text-overflow: clip;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .hover-scroll.is-scrolling { overflow: hidden; scrollbar-width: none; }
+  .hover-scroll.is-scrolling .hover-scroll-content {
+    animation: hover-scroll-text 7s ease-in-out infinite alternate;
+  }
+  .u-trunc:hover::-webkit-scrollbar, .hover-scroll:hover::-webkit-scrollbar, .row .grow:hover::-webkit-scrollbar { height: 4px; }
+  .u-trunc:hover::-webkit-scrollbar-thumb, .hover-scroll:hover::-webkit-scrollbar-thumb, .row .grow:hover::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 4px;
+  }
+}
+@keyframes hover-scroll-text {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-1 * var(--hover-scroll-distance, 0px))); }
 }
 @media (pointer: coarse) {
   .row .grow {

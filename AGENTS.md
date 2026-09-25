@@ -82,6 +82,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - **Never create a non-dev release unprompted.** Dev versions (`X.Y.Z.devN` commits/iterating)
   are fine, but a real release — a clean `X.Y.Z` version bump, release commit or `vX.Y.Z` tag —
   happens ONLY after the user live-tests the build and explicitly tells me to release.
+- **Every non-dev commit must be tagged:** after a clean `X.Y.Z` release commit, create the
+  matching annotated `vX.Y.Z` tag. Dev commits are never tagged. The Deploy workflow is
+  release-only and runs from that tag.
 
 ## Architecture rules
 
@@ -148,11 +151,11 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   640–1023 tablet/drawer, ≥1024 desktop) live in `styles.css` and mirror `BREAKPOINTS`
   in `src/web/lib/responsive.ts`. `(pointer: coarse)` scales touch targets (44px class)
   and forces 16px inputs (iOS focus zoom); all `:hover` effects are gated behind
-  `(hover: hover)`. Every keyboard/hover interaction has a touch path — sidebar row ⋯
-  menus, map node ⋯ menu + pinch/zoom buttons, log card rows on phones, full-screen
-  modal sheets. Truncation policy: ellipsis → hover-unwrap on fine pointers, 2-line
-  clamp on touch, `title` tooltip on every truncation site. Don't add hover- or
-  keyboard-only affordances without their touch equivalent.
+  `(hover: hover)`. Every keyboard/hover interaction has a touch path — sidebar project/task
+  ⋯ menus on every screen, map node ⋯ menu + pinch/zoom buttons, log card rows on phones,
+  full-screen modal sheets. Truncation policy: ellipsis → auto-scrolling horizontally on
+  fine-pointer hover, 2-line clamp on touch, `title` tooltip on every truncation site. Don't
+  add hover- or keyboard-only affordances without their touch equivalent.
 
 ## Commits
 

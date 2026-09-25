@@ -4,13 +4,15 @@
 // project deletion (FR-P1). Subtask toggling never touches the timer (FR-T2).
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api } from '../lib/api';
 import { PALETTE, GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../../shared/constants';
 import { openPrompt } from '../components/PromptModal';
 import { useModalA11y } from '../lib/modal';
 import { useBreakpoint } from '../lib/responsive';
-import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer, resumeLastTask } from '../lib/actions';
+import HoverScrollText from '../components/HoverScrollText';
+import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer, toggleLastTask } from '../lib/actions';
 import type { Project } from '../lib/store';
 
 const ALL_PERMS: GroupPerm[] = [...GROUP_PERMS];
@@ -27,10 +29,8 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const [renaming, setRenaming] = useState<{ kind: 'project' | 'task' | 'subtask'; id: string } | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [colorFor, setColorFor] = useState<string | null>(null);
-  // narrow screens: secondary row actions collapse into a ⋯ menu (targets get
-  // cramped and double-click/right-click don't exist on touch anyway)
+  // secondary row actions collapse into a ⋯ menu on every screen
   const [menu, setMenu] = useState<{ kind: 'project' | 'task'; id: string; x: number; y: number } | null>(null);
-  const compact = useBreakpoint() !== 'desktop';
 
   const personal = projects.filter((p) => !p.archived && !p.group_id);
   const archived = projects.filter((p) => !!p.archived && !p.group_id);
@@ -53,7 +53,7 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   const canAddTask = !!selProject && (!selProject.group_id || (selPerms?.includes('edit_tasks') ?? false));
 
   // context-aware actions: N (new task), P (new project), S (new subtask),
-  // T (toggle timer), R (resume last task), F2 (rename), Delete (undo-able).
+  // T (toggle timer), R (stop timer / resume last task), F2 (rename), Delete (undo-able).
   // Suppressed while a modal is open (audit: shortcuts fired through modals).
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
@@ -80,9 +80,9 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
         e.preventDefault();
         await toggleTaskTimer(selTask.id);
       } else if (e.key.toLowerCase() === 'r' && bare) {
-        // resume: continue tracking on the most recently tracked task
+        // stop when running; otherwise resume the most recently tracked task
         e.preventDefault();
-        await resumeLastTask();
+        await toggleLastTask();
       } else if (e.key === 'F2') {
         e.preventDefault();
         if (selTask) setRenaming({ kind: 'task', id: selTask.id });
@@ -183,7 +183,9 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
     return {
       onClick: () => {
         onClick();
-        onClose?.();
+        // Keep the drawer open when a project is selected so its lower-pane
+        // details are visible on phones; task selection still dismisses it.
+        if (kind === 'task') onClose?.();
         // in-place rename: single click on an already-selected row (FR-T4)
         if (selected && renaming?.id !== id) setRenaming({ kind, id });
       },
@@ -207,10 +209,6 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
 
   /** One project (personal or group) with permission-gated controls. */
   function projectRow(p: Project) {
-    const perms = permsFor(p);           // null = personal (full control)
-    const isGroup = !!p.group_id;
-    const canEditTasks = !isGroup || (perms?.includes('edit_tasks') ?? false);
-    const canManage = !isGroup || (perms?.includes('manage_projects') ?? false);
     return (
       <>
         <div
@@ -221,40 +219,10 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
           {renaming?.kind === 'project' && renaming.id === p.id ? (
             <RenameInput initial={p.name} onCommit={(v) => rename('project', p.id, v)} onCancel={() => setRenaming(null)} />
           ) : (
-            <span className="grow" title={p.name}>{p.name}</span>
+            <HoverScrollText className="grow" title={p.name}>{p.name}</HoverScrollText>
           )}
-          {compact ? (
-            <button className="icon-btn" aria-label={`More actions for ${p.name}`} title="More actions"
-              onClick={(e) => openMenu('project', p.id, e)}>⋯</button>
-          ) : (
-            <>
-              {canManage && (
-                <button className="icon-btn" aria-label={`Color for ${p.name}`} title="Color"
-                  onClick={(e) => { e.stopPropagation(); setColorFor(colorFor === p.id ? null : p.id); }}>◐</button>
-              )}
-              {!isGroup && (
-                <>
-                  <button className="icon-btn" aria-label={`Move ${p.name} up`} title="Move up"
-                    onClick={(e) => { e.stopPropagation(); moveProject(p.id, -1); }}>↑</button>
-                  <button className="icon-btn" aria-label={`Move ${p.name} down`} title="Move down"
-                    onClick={(e) => { e.stopPropagation(); moveProject(p.id, 1); }}>↓</button>
-                  <button className="icon-btn" aria-label={`Visibility for ${p.name}: ${p.visibility === 'friends' ? 'friends' : 'private'}`}
-                    title={p.visibility === 'friends' ? 'Visible to friends — click to make private' : 'Private — click to share with friends'}
-                    onClick={(e) => { e.stopPropagation(); setVisibility(p.id, p.visibility !== 'friends'); }}>
-                    {p.visibility === 'friends' ? '👀' : '🔒'}
-                  </button>
-                </>
-              )}
-              {canManage && (
-                <>
-                  <button className="icon-btn" aria-label={`Archive ${p.name}`} title="Archive"
-                    onClick={(e) => { e.stopPropagation(); setArchive(p.id, true); }}>📦</button>
-                  <button className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete (typed confirmation)"
-                    onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}>🗑</button>
-                </>
-              )}
-            </>
-          )}
+          <button className="icon-btn" aria-label={`More actions for ${p.name}`} title="More actions"
+            onClick={(e) => openMenu('project', p.id, e)}>⋯</button>
         </div>
 
         {colorFor === p.id && (
@@ -266,7 +234,23 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
           </div>
         )}
 
-        {selectedProjectId === p.id && tasks.filter((t) => t.project_id === p.id).map((t) => {
+      </>
+    );
+  }
+
+  function taskDetails(p: Project) {
+    const perms = permsFor(p);
+    const canEditTasks = !p.group_id || (perms?.includes('edit_tasks') ?? false);
+    const projectTasks = tasks.filter((t) => t.project_id === p.id);
+    return (
+      <>
+        <div className="tree-selected-heading">
+          <strong className="grow" title={p.name}>{p.name}</strong>
+          <span className="muted">{projectTasks.length} {projectTasks.length === 1 ? 'task' : 'tasks'}</span>
+        </div>
+        {projectTasks.length === 0 ? (
+          <div className="muted" style={{ padding: '2px 8px 8px 20px' }}>No tasks yet.</div>
+        ) : projectTasks.map((t) => {
           const sbs = subtasks.filter((s) => s.task_id === t.id);
           const doneCount = sbs.filter((s) => !!s.done).length;
           const pct = sbs.length ? Math.round((doneCount / sbs.length) * 100) : null;
@@ -286,25 +270,14 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                 {renaming?.kind === 'task' && renaming.id === t.id ? (
                   <RenameInput initial={t.name} onCommit={(v) => rename('task', t.id, v)} onCancel={() => setRenaming(null)} />
                 ) : (
-                  <span className={`grow ${t.done ? 'done-text' : ''}`} title={t.name}>{t.name}</span>
+                  <HoverScrollText className={`grow ${t.done ? 'done-text' : ''}`} title={t.name}>{t.name}</HoverScrollText>
                 )}
                 {pct !== null && <span className="sub" aria-label={`${pct}% of subtasks done`}>{pct}%</span>}
                 <button className="icon-btn" aria-label={`Start timer on ${t.name}`} title="Timer (T)"
                   onClick={(e) => { e.stopPropagation(); toggleTaskTimer(t.id); }}>{isRunning ? '■' : '▶'}</button>
-                {compact ? (
-                  canEditTasks && (
-                    <button className="icon-btn" aria-label={`More actions for ${t.name}`} title="More actions"
-                      onClick={(e) => openMenu('task', t.id, e)}>⋯</button>
-                  )
-                ) : (
-                  canEditTasks && (
-                    <>
-                      <button className="icon-btn" aria-label={`Add subtask to ${t.name}`} title="Add subtask (S)"
-                        onClick={(e) => { e.stopPropagation(); addSubtask(t.id); }}>＋</button>
-                      <button className="icon-btn" aria-label={`Delete ${t.name}`} title="Delete (undo for 5s)"
-                        onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>🗑</button>
-                    </>
-                  )
+                {canEditTasks && (
+                  <button className="icon-btn" aria-label={`More actions for ${t.name}`} title="More actions"
+                    onClick={(e) => openMenu('task', t.id, e)}>⋯</button>
                 )}
               </div>
               {sbs.map((sb) => (
@@ -314,10 +287,11 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
                   {renaming?.kind === 'subtask' && renaming.id === sb.id ? (
                     <RenameInput initial={sb.name} onCommit={(v) => rename('subtask', sb.id, v)} onCancel={() => setRenaming(null)} />
                   ) : (
-                    <span className={`grow ${sb.done ? 'done-text' : ''}`} title={sb.name}
-                      onDoubleClick={() => canEditTasks && setRenaming({ kind: 'subtask', id: sb.id })}
-                      onKeyDown={(e) => { if (e.key === 'F2' && canEditTasks) setRenaming({ kind: 'subtask', id: sb.id }); }}
-                      tabIndex={0} role="treeitem" aria-selected={false}>{sb.name}</span>
+                    <HoverScrollText className={`grow ${sb.done ? 'done-text' : ''}`} title={sb.name}>
+                      <span onDoubleClick={() => canEditTasks && setRenaming({ kind: 'subtask', id: sb.id })}
+                        onKeyDown={(e) => { if (e.key === 'F2' && canEditTasks) setRenaming({ kind: 'subtask', id: sb.id }); }}
+                        tabIndex={0} role="treeitem" aria-selected={false}>{sb.name}</span>
+                    </HoverScrollText>
                   )}
                   {canEditTasks && (
                     <button className="icon-btn" aria-label={`Delete subtask ${sb.name}`}
@@ -343,55 +317,65 @@ export default function TreeSidebar({ onClose }: { onClose?: () => void }) {
   }
 
   return (
-    <div className="tree" role="tree" aria-label="Projects">
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 8px 8px' }}>
-        <button className="btn small primary" onClick={addProject}>＋ Project <span className="kbd" style={{ marginLeft: 4 }}>P</span></button>
-        <button className="btn small" disabled={!selectedProjectId || !canAddTask}
-          title={selectedProjectId && !canAddTask ? "You don't have the edit_tasks permission in this group" : 'New task (context-aware)'}
-          onClick={() => selectedProjectId && addTask(selectedProjectId)}>＋ Task <span className="kbd" style={{ marginLeft: 4 }}>N</span></button>
-        <button className="btn small" disabled={!selectedTaskId}
-          title="Resume tracking on the last tracked task"
-          onClick={() => void resumeLastTask()}>▶ Resume <span className="kbd" style={{ marginLeft: 4 }}>R</span></button>
+    <div className="tree" role="tree" aria-label="Projects and tasks">
+      <div className="tree-project-list">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 8px 8px' }}>
+          <button className="btn small primary" onClick={addProject}>＋ Project <span className="kbd" style={{ marginLeft: 4 }}>P</span></button>
+          <button className="btn small" disabled={!selectedProjectId || !canAddTask}
+            title={selectedProjectId && !canAddTask ? "You don't have the edit_tasks permission in this group" : 'New task (context-aware)'}
+            onClick={() => selectedProjectId && addTask(selectedProjectId)}>＋ Task <span className="kbd" style={{ marginLeft: 4 }}>N</span></button>
+          <button className="btn small"
+            title={running ? 'Stop the running timer' : 'Resume tracking on the last tracked task'}
+            onClick={() => void toggleLastTask()}>
+            {running ? '■ Stop' : '▶ Resume'} <span className="kbd" style={{ marginLeft: 4 }}>R</span>
+          </button>
+        </div>
+
+        {personal.length === 0 && groupProjects.size === 0 && <div className="muted" style={{ padding: '8px 10px' }}>No projects yet — create one above.</div>}
+
+        {personal.map((p) => (
+          <div key={p.id} className="tree-project">{projectRow(p)}</div>
+        ))}
+
+        {[...groupProjects.entries()].map(([groupId, gProjects]) => {
+          const g = groups.find((x) => x.id === groupId);
+          return (
+            <div key={groupId}>
+              <div className="tree-section-title" title="Group project — visible to current members only">
+                👥 {g?.name ?? 'Group'} ({gProjects.length})
+              </div>
+              {gProjects.map((p) => (
+                <div key={p.id} className="tree-project">{projectRow(p)}</div>
+              ))}
+            </div>
+          );
+        })}
+
+        {archived.length > 0 && (
+          <>
+            <div className="tree-section-title" role="button" aria-expanded={archiveOpen}
+              onClick={() => setArchiveOpen((v) => !v)} style={{ cursor: 'pointer' }}>
+              Archived ({archived.length}) {archiveOpen ? '▾' : '▸'}
+            </div>
+            {archiveOpen && archived.map((p) => (
+              <div key={p.id} className="row">
+                <span className="chip" style={{ background: p.color }} />
+                <HoverScrollText className="grow done-text" title={p.name}>{p.name}</HoverScrollText>
+                <button className="icon-btn" aria-label={`Restore ${p.name}`} title="Restore"
+                  onClick={() => setArchive(p.id, false)}>↩</button>
+                <button className="icon-btn" aria-label={`Delete archived ${p.name}`}
+                  onClick={() => deleteProject(p.id)}>🗑</button>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
-      {personal.length === 0 && groupProjects.size === 0 && <div className="muted" style={{ padding: '8px 10px' }}>No projects yet — create one above.</div>}
-
-      {personal.map((p) => (
-        <div key={p.id} className="tree-project">{projectRow(p)}</div>
-      ))}
-
-      {[...groupProjects.entries()].map(([groupId, gProjects]) => {
-        const g = groups.find((x) => x.id === groupId);
-        return (
-          <div key={groupId}>
-            <div className="tree-section-title" title="Group project — visible to current members only">
-              👥 {g?.name ?? 'Group'} ({gProjects.length})
-            </div>
-            {gProjects.map((p) => (
-              <div key={p.id} className="tree-project">{projectRow(p)}</div>
-            ))}
-          </div>
-        );
-      })}
-
-      {archived.length > 0 && (
-        <>
-          <div className="tree-section-title" role="button" aria-expanded={archiveOpen}
-            onClick={() => setArchiveOpen((v) => !v)} style={{ cursor: 'pointer' }}>
-            Archived ({archived.length}) {archiveOpen ? '▾' : '▸'}
-          </div>
-          {archiveOpen && archived.map((p) => (
-            <div key={p.id} className="row">
-              <span className="chip" style={{ background: p.color }} />
-              <span className="grow done-text">{p.name}</span>
-              <button className="icon-btn" aria-label={`Restore ${p.name}`} title="Restore"
-                onClick={() => setArchive(p.id, false)}>↩</button>
-              <button className="icon-btn" aria-label={`Delete archived ${p.name}`}
-                onClick={() => deleteProject(p.id)}>🗑</button>
-            </div>
-          ))}
-        </>
-      )}
+      <div className="tree-selected-details" aria-label="Selected project tasks">
+        {selProject && !selProject.archived
+          ? taskDetails(selProject)
+          : <div className="muted" style={{ padding: '10px 8px' }}>Select a project to see its tasks.</div>}
+      </div>
 
       {menu && menuFor(menu)}
     </div>
@@ -453,14 +437,15 @@ function RowMenu({ x, y, label, onClose, children }: {
     left: Math.min(Math.max(8, x), window.innerWidth - 268),
     top: Math.min(Math.max(8, y), window.innerHeight - 240),
   };
-  return (
+  return createPortal(
     <div className="modal-overlay row-menu-overlay" onClick={onClose}
       onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
       <div ref={ref} className="modal row-menu" style={style} role="menu" aria-label={label}
         onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

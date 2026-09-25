@@ -21,6 +21,7 @@ import SettingsView from './views/SettingsView';
 import ChatDock from './components/ChatDock';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
+import HoverScrollText from './components/HoverScrollText';
 import { addProject, addTask, addSubtask, toggleTaskDone, toggleSubtaskDone, toggleTaskTimer, toggleSubtaskTimer } from './lib/actions';
 import { useHasHover } from './lib/responsive';
 import { GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../shared/constants';
@@ -310,7 +311,7 @@ function ProjectBlock({ project, canEditTasks }: { project: Project; canEditTask
         onClick={() => store.selectProject(project.id)}
         onKeyDown={(e) => { if (e.key === 'Enter') store.selectProject(project.id); }}>
         <span className="chip" style={{ background: project.color }} aria-hidden />
-        <span className="grow"><b>{project.name}</b>{project.archived ? <span className="muted"> (archived)</span> : ''}</span>
+        <HoverScrollText className="grow" title={project.name}><b>{project.name}</b>{project.archived ? <span className="muted"> (archived)</span> : ''}</HoverScrollText>
         <span className="muted" style={{ fontSize: 12 }} title="Created">{fmtCreated(project.created_at)}</span>
         {canEditTasks && (
           <button className="icon-btn" title="Add task (N)" aria-label={`Add task to ${project.name}`}
@@ -342,7 +343,7 @@ function TaskRow({ task, canEdit }: { task: Task; canEdit: boolean }) {
         {isRunning && <span className="dot-running" aria-label="tracking" />}
         <input type="checkbox" checked={!!task.done} aria-label={`Done: ${task.name}`} disabled={!canEdit}
           onClick={(e) => e.stopPropagation()} onChange={() => void toggleTaskDone(task)} />
-        <span className={`grow ${task.done ? 'done-text' : ''}`} title={task.name}>{task.name}</span>
+        <HoverScrollText className={`grow ${task.done ? 'done-text' : ''}`} title={task.name}>{task.name}</HoverScrollText>
         {pct !== null && <span className="sub" aria-label={`${pct}% of subtasks done`}>{pct}%</span>}
         <span className="muted" style={{ fontSize: 12 }} title="Created">{fmtCreated(task.created_at)}</span>
         <button className="icon-btn" title="Timer (T)" aria-label={`Start timer on ${task.name}`}
@@ -356,7 +357,7 @@ function TaskRow({ task, canEdit }: { task: Task; canEdit: boolean }) {
         <div key={sb.id} className="row" style={{ paddingLeft: 42, minHeight: 26 }}>
           <input type="checkbox" checked={!!sb.done} aria-label={`Done: ${sb.name}`} disabled={!canEdit}
             onChange={() => void toggleSubtaskDone(sb)} />
-          <span className={`grow ${sb.done ? 'done-text' : ''}`}>{sb.name}</span>
+          <HoverScrollText className={`grow ${sb.done ? 'done-text' : ''}`} title={sb.name}>{sb.name}</HoverScrollText>
           <button className="icon-btn" title="Track this subtask" aria-label={`Track subtask ${sb.name}`}
             onClick={(e) => { e.stopPropagation(); void toggleSubtaskTimer(task.id, sb.id); }}>
             {running?.subtask_id === sb.id ? '■' : '▶'}
@@ -432,7 +433,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           <tr><td><span className="kbd">N</span></td><td>New task (context-aware)</td></tr>
           <tr><td><span className="kbd">S</span></td><td>New subtask on the selected task</td></tr>
           <tr><td><span className="kbd">T</span></td><td>Toggle timer on selection</td></tr>
-          <tr><td><span className="kbd">R</span></td><td>Resume tracking on the last task</td></tr>
+          <tr><td><span className="kbd">R</span></td><td>Stop the timer, or resume tracking on the last task</td></tr>
           <tr><td><span className="kbd">F2</span></td><td>Rename selection</td></tr>
           <tr><td><span className="kbd">Delete</span></td><td>Delete with 5s undo</td></tr>
           <tr><td><span className="kbd">Ctrl/Cmd</span> + <span className="kbd">K</span></td><td>Quick find</td></tr>

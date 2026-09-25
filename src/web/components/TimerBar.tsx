@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
 import { api, nowMs, serverOffsetMs } from '../lib/api';
 import { fmtHMS } from '../lib/time';
-import { resumeLastTask } from '../lib/actions';
+import { resumeLastTask, stopTimer } from '../lib/actions';
 import { SESSION_RULES } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 import { useHasHover } from '../lib/responsive';
@@ -81,10 +81,7 @@ export default function TimerBar() {
   }, [pomo?.phase]);
 
   async function stop() {
-    try {
-      await api('/timer/stop', { method: 'POST' });
-      store.setRunning(null);
-    } catch (e: any) { pushToast('error', e.message); }
+    await stopTimer();
   }
 
   async function discardAndEdit() {

@@ -147,14 +147,16 @@ Pointer classes (CSS media queries, no JS sniffing):
   inputs (prevents iOS focus zoom), keyboard-hint chips (`.kbd` in buttons)
   and view-tab shortcut hints hidden.
 - `(hover: hover) and (pointer: fine)` — all `:hover` effects are gated here
-  (no sticky hover on touch), and truncated text unwraps on hover.
+  (no sticky hover on touch), and truncated text scrolls horizontally on hover.
 
 Every interaction has a non-keyboard path:
 
-- Sidebar rows collapse secondary actions (color, reorder, visibility,
-  archive, delete, rename) into a per-row **⋯ menu** below 1024 px
-  (`RowMenu`: anchored popover on desktop, bottom sheet on phones); the timer
-  stays inline. Rename is reachable without F2/double-click.
+- Sidebar project/task rows collapse secondary actions (color, reorder,
+  visibility, archive, delete, rename) into a per-row **⋯ menu** on every
+  screen. `RowMenu` portals outside the sidebar so anchored popovers are not
+  clipped by its overflow; phones use a bottom sheet and other widths use a
+  clamped popover. The timer stays inline. Rename is reachable without
+  F2/double-click.
 - The Map has zoom buttons and two-pointer pinch (capture-phase pointer
   tracking that cancels in-flight drags), plus a per-node **⋯ menu** so
   right-click/double-click are never required.
@@ -162,9 +164,9 @@ Every interaction has a non-keyboard path:
   `useHasHover()`.
 
 Truncation policy: tight strips keep the one-line ellipsis; hover-capable
-devices **unwrap the full text on hover** (chosen over hover-scrollbars — no
-layout shift, nothing hidden); touch clamps `.row .grow` to two lines so
-truncation is visible; every truncation site carries a `title` tooltip.
+devices **auto-scroll the full text horizontally on hover** without changing row
+layout; touch clamps `.row .grow` to two lines so truncation is visible; every
+truncation site carries a `title` tooltip.
 
 Mobile platform hygiene: `100dvh` app shell, `env(safe-area-inset-*)` padding
 on the topbar/toasts/chat dock, `touch-action: manipulation` on controls
