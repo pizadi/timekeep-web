@@ -1,13 +1,17 @@
 # Testing
 
-## Unit tests
-
 ```bash
-npm test            # vitest run — node env, no DB or network needed
+npm run lint         # ESLint — errors block, warnings don't
+npm run format:check # Prettier — fails on drift
+npm run typecheck    # two tsc projects; also gates dead code
+npm test             # vitest run — node env, no DB or network needed
 npx vitest run test/time.test.ts   # single file
 ```
 
-Only `test/**/*.test.ts` is picked up. Current coverage:
+## Unit tests
+
+Only `test/**/*.test.ts` is picked up (jsdom where a test needs a DOM — see the
+`@vitest-environment` pragma). Current coverage:
 
 | File                   | Covers                                                                        |
 | ---------------------- | ----------------------------------------------------------------------------- |
@@ -18,6 +22,9 @@ Only `test/**/*.test.ts` is picked up. Current coverage:
 | `ids.test.ts`          | ULID helpers                                                                  |
 | `social.test.ts`       | friend/group permission logic                                                 |
 | `prompt-modal.test.ts` | SPA prompt modal                                                              |
+| `recent.test.ts`       | resume/"Jump back in" recency list (subtask-aware `mergeRecent`, bootstrap)   |
+| `web-time.test.ts`     | client wall-clock helpers: non-hour offsets, DST gap/repeat, offset format    |
+| `csp.test.ts`          | no HTML-injection sinks in `src/web`; CSP directives                          |
 
 ## E2E suite
 

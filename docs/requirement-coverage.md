@@ -52,6 +52,22 @@ TimeKeep-Web requirements spec (v1.0-draft).
 no presence heuristics, Page Visibility tricks, or permission prompts exist in
 this codebase.
 
+## Audit follow-ups (0.5.3)
+
+Items from the repo audit, re-verified against the current tree and closed:
+
+| Area                    | Now                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| Write rate limiting     | `limitWrites` / `write_user` (`RL_WRITE_USER`) on every mutating route            |
+| Capacity caps           | enforced inside the INSERT/UPDATE, not by a prior `SELECT COUNT(*)`               |
+| Reset-request timing    | email send on `waitUntil`; skip branches burn equivalent work                     |
+| Seeded admin credential | the daily cron logs `SECURITY_admin_default_password` while it still works        |
+| CSP                     | `style-src-elem 'self'` containment + `test/csp.test.ts` guards the no-sinks rule |
+| Lint/format             | ESLint + Prettier, both blocking in CI                                            |
+| Chained PBKDF2          | documented (no change needed)                                                     |
+| Reserved schema         | `oauth_accounts` / `users.totp_secret` documented as unused placeholders          |
+| Chat newlines           | `white-space: pre-wrap` on message bodies                                         |
+
 ## Known trade-offs
 
 - Bootstrap returns the user's full tree in one shot (fast for ≤ a few thousand
