@@ -88,7 +88,9 @@ export default function TimerBar() {
       notifyIfPermitted(msg, phase === 'decide' || phase === 'ready'); // one notification per phase change
     }
     prevPhase.current = phase;
-  }, [pomo?.phase]);
+    // depends on pomo.phase, not pomo: the state object is replaced on every
+    // tick (focus_ms_live etc.) and this effect only cares about phase changes
+  }, [pomo?.phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function stop() {
     await stopTimer();

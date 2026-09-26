@@ -4,7 +4,7 @@ import { CSRF_HEADER, DEVICE_HEADER } from '../../shared/constants';
 
 // localStorage: a device is a browser, not a tab — sessionStorage made every
 // tab a distinct "device", multiplying hello fan-out (audit §5.13).
-let deviceId: string = (() => {
+const deviceId: string = (() => {
   try {
     let d = localStorage.getItem('tk.device');
     if (!d) {

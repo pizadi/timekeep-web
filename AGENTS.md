@@ -37,7 +37,13 @@ npx vitest run test/time.test.ts          # single test file
 bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in another terminal
 ```
 
-- Full local check: `npm run typecheck && npm test && npm run build`. No lint/format tooling is configured.
+- Full local check: `npm run lint && npm run format:check && npm run typecheck && npm test && npm run build`.
+  ESLint (flat config, `eslint.config.js`) + Prettier are both wired into CI's `verify` job; run
+  `npm run lint:fix` / `npm run format` to apply fixes. Rule posture is deliberate:
+  `react-hooks/rules-of-hooks` is an error, `exhaustive-deps` a warning, and `no-explicit-any` is
+  off (the store/api layer is `any`-typed at its edges by design). Dead code is caught twice over:
+  `noUnusedLocals`/`noUnusedParameters` in both tsconfigs (so `typecheck` gates it) and
+  `@typescript-eslint/no-unused-vars` in ESLint.
 - E2E scripts (`e2e/smoke-test.sh`, `ws-test.mjs`, `roundtrip-test.mjs`, `undo-test.mjs`,
   `security-probes.mjs`, `regression-check.mjs`, `pomo-mode-test.mjs`) target `127.0.0.1:8787`
   and create their own accounts. They hammer the login endpoint — set `RL_LOGIN_IP`/

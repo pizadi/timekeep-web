@@ -24,7 +24,6 @@ async function main() {
     body: { identifier: 'dana', password: 'purple-marmalade-tuesday' },
   });
   const ck = (login.headers.get('set-cookie') ?? '').split(';')[0];
-  const H = { cookie: ck };
 
   const boot = (await raw('/bootstrap', {}, ck)).body;
   const proj = boot.projects[0];
@@ -50,7 +49,6 @@ async function main() {
     console.error('fixture session create failed:', JSON.stringify(sessRes.body));
     process.exit(1);
   }
-  const session = sessRes.body.session;
   console.log(`fixture: task ${task.name}, 1 subtask, 1 dep, 1 session`);
 
   // delete → capture undo payload

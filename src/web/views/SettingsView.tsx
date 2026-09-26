@@ -48,6 +48,11 @@ export default function SettingsView({ onClose, currentTheme }: { onClose: () =>
       .catch(() => {});
   }, []);
 
+  // every hook runs before the early return below — a conditional hook breaks
+  // React's hook ordering the moment `settings` arrives a render late (ESLint
+  // caught this one, not review)
+  const modalRef = useModalA11y(onClose);
+
   if (!settings) return null;
 
   async function save(patch: unknown) {
@@ -155,7 +160,6 @@ export default function SettingsView({ onClose, currentTheme }: { onClose: () =>
 
   const timezones = supportedTimezones();
   const deviceTz = deviceTimezone();
-  const modalRef = useModalA11y(onClose);
 
   return (
     <div className="modal-overlay" onClick={onClose}>

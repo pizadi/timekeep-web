@@ -243,8 +243,10 @@ function ChatBody({ groupId, myUserId, canModerate }: { groupId: string; myUserI
     }
   }
   useEffect(() => {
-    void load(); /* eslint-disable-line */
-  }, [groupId]);
+    // load is redefined every render, so listing it would refetch on
+    // every render — groupId is the real trigger
+    void load();
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // live updates: created / updated / deleted relayed from store.applyEvent
   useEffect(() => {

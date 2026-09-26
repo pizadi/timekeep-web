@@ -31,7 +31,7 @@ async function main() {
         resolve();
       }
     };
-    ws.onerror = (e) => {
+    ws.onerror = () => {
       clearTimeout(t);
       reject(new Error('ws error'));
     };

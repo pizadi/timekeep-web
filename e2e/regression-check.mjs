@@ -22,7 +22,6 @@ async function raw(path, opts = {}, cookie) {
   return { status: res.status, body, headers: res.headers };
 }
 
-const jar = [];
 async function login(identifier, password) {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
@@ -30,10 +29,6 @@ async function login(identifier, password) {
     headers: { 'content-type': 'application/json', 'x-device-id': 'regression-check' },
   });
   const cookie = (res.headers.get('set-cookie') ?? '').split(';')[0];
-  const csrf = (res.headers.get('set-cookie') ?? '')
-    .split('set-cookie:')
-    .map(() => '')
-    .join(''); // csrf read below via /config-free call
   return { status: res.status, body: await res.json().catch(() => null), cookie };
 }
 
@@ -134,9 +129,13 @@ await raw(
   CK,
 );
 const wmLogin = await login(withMail, 'withmail-pass-424242');
-const wmChange = await raw(
+// the call's side effect is the point (rotate the password), the result isn't read
+await raw(
   '/me/password',
-  { method: 'POST', body: { current_password: 'withmail-pass-424242', password: 'withmail-new-pass-424242' } },
+  {
+    method: 'POST',
+    body: { current_password: 'withmail-pass-424242', password: 'withmail-new-pass-424242' },
+  },
   wmLogin.cookie,
 );
 const wmCk = (await login(withMail, 'withmail-new-pass-424242')).cookie;

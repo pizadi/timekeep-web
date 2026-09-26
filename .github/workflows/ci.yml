@@ -1,5 +1,6 @@
 # TimeKeep Web — CI
-# verify: typecheck (two tsc projects) + unit tests + SPA build
+# verify: ESLint + Prettier check, typecheck (two tsc projects), unit tests,
+#         SPA build
 # version-sync: package.json must match wrangler.jsonc's __APP_VERSION__ define
 # e2e: full e2e suite against a local `wrangler dev` (blocking, retried once
 #      for the known wrangler-dev proxy flake — see AGENTS.md)
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   verify:
-    name: verify (typecheck · test · build)
+    name: verify (lint · format · typecheck · test · build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -31,6 +32,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # lint/format run first: both are fast and catch the cheap mistakes
+      - run: npm run lint
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

@@ -62,8 +62,7 @@ function fmtMinutes(m: number): string {
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 }
 
-const PRESETS = ['today', 'week', 'month', '30d', 'custom'] as const;
-type Preset = (typeof PRESETS)[number];
+type Preset = 'today' | 'week' | 'month' | '30d' | 'custom';
 
 export default function DashboardView() {
   const projects = useStore((s) => s.projects);
@@ -223,9 +222,12 @@ export default function DashboardView() {
         },
       });
     }
+    // destroy the charts THIS effect created, not whatever the ref holds by
+    // cleanup time (it may already point at the next render's instances)
+    const created = { bar: charts.current.bar, donut: charts.current.donut };
     return () => {
-      charts.current.bar?.destroy();
-      charts.current.donut?.destroy();
+      created.bar?.destroy();
+      created.donut?.destroy();
     };
   }, [summary, colorOf, nameOf, themePref]);
 

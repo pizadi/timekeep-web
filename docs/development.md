@@ -25,6 +25,31 @@ Open **http://localhost:8787** and sign in with the seeded admin account:
 There is no sign-up form. Create users from **Settings → Admin — users** (see
 the [admin guide](admin-guide.md)).
 
+## Lint & format
+
+ESLint 9 (flat config, `eslint.config.js`) and Prettier 3 (`.prettierrc.json`,
+`.prettierignore`). Both run in CI's blocking `verify` job.
+
+```bash
+npm run lint          # eslint .            (errors block; warnings don't)
+npm run lint:fix      # eslint . --fix
+npm run format:check  # prettier --check .  (fails CI on drift)
+npm run format        # prettier --write .
+```
+
+The config matches the house style (120 cols, single quotes, trailing commas)
+so the formatting stays boring. Two deliberate rule choices:
+`react-hooks/exhaustive-deps` is a **warning** (several effects intentionally
+narrow their dependencies — the timer bar keys on `pomo.phase`, not `pomo`,
+because the state object changes every tick) and `no-explicit-any` is **off**
+(the store and API layer are `any`-typed at their edges by design). Dead code
+is caught by `noUnusedLocals`/`noUnusedParameters` in both tsconfigs, so
+`npm run typecheck` fails on it too.
+
+`.prettierignore` keeps the generated deploy configs (they carry real resource
+ids), the hand-annotated `wrangler.jsonc` template, `package-lock.json`,
+`.dev.vars` and the scratch dirs (`.work/`, `.plan/`, `*AUDIT.md`) untouched.
+
 ## Commands
 
 | Command                                | What it does                                                         |

@@ -161,8 +161,10 @@ function GroupDetail({ group }: { group: GroupSummary }) {
     }
   };
   useEffect(() => {
-    void reload(); /* eslint-disable-line */
-  }, [group.id]);
+    // reload is redefined every render, so listing it would refetch on
+    // every render — group.id is the real trigger
+    void reload();
+  }, [group.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isOwner = myRole === 'owner';
   const can = (p: GroupPerm) => isOwner || myPerms.includes(p);
@@ -525,8 +527,10 @@ function GroupInvites({ groupId }: { groupId: string }) {
     }
   };
   useEffect(() => {
-    void reload(); /* eslint-disable-line */
-  }, [groupId]);
+    // reload is redefined every render, so listing it would refetch on
+    // every render — groupId is the real trigger
+    void reload();
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function invite() {
     const username = name.trim().toLowerCase();
@@ -602,8 +606,10 @@ function GroupLinks({ groupId }: { groupId: string }) {
     }
   };
   useEffect(() => {
-    void reload(); /* eslint-disable-line */
-  }, [groupId]);
+    // reload is redefined every render, so listing it would refetch on
+    // every render — groupId is the real trigger
+    void reload();
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function createLink() {
     try {

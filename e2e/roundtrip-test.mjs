@@ -131,7 +131,9 @@ async function main() {
     `pomodoro — start→focus:${phase1 === 'focus'} timerStartedWithPomo:${running} skip→idle:${phase2 === 'idle'}`,
   );
 
-  const ok = tasksOk && depsOk && subOk && pomoOk;
+  // sessionsOk was computed and printed but never asserted (ESLint's dead-variable
+  // check caught it) — the imported session count is part of the verdict now
+  const ok = tasksOk && depsOk && subOk && sessionsOk && pomoOk;
   console.log(ok ? 'PASS: export→import round-trip identical; pomodoro state machine correct' : 'FAIL');
   process.exit(ok ? 0 : 1);
 }

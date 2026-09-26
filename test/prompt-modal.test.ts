@@ -58,7 +58,6 @@ describe('PromptModal keyboard behavior', () => {
   });
 
   it('fires onDone at most once (double Enter racing the unmount)', async () => {
-    let calls = 0;
     // wrap: openPrompt owns onDone — count resolves instead (a second resolve on
     // the same promise is a no-op by spec, so assert the modal is gone + resolved)
     const pending = openPrompt({ title: 'New project' });
