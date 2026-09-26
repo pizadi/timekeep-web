@@ -147,25 +147,27 @@ authRoutes.post('/auth/reset-request', async (c) => {
   const user = await c.env.DB.prepare(
     'SELECT id, email_verified_at, role, active FROM users WHERE email = ?1'
   ).bind(email).first<{ id: string; email_verified_at: number | null; role: 'user' | 'admin'; active: 0 | 1 }>();
-  let devLink: string | undefined;
-  if (user) {
-    // admin has no mailbox; deactivated accounts can't log in anyway
-    if (user.role === 'admin' || !user.active) return c.json({ ok: true });
-    if (!user.email_verified_at) {
-      // blocked until verified (FR-A1)
-      return c.json({ ok: true });
-    }
-    const token = randomToken(32);
-    await c.env.DB.prepare(
-      `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'reset', ?3)`
-    ).bind(await sha256Hex(token), user.id, Date.now() + 3600_000).run();
-    const link = `${appUrl(c)}/reset?token=${token}`;
-    try {
-      await getEmailSender(c.env).send(email, 'Reset your TimeKeep password',
-        `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`);
-    } catch { /* logged by sender */ }
+
+  // Identical response AND comparable wall-clock time whether or not the account
+  // exists (FR-A5 AC, audit #3): the send moved onto waitUntil so the real path
+  // no longer waits on an outbound fetch (100 ms+), and every skip branch burns
+  // the same token work the real path does — `POST /auth/login` already does
+  // this for unknown users. Residual, stated rather than hidden: the real path
+  // still performs one extra D1 insert (~1 ms).
+  if (!user || user.role === 'admin' || !user.active || !user.email_verified_at) {
+    await sha256Hex(randomToken(32)); // admin has no mailbox; unverified is blocked (FR-A1)
+    return c.json({ ok: true });
   }
-  // identical response whether or not the account exists (FR-A5 AC).
+  const token = randomToken(32);
+  await c.env.DB.prepare(
+    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'reset', ?3)`
+  ).bind(await sha256Hex(token), user.id, Date.now() + 3600_000).run();
+  const link = `${appUrl(c)}/reset?token=${token}`;
+  c.executionCtx.waitUntil(
+    getEmailSender(c.env).send(email, 'Reset your TimeKeep password',
+      `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`)
+      .catch(() => { /* logged by sender */ })
+  );
   // No reset link in the response even under EMAIL_DEV_MODE — the dev console
   // log is the dev surface; API responses must never carry live tokens.
   return c.json({ ok: true });
