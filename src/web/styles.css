@@ -92,11 +92,16 @@ a { color: var(--accent); }
 
 /* drawer dismissal (narrow screens): backdrop behind the fixed sidebar
    (z-40) + a close button inside the drawer, which covers the hamburger
-   once open */
-.sidebar-close { display: none; }
+   once open. NOTE: these must out-specify `.icon-btn`/`.btn` (hence the
+   two-class selectors) — `.icon-btn`'s `display: inline-flex` sits LATER
+   in this file and would override a plain `.sidebar-close` at desktop
+   widths, leaving a ✕ that closes nothing (the sidebar is permanent
+   there). The drawer exists ≤1023px only, so that's where the button
+   lives. */
+.icon-btn.sidebar-close { display: none; }
 @media (max-width: 1023px) {
   .sidebar-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 39; }
-  .sidebar-close { display: inline-flex; }
+  .icon-btn.sidebar-close { display: inline-flex; }
 }
 @media (min-width: 1024px) {
   .sidebar-backdrop { display: none; }
