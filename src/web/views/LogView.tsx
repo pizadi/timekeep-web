@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
-import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput } from '../lib/time';
+import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput, parseLocalInput, fmtUtcOffset, localTimeWarning } from '../lib/time';
 import { addDaysCivil, dayStartInstant } from '../../shared/time';
 import { LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
@@ -274,6 +274,11 @@ export default function LogView() {
   );
 }
 
+/** "2h 05m"-style duration for the editor's timezone hint line. */
+function fmtDur(mins: number): string {
+  return mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m` : `${mins}m`;
+}
+
 /** Manual add/edit (FR-S4). Conflicts (same-task overlap) are listed inline. */
 function SessionEditor({
   initial, tz, defaultTaskId, onClose, onSaved, suggestEnd
@@ -288,7 +293,6 @@ function SessionEditor({
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const subtasks = useStore((s) => s.subtasks);
-  const user = useStore((s) => s.user)!;
   const selectedTaskId = useStore((s) => s.selectedTaskId);
 
   const [taskId, setTaskId] = useState(initial?.task_id ?? defaultTaskId ?? selectedTaskId ?? tasks[0]?.id ?? '');
@@ -306,6 +310,14 @@ function SessionEditor({
   const [error, setError] = useState<{ message: string; conflicts?: any[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const modalRef = useModalA11y(onClose);
+
+  // render-time tz echo (typing can momentarily leave the fields empty → null-safe)
+  const startInstant = parseLocalInput(start, tz);
+  const endInstant = parseLocalInput(end, tz);
+  const durationMin = startInstant !== null && endInstant !== null
+    ? Math.round((endInstant - startInstant) / 60000)
+    : 0;
+  const tzWarning = localTimeWarning(start, tz) ?? localTimeWarning(end, tz);
 
   const isEdit = !!initial?.id;
 
@@ -403,15 +415,26 @@ function SessionEditor({
         </label>
         <div className="grid-2col">
           <label className="field">
-            <span>Start ({user.timezone})</span>
+            {/* both fields are wall-clock in the PROFILE timezone — the hint below
+                makes that (and the resulting duration) visible before saving */}
+            <span>Start ({tz})</span>
             <input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
           </label>
           <label className="field">
-            <span>End</span>
+            <span>End ({tz})</span>
             <input className="input" type="datetime-local" value={end}
               onChange={(e) => setEnd(e.target.value)} />
           </label>
         </div>
+        <p className="muted" style={{ fontSize: 12, margin: '-6px 0 10px' }}>
+          {startInstant !== null && `Times are in ${tz} (${fmtUtcOffset(startInstant, tz)} at the start)`}
+          {startInstant !== null && endInstant !== null && (
+            durationMin < 0 ? ' · end is before the start' : ` · duration ${fmtDur(durationMin)}`
+          )}
+        </p>
+        {tzWarning && (
+          <p className="muted" style={{ fontSize: 12, margin: '-4px 0 10px' }} role="status">⚠ {tzWarning}</p>
+        )}
         <label className="field">
           <span>Note</span>
           <input className="input" value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />

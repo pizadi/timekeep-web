@@ -5,6 +5,7 @@ import type { WsEvent } from '../../shared/constants';
 import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
 import { mergeRecent, recentFromBootstrap, type RecentEntry } from './recent';
+import { deviceTimezone } from './time';
 
 export interface Project { id: string; user_id?: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; group_id?: string | null; created_at: number; updated_at: number }
 export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
@@ -160,6 +161,7 @@ export const store = {
       };
       set({});
       startWsAndSync();
+      void store.seedTimezoneFromDevice();
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'password_change_required') {
         // forced password change: /me is the only readable surface — surface the
@@ -412,6 +414,27 @@ export const store = {
   setPomo(pomo: PomoState | null) { set({ pomo }); },
   setSettings(s: Settings) { set({ settings: s }); },
   setUser(u: UserProfile) { set({ user: u }); },
+  /**
+   * Seed the profile timezone from the device (the manual-timeslot tz fix).
+   * Every admin-created user starts with the seeded 'UTC' (routes/admin.ts) and
+   * nothing else ever sets it — so reports, the log and the session editor all
+   * bucket/display in UTC while the user lives elsewhere. Rule: ONLY the
+   * untouched 'UTC' default is auto-corrected, and only to a different, valid
+   * device zone. A zone the user picked (any non-'UTC' value, including a
+   * deliberate 'UTC') is respected. Idempotent: after the PATCH the profile
+   * equals the device zone and this is a no-op.
+   */
+  async seedTimezoneFromDevice(): Promise<void> {
+    const user = state.user;
+    const deviceTz = deviceTimezone();
+    if (!user || !deviceTz || user.timezone === deviceTz || user.timezone !== 'UTC') return;
+    try {
+      const res = await api<{ user: any }>('/me', { method: 'PATCH', body: { timezone: deviceTz } });
+      store.setUser(res.user);
+      store.bumpReports(); // day buckets moved → refetch charts
+      pushToast('info', `Timezone set to ${deviceTz} (from this device) — change it any time in Settings`);
+    } catch { /* non-fatal: stays UTC; Settings offers a one-click device-zone button */ }
+  },
   bumpReports() { set({ reportsVersion: state.reportsVersion + 1 }); },
   tickServerNow() { set({ serverNow: Date.now() }); },
 

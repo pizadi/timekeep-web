@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { applyTheme, ThemePref } from '../lib/theme';
 import { MIN_PASSWORD, POMODORO_LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
+import { deviceTimezone } from '../lib/time';
 import Combobox from '../components/Combobox';
 import Dropdown from '../components/Dropdown';
 
@@ -111,6 +112,7 @@ export default function SettingsView({ onClose, currentTheme }: {
   }
 
   const timezones = supportedTimezones();
+  const deviceTz = deviceTimezone();
   const modalRef = useModalA11y(onClose);
 
   return (
@@ -136,6 +138,12 @@ export default function SettingsView({ onClose, currentTheme }: {
               groups={[{ options: timezones.map((tz) => ({ value: tz, label: tz })) }]}
               placeholder={user.timezone}
             />
+            {deviceTz && deviceTz !== user.timezone && (
+              <button className="btn ghost small" style={{ marginTop: 6 }}
+                onClick={() => { setTzText(deviceTz); void saveProfile({ timezone: deviceTz }); }}>
+                This device is in {deviceTz} — use it
+              </button>
+            )}
           </label>
           <label className="field"><span>Week starts on</span>
             <select className="input" value={user.week_start} onChange={(e) => saveProfile({ week_start: Number(e.target.value) })}>
