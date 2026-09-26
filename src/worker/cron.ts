@@ -1,8 +1,13 @@
 // Cron Trigger (daily, FR-D3): logical dump → R2 (30-day retention), sync_log
 // prune (keeps 2 h of events per user for reconnect deltas, FR-N3), plus GC
-// of expired auth sessions, email tokens and rate-limit counters.
+// of expired auth sessions, email tokens and rate-limit counters. Also warns
+// when the seeded admin password is still in use (audit #4).
 // Idempotent + resumable (NFR-2).
 import type { Env } from './env';
+import { verifyPassword } from './auth';
+
+/** The password `migrations/0002_usernames_admin.sql` seeds for `admin`. */
+const SEEDED_ADMIN_PASSWORD = 'changemeasap';
 
 const DUMP_TABLES = ['users', 'projects', 'tasks', 'subtasks', 'task_dependencies', 'time_sessions', 'settings', 'layout'];
 const PAGE_SIZE = 5000;
@@ -28,8 +33,34 @@ export function tableScan(
   };
 }
 
+/**
+ * Loud warning if the seeded admin credential is still in place (audit #4).
+ *
+ * The hash can't be compared to a fixed string — every account gets a random
+ * salt — so this is a real `verifyPassword` of the known default, once a day
+ * (6 chained 100k rounds). Cheap enough to run unconditionally, and it turns
+ * "nobody noticed" into a log line. Not a lockout: the flag is set, the deploy
+ * isn't blocked.
+ */
+export async function warnOnDefaultAdminPassword(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT password_hash FROM users WHERE username = 'admin' AND role = 'admin' LIMIT 1"
+  ).first<{ password_hash: string }>();
+  if (!row?.password_hash) return false;
+  if (!(await verifyPassword(SEEDED_ADMIN_PASSWORD, row.password_hash))) return false;
+  console.warn(JSON.stringify({
+    evt: 'SECURITY_admin_default_password',
+    at: Date.now(),
+    message: 'the admin account still uses the seeded default password — rotate it now (Settings → account, or the admin guide)'
+  }));
+  return true;
+}
+
 export async function runDailyCron(env: Env): Promise<void> {
   const now = Date.now();
+
+  // 0. operational signal: is the public default admin password still live?
+  await warnOnDefaultAdminPassword(env).catch(() => { /* never fail the cron for a check */ });
 
   // 1. prune sync_log older than 2 hours (delta window is ≥ 1 h, FR-N3)
   await env.DB.prepare('DELETE FROM sync_log WHERE created_at < ?1')

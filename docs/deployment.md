@@ -46,7 +46,9 @@ is the app semver, `build` the deploy SHA (`"dev"` for ad-hoc local builds).
 On first sign-in the seeded admin (`admin` / `changemeasap`) is forced to set
 a real password. Rotate it immediately on any real deployment — the default
 is public knowledge (see the [admin guide](admin-guide.md#admin-account-recovery)
-for recovery if it's ever lost).
+for recovery if it's ever lost). The daily cron verifies the seeded password
+against the admin hash and logs a `SECURITY_admin_default_password` warning
+while it still works, so check the logs after deploying.
 
 ## Configuration reference
 

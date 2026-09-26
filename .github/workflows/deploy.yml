@@ -62,6 +62,21 @@ jobs:
           npm run typecheck
           npm test
 
+      # audit #4: verifyTurnstile() returns true when the secret is absent, so a
+      # deployment without it silently has no bot defense on the auth endpoints.
+      # Non-blocking by design (Turnstile is optional and secrets set directly
+      # on the worker survive redeploys without living in the repo) — this only
+      # surfaces the most likely cause.
+      - name: Warn if Turnstile is unconfigured
+        run: |
+          if [ -z "${TURNSTILE_SECRET_KEY}" ]; then
+            echo "::warning::No TURNSTILE_SECRET_KEY secret in this repo — verifyTurnstile() no-ops without it, so login/reset/verify have NO bot defense. If it was set directly on the worker (wrangler secret put, survives redeploys) ignore this; otherwise set it."
+          else
+            echo "Turnstile secret present in the repo — bot defense will be active."
+          fi
+        env:
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+
       - name: Render deploy config (ids stay out of the repo)
         run: BUILD_SHA="${GITHUB_SHA::7}" node scripts/render-wrangler.mjs wrangler.ci.jsonc
         env:

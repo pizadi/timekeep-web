@@ -126,7 +126,17 @@ notified via `ctx.waitUntil`).
   path.
 - **Accounts**: admin-managed — there is no self-signup (`/auth/signup`
   returns 404 and no UI exists). Login identifier is the `username` column;
-  `users.email` is only an optional reset-mail address.
+  `users.email` is only an optional reset-mail address. The seeded `admin`
+  credential (`changemeasap`) is public knowledge; the daily cron runs a real
+  `verifyPassword` against it and logs `SECURITY_admin_default_password`
+  while it still works, so "nobody rotated it" is visible in the logs
+  (audit #4). Rotate it on every deploy — see [deployment](deployment.md).
+- **Reserved schema**: `oauth_accounts` and `users.totp_secret` exist from
+  `0001_init.sql` but nothing reads or writes them (only the account-delete
+  cascade touches `oauth_accounts`). They are placeholders for FR-A3 (OAuth)
+  and FR-A9 (TOTP), both unimplemented — see
+  [requirement-coverage](requirement-coverage.md). Don't read them as
+  evidence of a partially shipped feature.
 - **Headers/CSP**: strict headers on every response; CSP carries
   `style-src 'unsafe-inline'` for React inline styles (documented trade-off).
 
