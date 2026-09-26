@@ -47,6 +47,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   last (it deletes the `dana` account).
 - `wrangler dev`'s local proxy intermittently drops requests under rapid sequential e2e load
   (`Error: Network connection lost` → the script dies on a random step). Re-run before investigating.
+- **Temp files and scratch state go in `.work/`** (gitignored, inside the project) — never `/tmp`.
+  Cookie jars, throwaway D1/KV state for a local `wrangler dev --persist-to`, ad-hoc verification
+  scripts, build logs. Same machine, same repo, and it survives a reboot's `/tmp` cleanup.
 
 ## Env
 
@@ -148,6 +151,20 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   - Rate limits: `social_user` bucket (friend requests, username lookups, joins, invite/link
     minting; `RL_SOCIAL_USER`), chat sends ride `limitHeavy`. Invite-link tokens are stored as
     SHA-256 hashes and returned exactly once.
+- **State-changing writes are throttled by `limitWrites`** (`write_user` bucket,
+  `RL_WRITE_USER`, 300/min default) — the CRUD/task/session/timer/group routes had no rate
+  limit at all before, only eventual entity-count caps. Chained after `requireAuth` in the
+  `use(...)` of every mutating route file (chat edits, `/me`, and misc's settings/layout take it
+  per-route); reads are skipped (they ride `api_user` via `limitHeavy`) and a per-request flag
+  keeps a single write counted once even when two route files match the same path. Never add a
+  mutating route without it.
+- **Capacity caps are enforced inside the INSERT/UPDATE, never by a prior
+  `SELECT COUNT(*)`** (audit 🟡2). D1 serializes writes per database, so a guarded statement
+  (`INSERT … SELECT … WHERE (SELECT COUNT(*) …) < ?` plus a `meta.changes` check) cannot be
+  raced, while count-then-insert can overshoot the cap. Applies to group creation, join-by-link
+  (member cap *and* the link's `use_count < max_uses`), invite accept, invite-link minting,
+  friend requests, and friend-request accept (both friendship rows in ONE guarded statement so
+  the pair is all-or-nothing). Keep the same 422 `limit` error when `changes` comes back short.
 - End-of-run pomodoro notifications (`decide`/`ready` phases) bypass the `notifications_enabled`
   toggle (they need only browser permission, requested when pomodoro is enabled in Settings);
   every other notification respects the toggle. Notification permission is never requested

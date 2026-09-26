@@ -2,7 +2,7 @@
 import { Hono } from 'hono';
 import type { WorkerType, UserInfo } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, clearSessionCookie } from '../middleware';
+import { requireAuth, limitWrites, clearSessionCookie } from '../middleware';
 import { profilePatchSchema, passwordChangeSchema } from '../validators';
 import { isValidTimezone } from '../../shared/time';
 import { passwordProblem } from '../../shared/validation';
@@ -11,8 +11,8 @@ import { sha256Hex, hashPassword, verifyPassword, isCommonPassword } from '../au
 
 export const meRoutes = new Hono<WorkerType>();
 // scoped — a sub-app use('*') would leak requireAuth onto every /api path
-meRoutes.use('/me', requireAuth);
-meRoutes.use('/me/*', requireAuth);
+meRoutes.use('/me', requireAuth, limitWrites);
+meRoutes.use('/me/*', requireAuth, limitWrites);
 
 const publicUser = (u: any): UserInfo => ({
   id: u.id, username: u.username, email: u.email, name: u.name, timezone: u.timezone,

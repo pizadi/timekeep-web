@@ -19,6 +19,7 @@ export interface Env {
   RL_ADMIN_IP?: string;
   RL_API_USER?: string;
   RL_SOCIAL_USER?: string;
+  RL_WRITE_USER?: string;
 
   // secrets
   // NOTE: no SESSION_SECRET — session tokens are 256-bit random, hashed at rest.
@@ -39,6 +40,8 @@ export type WorkerType = {
     };
     deviceId: string;
     authSessionId: string;
+    /** set by `limitWrites` so a path matched by two route files counts once */
+    writeLimited: boolean;
   };
 };
 

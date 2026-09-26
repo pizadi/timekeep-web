@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import type { Context } from 'hono';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitWrites } from '../middleware';
 import { taskCreateSchema, taskPatchSchema, subtaskCreateSchema, subtaskPatchSchema, depCreateSchema } from '../validators';
 import {
   assertTaskLimit, assertSubtaskLimit, assertNotSubtask,
@@ -19,11 +19,11 @@ import { ulid } from '../../shared/ids';
 import { findCyclePath } from '../../shared/validation';
 
 export const taskRoutes = new Hono<WorkerType>();
-taskRoutes.use('/tasks', requireAuth);
-taskRoutes.use('/tasks/*', requireAuth);
-taskRoutes.use('/subtasks', requireAuth);
-taskRoutes.use('/subtasks/*', requireAuth);
-taskRoutes.use('/projects/*', requireAuth);
+taskRoutes.use('/tasks', requireAuth, limitWrites);
+taskRoutes.use('/tasks/*', requireAuth, limitWrites);
+taskRoutes.use('/subtasks', requireAuth, limitWrites);
+taskRoutes.use('/subtasks/*', requireAuth, limitWrites);
+taskRoutes.use('/projects/*', requireAuth, limitWrites);
 
 // ---------- tasks ----------
 

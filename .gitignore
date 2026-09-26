@@ -7,3 +7,6 @@ dist/
 .DS_Store
 wrangler.local.jsonc
 wrangler.ci.jsonc
+*AUDIT.md
+.plan
+.work/

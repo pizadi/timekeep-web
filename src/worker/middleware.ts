@@ -239,6 +239,12 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
     tokenIp: { name: 'token_ip', limit: n(env.RL_TOKEN_IP, 30), windowMs: 15 * 60_000 },
     adminIp: { name: 'admin_ip', limit: n(env.RL_ADMIN_IP, 20), windowMs: 15 * 60_000 },
     apiUser: { name: 'api_user', limit: n(env.RL_API_USER, 120), windowMs: 60_000 },
+    // state-changing CRUD/timer/group writes (the audit's 🟠1): those routes had
+    // only eventual entity-count caps, so a leaked session could hammer
+    // /timer/start-stop in a loop — each call a D1 write + DO round-trip + WS
+    // fan-out. Generous enough that no human hits it (polling/reports are all
+    // GETs and ride apiUser), low enough to cap abuse at a few writes/second.
+    writeUser: { name: 'write_user', limit: n(env.RL_WRITE_USER, 300), windowMs: 60_000 },
     // friend requests + username lookups (blocks request spam and cheap
     // username enumeration — the only user-existence oracle in the app)
     socialUser: { name: 'social_user', limit: n(env.RL_SOCIAL_USER, 30), windowMs: 3600_000 }
@@ -280,16 +286,12 @@ export function tooMany(retryAfterS: number) {
 }
 
 /**
- * Per-user throttle for heavy endpoints (reports, export, import, bootstrap,
- * sync — NFR-3 `apiUser`). Returns a 429 response when over budget, else null.
- * The counter lives in the user's UserHub DO (single instance per user → the
- * read-modify-write is atomic, and the hot per-user key does no KV writes).
- * Falls back to KV when the DO is unavailable.
- * Deliberately NOT applied to every request: chatty small requests would
- * round-trip the DO needlessly.
+ * Per-user counter shared by the throttles below. The counter lives in the
+ * user's UserHub DO (single instance per user → the read-modify-write is
+ * atomic, and the hot per-user key does no shared-key writes); falls back to
+ * the atomic D1 upsert when the DO is unavailable.
  */
-export async function limitHeavy(c: Ctx): Promise<Response | null> {
-  const rule = rateRules(c.env).apiUser;
+async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
   const userId = c.get('user').id;
   try {
     const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
@@ -302,10 +304,41 @@ export async function limitHeavy(c: Ctx): Promise<Response | null> {
       const out = await res.json() as { limited: boolean; retry_after_s: number };
       return out.limited ? tooMany(out.retry_after_s) : null;
     }
-  } catch { /* DO unavailable → KV fallback below */ }
+  } catch { /* DO unavailable → D1 fallback below */ }
   const rl = await rateLimitHit(c.env, rule, userId);
   return rl ? tooMany(rl) : null;
 }
+
+/**
+ * Per-user throttle for heavy READ endpoints (reports, export, import,
+ * bootstrap, sync — NFR-3 `apiUser`). Returns a 429 response when over budget,
+ * else null. Deliberately NOT applied to every request: chatty small requests
+ * would round-trip the DO needlessly.
+ */
+export async function limitHeavy(c: Ctx): Promise<Response | null> {
+  return userRateLimit(c, rateRules(c.env).apiUser);
+}
+
+/**
+ * Per-user throttle for state-changing writes (audit 🟠1, `writeUser`).
+ * Route-level middleware, chained after `requireAuth` in every route file that
+ * mutates state — the CRUD/task/session/timer/group routes used to have no rate
+ * limit at all, only eventual entity-count caps.
+ *
+ * Reads are skipped: the SPA's polling and report refetches are all GETs and
+ * ride `apiUser` instead. The once-per-request flag matters because two route
+ * files can register a `use` chain for the same path (tasks.ts and projects.ts
+ * both cover `/projects/*`) — without it one write would be counted twice.
+ */
+export const limitWrites = createMiddleware<WorkerType>(async (c, next) => {
+  if (c.req.method === 'GET' || c.req.method === 'HEAD' || c.req.method === 'OPTIONS') return next();
+  if (c.get('writeLimited')) return next();
+  c.set('writeLimited', true);
+  if (!c.get('user')) return next(); // always chained after requireAuth; defensive only
+  const limited = await userRateLimit(c, rateRules(c.env).writeUser);
+  if (limited) return limited;
+  return next();
+});
 
 // ---------- Turnstile (FR-A2) ----------
 

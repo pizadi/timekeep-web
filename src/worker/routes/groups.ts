@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env, WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, rateLimitHit, rateRules } from '../middleware';
+import { requireAuth, limitWrites, rateLimitHit, rateRules } from '../middleware';
 import {
   groupCreateSchema, groupPatchSchema, groupInviteSchema,
   groupMemberPatchSchema, groupLinkCreateSchema, ulidish
@@ -21,8 +21,8 @@ import { dayBounds, civilDate, minutes } from '../../shared/time';
 import { LIMITS, REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 
 export const groupRoutes = new Hono<WorkerType>();
-groupRoutes.use('/groups', requireAuth);
-groupRoutes.use('/groups/*', requireAuth);
+groupRoutes.use('/groups', requireAuth, limitWrites);
+groupRoutes.use('/groups/*', requireAuth, limitWrites);
 
 /** Signal every current member (+ any extra users, e.g. an invitee) that the
  *  group changed. Group events are deliberately payload-light: clients refetch. */

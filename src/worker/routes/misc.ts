@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, limitHeavy } from '../middleware';
+import { requireAuth, limitHeavy, limitWrites } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
 import { appendEvents, notifyHub } from '../events';
 import { socialLists } from './friends';
@@ -111,7 +111,7 @@ miscRoutes.get('/settings', requireAuth, async (c) => {
   return c.json({ settings: mergeSettings(row?.data), turnstile_site_key: c.env.TURNSTILE_SITE_KEY ?? null });
 });
 
-miscRoutes.put('/settings', requireAuth, async (c) => {
+miscRoutes.put('/settings', requireAuth, limitWrites, async (c) => {
   const parsed = settingsSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid settings payload', parsed.error.flatten());
 
@@ -165,7 +165,7 @@ miscRoutes.get('/layout/:projectId', requireAuth, async (c) => {
 
 const CHUNK = 50; // stay under D1 batch statement limits (same as import)
 
-miscRoutes.put('/layout/:projectId', requireAuth, async (c) => {
+miscRoutes.put('/layout/:projectId', requireAuth, limitWrites, async (c) => {
   const parsed = layoutSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid layout payload', parsed.error.flatten());
   const userId = c.get('user').id;
@@ -189,7 +189,7 @@ miscRoutes.put('/layout/:projectId', requireAuth, async (c) => {
   return c.json({ ok: true, events: evs });
 });
 
-miscRoutes.delete('/layout/:projectId', requireAuth, async (c) => {
+miscRoutes.delete('/layout/:projectId', requireAuth, limitWrites, async (c) => {
   // "Reset layout" → auto layered layout recomputed client-side (FR-M8)
   await c.env.DB.prepare(
     `DELETE FROM layout WHERE user_id = ?1 AND task_id IN

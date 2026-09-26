@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import type { Context } from 'hono';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitWrites } from '../middleware';
 import { pomoStartSchema, ulidish } from '../validators';
 import { z } from 'zod';
 
@@ -16,10 +16,10 @@ const timerOpSchema = z.object({
 });
 
 export const timerRoutes = new Hono<WorkerType>();
-timerRoutes.use('/timer', requireAuth);
-timerRoutes.use('/timer/*', requireAuth);
-timerRoutes.use('/pomo', requireAuth);
-timerRoutes.use('/pomo/*', requireAuth);
+timerRoutes.use('/timer', requireAuth, limitWrites);
+timerRoutes.use('/timer/*', requireAuth, limitWrites);
+timerRoutes.use('/pomo', requireAuth, limitWrites);
+timerRoutes.use('/pomo/*', requireAuth, limitWrites);
 
 async function callHub(c: Context<WorkerType>, path: string, body?: unknown, method = 'POST'): Promise<Response> {
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(c.get('user').id));

@@ -48,9 +48,10 @@ scripts reuse them. Rate-limit overrides (`RL_LOGIN_IP`, `RL_LOGIN_EMAIL`,
 | 5 | `e2e/undo-test.mjs` | delete → restore identity round-trip (uses `dana`) |
 | 6 | `e2e/pagination-day-check.mjs` | page-based log pagination, `/reports/day` summary, subtask donut breakdown (uses `dana`'s smoke-run sessions) |
 | 7 | `e2e/security-probes.mjs` | authn matrix, IDOR/authz, CSRF, forced-change gate, session revocation, response whitelists, rate limits, WS rejection |
-| 8 | `e2e/regression-check.mjs` | targeted probes: open-ended manual sessions 422, no ghost timer after deletes, no reset links in responses, resend-verification, token-endpoint 429, import enforcement + events, cross-user restore |
-| 9 | `e2e/social-test.sh` | friends, visibility, presence, groups + permissions, chat, group projects + group report (creates its own users) |
-| 10 | `e2e/roundtrip-test.mjs` | **run last** — export → delete account → import identity round-trip; deletes the `dana` account |
+| 8 | `e2e/write-limit-test.mjs` | per-user **write** throttle (audit 🟠1): a burst of CRUD writes gets 429 + `retry-after`, reads stay open, another user is unaffected. Runs against a **dedicated throwaway instance** (`run-e2e.sh` starts one on :8788 with its own state dir and `--var RL_WRITE_USER:5`) — the shared instance's admin password is already rotated by `smoke-test.sh`, and the 300/min default would need a burst of minutes through the local proxy |
+| 9 | `e2e/regression-check.mjs` | targeted probes: open-ended manual sessions 422, no ghost timer after deletes, no reset links in responses, resend-verification, token-endpoint 429, import enforcement + events, cross-user restore |
+| 10 | `e2e/social-test.sh` | friends, visibility, presence, groups + permissions, chat, group projects + group report (creates its own users) |
+| 11 | `e2e/roundtrip-test.mjs` | **run last** — export → delete account → import identity round-trip; deletes the `dana` account |
 
 Ordering rules: smoke first (creates the shared users), roundtrip last
 (deletes `dana`). Everything in between either creates its own users or
@@ -64,8 +65,9 @@ reuses `dana`.
 
 `.github/workflows/ci.yml` runs the whole suite in CI: the e2e job builds the
 SPA, writes a CI `.dev.vars` (fast KDF, rate-limit overrides — no
-`RL_TOKEN_IP`), wipes `.wrangler/state` for a deterministic fresh-DB run, and
-executes `scripts/run-e2e.sh` — which applies migrations, starts
-`wrangler dev`, waits for `/api/version`, then runs the ten scripts above in
-the documented order. The job is blocking and retries once to absorb the
-wrangler-dev proxy flake.
+`RL_TOKEN_IP`, no `RL_WRITE_USER`), wipes `.wrangler/state` for a
+deterministic fresh-DB run, and executes `scripts/run-e2e.sh` — which applies
+migrations, starts `wrangler dev`, waits for `/api/version`, then runs the
+eleven scripts above in the documented order (spinning up a second, disposable
+instance for `write-limit-test.mjs` and reaping it afterwards). The job is
+blocking and retries once to absorb the wrangler-dev proxy flake.

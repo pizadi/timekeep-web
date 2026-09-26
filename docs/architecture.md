@@ -114,9 +114,16 @@ notified via `ctx.waitUntil`).
 - **Sessions**: opaque tokens, stored hashed, rotation on privilege changes,
   list + revoke in the panel; deactivation/password-reset revokes everything.
 - **Rate limits**: bucketed (login per-IP/per-identifier, admin, token
-  endpoints, heavy API, social actions). The hot per-user `api_user` counter
-  lives in the user's UserHub DO (atomic); KV is the fallback and the counter
-  for cold per-IP/per-email limits.
+  endpoints, heavy API, social actions, and **state-changing writes**). The hot
+  per-user `api_user` counter lives in the user's UserHub DO (atomic); KV is
+  the fallback and the counter for cold per-IP/per-email limits.
+  `limitWrites` (`write_user`, 300/min) covers the CRUD/task/session/timer/group
+  routes — previously they had *no* rate limit, only eventual entity-count caps,
+  so a leaked session could hammer `/timer/start`+`stop` freely. It is chained
+  after `requireAuth` in each mutating route file's `use(...)` (and per-route for
+  `misc.ts`'s settings/layout writes), skips GET/HEAD/OPTIONS (reads already ride
+  `api_user`), and sets a per-request flag because two route files can match one
+  path.
 - **Accounts**: admin-managed — there is no self-signup (`/auth/signup`
   returns 404 and no UI exists). Login identifier is the `username` column;
   `users.email` is only an optional reset-mail address.

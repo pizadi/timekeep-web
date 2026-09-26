@@ -7,16 +7,16 @@
 import { Hono } from 'hono';
 import type { Env, WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, limitHeavy, rateLimitHit, rateRules } from '../middleware';
+import { requireAuth, limitHeavy, limitWrites, rateLimitHit, rateRules } from '../middleware';
 import { messageCreateSchema, messagePatchSchema, readMarkSchema, ulidish } from '../validators';
 import { emitToUsers, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { requireGroup, requireGroupPerm } from '../group-auth';
 
 export const chatRoutes = new Hono<WorkerType>();
-chatRoutes.use('/groups/:id/messages', requireAuth);
-chatRoutes.use('/groups/:id/messages/*', requireAuth);
-chatRoutes.use('/groups/:id/read', requireAuth);
+chatRoutes.use('/groups/:id/messages', requireAuth, limitWrites);
+chatRoutes.use('/groups/:id/messages/*', requireAuth, limitWrites);
+chatRoutes.use('/groups/:id/read', requireAuth, limitWrites);
 
 const PAGE_DEFAULT = 50;
 const PAGE_MAX = 200;

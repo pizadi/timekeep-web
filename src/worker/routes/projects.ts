@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import type { Context } from 'hono';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitWrites } from '../middleware';
 import { projectCreateSchema, projectPatchSchema, reorderSchema } from '../validators';
 import { assertProjectLimit, RuleError, isUniqueConstraintError } from '../rules';
 import { appendEvents, notifyHub, emitEntityEvents, emitToUsers, EventDraft } from '../events';
@@ -15,8 +15,8 @@ import { ulid } from '../../shared/ids';
 import { PALETTE } from '../../shared/constants';
 
 export const projectRoutes = new Hono<WorkerType>();
-projectRoutes.use('/projects', requireAuth);
-projectRoutes.use('/projects/*', requireAuth);
+projectRoutes.use('/projects', requireAuth, limitWrites);
+projectRoutes.use('/projects/*', requireAuth, limitWrites);
 
 /** Re-read a just-written row (creator-scoped — creation is personal-only). */
 async function getOwned(c: Context<WorkerType>, id: string) {

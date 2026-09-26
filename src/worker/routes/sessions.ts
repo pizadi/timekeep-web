@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth } from '../middleware';
+import { requireAuth, limitWrites } from '../middleware';
 import { sessionCreateSchema, sessionPatchSchema } from '../validators';
 import { checkSessionTimes, noteProblem } from '../../shared/validation';
 import { findSameTaskOverlaps, conflictError, assertNotRunning, RuleError } from '../rules';
@@ -12,8 +12,8 @@ import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';
 
 export const sessionRoutes = new Hono<WorkerType>();
-sessionRoutes.use('/sessions', requireAuth);
-sessionRoutes.use('/sessions/*', requireAuth);
+sessionRoutes.use('/sessions', requireAuth, limitWrites);
+sessionRoutes.use('/sessions/*', requireAuth, limitWrites);
 
 const LIST_LIMIT = LIMITS.logPageSize;
 

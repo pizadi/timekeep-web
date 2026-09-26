@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env, WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, limitHeavy, rateLimitHit, rateRules } from '../middleware';
+import { requireAuth, limitHeavy, limitWrites, rateLimitHit, rateRules } from '../middleware';
 import { friendRequestSchema, ulidish, USERNAME_RE } from '../validators';
 import { emitToUsers } from '../events';
 import { ulid } from '../../shared/ids';
@@ -19,9 +19,9 @@ import { dayBounds, civilDate, minutes } from '../../shared/time';
 import { LIMITS, REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 
 export const friendRoutes = new Hono<WorkerType>();
-friendRoutes.use('/friends', requireAuth);
-friendRoutes.use('/friends/*', requireAuth);
-friendRoutes.use('/users/lookup', requireAuth);
+friendRoutes.use('/friends', requireAuth, limitWrites);
+friendRoutes.use('/friends/*', requireAuth, limitWrites);
+friendRoutes.use('/users/lookup', requireAuth, limitWrites);
 
 interface UserSummary { id: string; username: string; name: string }
 
