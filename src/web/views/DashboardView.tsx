@@ -269,7 +269,10 @@ export default function DashboardView() {
               <>
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', margin: '10px 0 4px', fontSize: 13.5 }}>
                   <span>Total <b>{fmtMinutes(dayData.total_minutes + (isToday ? runningBoost : 0))}</b>
-                    {isToday && running && runningBoost > 0 ? <span className="muted"> (+{runningBoost}m running)</span> : ''}</span>
+                    {/* the Total already contains running time (server clips the running
+                        session to the fetch instant + the client's tail) — so this is a
+                        breakdown, not an addition: no "+" */}
+                    {isToday && running && runningBoost > 0 ? <span className="muted"> ({fmtMinutes(runningBoost)} running)</span> : ''}</span>
                   {dayData.projects.map((p) => (
                     <span key={p.project_id} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                       <span className="chip" style={{ background: colorOf(p.project_id) }} aria-hidden />
@@ -365,7 +368,9 @@ function SubtaskRows({ r, runningTaskId, runningBoost }: { r: any; runningTaskId
       <tr key={r.task_id}>
         <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
         <td className={r.done ? 'done-text' : ''} title={r.task_name}>{r.task_name}</td>
-        <td className="num">{r.today}{runningTaskId === r.task_id ? <b style={{ color: 'var(--danger)' }}> +{runningBoost}</b> : ''}</td>
+        <td className="num">{r.today}{runningTaskId === r.task_id && runningBoost > 0
+          ? <b style={{ color: 'var(--danger)' }} title="Time accrued since the page fetched this total"> ({fmtMinutes(runningBoost)} running)</b>
+          : ''}</td>
         <td className="num">{r.week}</td>
         <td className="num">{r.all}</td>
       </tr>
