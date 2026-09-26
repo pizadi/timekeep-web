@@ -72,6 +72,13 @@ notified via `ctx.waitUntil`).
   the reconcile poll / refetch.
 - Cross-user fan-out (friends, groups) uses `emitToUsers`: ONE sync_log row
   per recipient + a notify of each recipient's UserHub.
+- **Recency** ("Jump back in" / Resume): `GET /api/bootstrap` returns
+  `recent: [{ task_id, subtask_id }]` — one entry per task, newest first,
+  carrying the subtask of that task's most recent session (a window function,
+  not a `GROUP BY`, which would drop the column). The client keeps the pair in
+  `recentEntries` (`src/web/lib/recent.ts`, pure + unit-tested), so Resume,
+  the `R` shortcut and the "Jump back in" chips all restart the *subtask* that
+  was last tracked — falling back to the whole task if that subtask is gone.
 
 ## Time handling
 
@@ -82,6 +89,12 @@ notified via `ctx.waitUntil`).
   API clients receive report buckets, never raw session rows.
 - DST edge cases are locked by unit-test fixtures (Tehran / New York) in
   `test/time.test.ts`.
+- The profile timezone is **seeded from the device**: admin-created users get
+  the `'UTC'` default, and `store.boot()` corrects it to the browser's IANA
+  zone while the profile still holds that untouched default (a zone picked in
+  Settings is never overwritten). `test/web-time.test.ts` locks the client
+  wall-clock helpers, including the spring-forward gap (a typed time that
+  doesn't exist falls forward) and the repeated fall-back hour.
 
 ## API surface
 

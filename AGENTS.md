@@ -97,7 +97,13 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   per-tick rows.
 - Time: instants are epoch-ms UTC everywhere. Day/week bucketing uses the `Intl`-based engine in
   `src/shared/time.ts` fed into SQL via a `json_each()` day table — don't move aggregation
-  client-side; API clients receive report buckets, never raw session rows.
+  client-side; API clients receive report buckets, never raw session rows. The profile timezone
+  is seeded from the device on `boot()` ONLY while it still holds the `'UTC'` default that
+  `routes/admin.ts` writes — never overwrite a zone the user picked in Settings.
+- Recency ("Jump back in" / Resume) is subtask-aware: `/api/bootstrap` returns
+  `recent: [{ task_id, subtask_id }]` (newest session per task, via a window function) and the
+  client keeps those pairs in `recentEntries` (`src/web/lib/recent.ts` — pure, unit-tested).
+  Keep task-level-only recency out; Resume must restore the subtask.
 - Every mutation appends to `sync_log`, then the DO fans out (`src/worker/events.ts`,
   notify via `ctx.waitUntil`). Batch granularity: the UserHub DO writes entity rows and
   events in ONE D1 batch; route handlers use two back-to-back batches (entity write, then
