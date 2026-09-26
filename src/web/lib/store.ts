@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react';
 import type { WsEvent } from '../../shared/constants';
 import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
+import { mergeRecent, recentFromBootstrap, type RecentEntry } from './recent';
 
 export interface Project { id: string; user_id?: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; group_id?: string | null; created_at: number; updated_at: number }
 export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
@@ -76,7 +77,7 @@ export interface AppState {
   selectedProjectId: string | null;
   selectedTaskId: string | null;
   view: 'tree' | 'log' | 'map' | 'dashboard' | 'social';
-  recentTaskIds: string[];      // "Jump back in" — by last tracked activity (FR: L14)
+  recentEntries: RecentEntry[]; // "Jump back in" / Resume — newest-first, one per task, with its last subtask
   reportsVersion: number;      // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
   lastEventId: number;
@@ -105,7 +106,7 @@ let state: AppState = {
   selectedProjectId: null,
   selectedTaskId: null,
   view: 'tree',
-  recentTaskIds: [],
+  recentEntries: [],
   reportsVersion: 0,
   toasts: [],
   lastEventId: 0,
@@ -145,7 +146,7 @@ export const store = {
         tasks: b.tasks,
         subtasks: b.subtasks,
         deps: b.dependencies,
-        recentTaskIds: b.recent_task_ids ?? [],
+        recentEntries: recentFromBootstrap(b),
         running: b.running ?? null,
         pomo: b.pomo ?? null,
         lastEventId: b.last_event_id ?? 0,
@@ -190,7 +191,7 @@ export const store = {
   /** Session ended (logout, revoke, expiry) → back to the login screen. */
   signOut() {
     try { localStorage.removeItem('tk.device'); } catch { /* storage may be blocked */ }
-    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentTaskIds: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {}, groups: [], groupInvites: [] };
+    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentEntries: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {}, groups: [], groupInvites: [] };
     set({});
   },
 
@@ -220,13 +221,13 @@ export const store = {
     try {
       const res = await api<{ session: any; pomo?: any }>('/timer/start', { method: 'POST', body });
       store.setRunning(res.session);
-      store.markRecentTask(taskId);
+      store.markRecentTask(taskId, subtaskId ?? null);
       if (res.pomo) store.setPomo(res.pomo);
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'already_running') {
         const res = await api<{ started: any; pomo?: any }>('/timer/switch', { method: 'POST', body });
         store.setRunning(res.started);
-        store.markRecentTask(taskId);
+        store.markRecentTask(taskId, subtaskId ?? null);
         if (res.pomo) store.setPomo(res.pomo);
       } else throw e;
     }
@@ -244,7 +245,8 @@ export const store = {
       next[i] = { ...next[i]!, ...item };
       return next;
     };
-    const markRecent = (taskId: string): string[] => [taskId, ...state.recentTaskIds.filter((id) => id !== taskId)].slice(0, 6);
+    const markRecent = (taskId: string, subtaskId: string | null): RecentEntry[] =>
+      mergeRecent(state.recentEntries, taskId, subtaskId);
 
     switch (ev.type) {
       case 'hello': {
@@ -255,13 +257,13 @@ export const store = {
       }
       case 'timer.started':
         patch.running = d.session;
-        patch.recentTaskIds = markRecent(d.session.task_id);
+        patch.recentEntries = markRecent(d.session.task_id, d.session.subtask_id ?? null);
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       case 'timer.stopped': patch.running = null; patch.reportsVersion = state.reportsVersion + 1; break;
       case 'timer.switched':
         patch.running = d.started;
-        patch.recentTaskIds = markRecent(d.started.task_id);
+        patch.recentEntries = markRecent(d.started.task_id, d.started.subtask_id ?? null);
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       case 'timer.nudge': pushToast('info', 'This timer has been running for more than 12 hours'); break;
@@ -404,8 +406,8 @@ export const store = {
     set({ deps: state.deps.filter((d) => !(d.task_id === taskId && d.depends_on_id === dependsOnId)) });
   },
   setRunning(session: RunningSession | null) { set({ running: session, reportsVersion: state.reportsVersion + 1 }); },
-  markRecentTask(id: string) {
-    set({ recentTaskIds: [id, ...state.recentTaskIds.filter((taskId) => taskId !== id)].slice(0, 6) });
+  markRecentTask(id: string, subtaskId: string | null = null) {
+    set({ recentEntries: mergeRecent(state.recentEntries, id, subtaskId) });
   },
   setPomo(pomo: PomoState | null) { set({ pomo }); },
   setSettings(s: Settings) { set({ settings: s }); },
@@ -483,7 +485,7 @@ export async function refreshAll(): Promise<void> {
   const b = await api<any>('/bootstrap');
   set({
     user: b.user, settings: b.settings, projects: b.projects, tasks: b.tasks,
-    subtasks: b.subtasks, deps: b.dependencies, recentTaskIds: b.recent_task_ids ?? [],
+    subtasks: b.subtasks, deps: b.dependencies, recentEntries: recentFromBootstrap(b),
     friends: b.friends ?? [], incoming: b.incoming_requests ?? [], outgoing: b.outgoing_requests ?? [],
     groups: b.groups ?? [], groupInvites: b.group_invites ?? [],
     running: b.running ?? null,

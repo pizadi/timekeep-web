@@ -98,14 +98,18 @@ export async function toggleLastTask(): Promise<void> {
   await resumeLastTask();
 }
 
-/** Resume the most recently tracked task. */
+/** Resume the most recently tracked task — on its last-used subtask when the
+ *  newest session for that task was attributed to one. A subtask deleted
+ *  since falls back to the whole task. */
 export async function resumeLastTask(): Promise<void> {
   const s = store.get();
-  const lastId = s.recentTaskIds[0];
-  const task = lastId ? s.tasks.find((t) => t.id === lastId) : null;
+  const last = s.recentEntries[0];
+  const task = last ? s.tasks.find((t) => t.id === last.task_id) : null;
   if (!task) { pushToast('info', 'Nothing to resume yet — track something first'); return; }
+  const subtask = last?.subtask_id ? s.subtasks.find((sb) => sb.id === last.subtask_id) ?? null : null;
+  const label = subtask ? `${task.name} ▸ ${subtask.name}` : task.name;
   try {
-    await store.startTimer(task.id);
-    pushToast('info', `Resumed “${task.name}”`);
+    await store.startTimer(task.id, subtask?.id ?? null);
+    pushToast('info', `Resumed “${label}”`);
   } catch (e: any) { pushToast('error', e.message); }
 }

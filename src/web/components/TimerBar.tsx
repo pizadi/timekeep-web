@@ -12,7 +12,7 @@ import { useHasHover } from '../lib/responsive';
 export default function TimerBar() {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
-  const recentIds = useStore((s) => s.recentTaskIds);
+  const recentEntries = useStore((s) => s.recentEntries);
   const subtasks = useStore((s) => s.subtasks);
   const pomo = useStore((s) => s.pomo);
   const pomoEnabled = useStore((s) => s.settings?.pomodoro?.enabled ?? false);
@@ -24,8 +24,12 @@ export default function TimerBar() {
   const task = running ? tasks.find((t) => t.id === running.task_id) : null;
   const subtask = running?.subtask_id ? subtasks.find((sb) => sb.id === running.subtask_id) ?? null : null;
   const runningLabel = task ? (subtask ? `${task.name} ▸ ${subtask.name}` : task.name) : 'Unknown task';
-  // "most recently tracked task" (R shortcut / Resume button)
-  const lastTask = recentIds.length > 0 ? tasks.find((t) => t.id === recentIds[0]) ?? null : null;
+  // "most recently tracked task" (R shortcut / Resume button) — on the subtask
+  // it last tracked, when that session was attributed to one
+  const last = recentEntries[0] ?? null;
+  const lastTask = last ? tasks.find((t) => t.id === last.task_id) ?? null : null;
+  const lastSubtask = last?.subtask_id ? subtasks.find((sb) => sb.id === last.subtask_id) ?? null : null;
+  const lastLabel = lastTask ? (lastSubtask ? `${lastTask.name} ▸ ${lastSubtask.name}` : lastTask.name) : '';
 
   // elapsed computed client-side from authoritative started_at + server offset (FR-S2);
   // keeps ticking even when the WS drops. Deps are [running] only — depending on
@@ -116,9 +120,9 @@ export default function TimerBar() {
               : <>No timer running — tap ▶ on a task</>)}
         {lastTask && (
           <button className="btn small" style={{ marginLeft: 10 }}
-            title={lastTask.name.length > 24 ? `Resume tracking on “${lastTask.name}”` : 'Resume tracking on the last task (R)'}
+            title={lastLabel.length > 24 ? `Resume tracking on “${lastLabel}”` : `Resume tracking on the last ${lastSubtask ? 'subtask' : 'task'} (R)`}
             onClick={() => void resumeLastTask()}>
-            ▶ Resume “{lastTask.name.length > 24 ? `${lastTask.name.slice(0, 23)}…` : lastTask.name}”
+            ▶ Resume “{lastLabel.length > 24 ? `${lastLabel.slice(0, 23)}…` : lastLabel}”
           </button>
         )}
       </div>

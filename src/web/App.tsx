@@ -379,10 +379,10 @@ function fmtCreated(ts: number): string {
 
 function QuickStart() {
   const tasks = useStore((s) => s.tasks);
-  const recentIds = useStore((s) => s.recentTaskIds);
+  const recentEntries = useStore((s) => s.recentEntries);
   // most recently *tracked* tasks first (bootstrap supplies the order);
   // tasks never tracked keep bootstrap (position) order behind them
-  const rank = new Map(recentIds.map((id, i) => [id, i]));
+  const rank = new Map(recentEntries.map((e, i) => [e.task_id, i]));
   const recent = tasks
     .map((t, i) => ({ t, i }))
     .sort((a, b) => {
@@ -401,7 +401,8 @@ function QuickStart() {
           <button key={t.id} className="btn small" onClick={async () => {
             try {
               store.selectTask(t.id);
-              await store.startTimer(t.id);
+              // resume on the subtask this task last tracked (null → whole task)
+              await store.startTimer(t.id, recentEntries.find((e) => e.task_id === t.id)?.subtask_id ?? null);
             } catch (e: any) {
               pushToast('error', e.message);
             }

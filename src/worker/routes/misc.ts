@@ -48,11 +48,20 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
                          WHERE p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))`
     ).bind(userId).all(),
     c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
-    // "Jump back in": tasks by recency of tracked work, not position
+    // "Jump back in" / Resume: tasks by recency of tracked work, not position —
+    // and each entry carries the subtask of that task's NEWEST session, so
+    // Resume restores the subtask you last tracked. A GROUP BY would drop the
+    // subtask column, hence the window function.
     c.env.DB.prepare(
-      `SELECT task_id, MAX(started_at) AS last_start FROM time_sessions
-       WHERE user_id = ?1 GROUP BY task_id ORDER BY last_start DESC LIMIT 6`
-    ).bind(userId).all<{ task_id: string; last_start: number }>(),
+      `SELECT task_id, subtask_id FROM (
+         SELECT task_id, subtask_id, started_at,
+                ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY started_at DESC) AS rn
+         FROM time_sessions
+         WHERE user_id = ?1
+       ) WHERE rn = 1
+       ORDER BY started_at DESC
+       LIMIT 6`
+    ).bind(userId).all<{ task_id: string; subtask_id: string | null }>(),
     (async () => {
       try {
         const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
@@ -73,7 +82,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     tasks: tasks.results,
     subtasks: subtasks.results,
     dependencies: deps.results,
-    recent_task_ids: recent.results.map((r) => r.task_id),
+    recent: recent.results.map((r) => ({ task_id: r.task_id, subtask_id: r.subtask_id ?? null })),
     friends: social.friends,
     incoming_requests: social.incoming,
     outgoing_requests: social.outgoing,
