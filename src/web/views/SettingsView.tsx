@@ -391,14 +391,4 @@ function supportedTimezones(): string[] {
   } catch { return ['UTC']; }
 }
 
-/** Weekday letter chip used as the week-start dropdown icon. */
-function WeekdayChip({ d }: { d: string }) {
-  return (
-    <span aria-hidden style={{
-      width: 18, height: 18, borderRadius: 5, flex: 'none', display: 'inline-flex',
-      alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700,
-      background: 'var(--panel-2)', border: '1px solid var(--border)', color: 'var(--muted)'
-    }}>{d}</span>
-  );
-}
 

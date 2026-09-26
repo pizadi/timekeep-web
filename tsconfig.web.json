@@ -9,6 +9,10 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    // dead code is a build failure, not a review note (audit #8) — ESLint covers
+    // the stylistic half, this covers the accidental half, for free in CI
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "isolatedModules": true,
     "useDefineForClassFields": true
   },

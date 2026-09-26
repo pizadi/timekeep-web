@@ -2,14 +2,13 @@
 // summary table — server-side aggregates, live-updated on events (FR-R5),
 // running session included and growing locally (FR-R6).
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
-import { store, useStore, pushToast } from '../lib/store';
+import { useStore, pushToast } from '../lib/store';
 import { api, nowMs } from '../lib/api';
 import { rangePreset, fmtDay, civilOf } from '../lib/time';
 import { addDaysCivil } from '../../shared/time';
 import { Chart, registerables } from 'chart.js';
 import Heatmap from '../components/Heatmap';
 import Dropdown from '../components/Dropdown';
-import { useIsTouch } from '../lib/responsive';
 
 Chart.register(...registerables);
 

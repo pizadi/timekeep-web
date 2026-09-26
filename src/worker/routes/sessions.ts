@@ -6,7 +6,7 @@ import { jsonError } from '../env';
 import { requireAuth, limitWrites } from '../middleware';
 import { sessionCreateSchema, sessionPatchSchema } from '../validators';
 import { checkSessionTimes, noteProblem } from '../../shared/validation';
-import { findSameTaskOverlaps, conflictError, assertNotRunning, RuleError } from '../rules';
+import { findSameTaskOverlaps, conflictError, assertNotRunning } from '../rules';
 import { appendEvents, notifyHub, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';

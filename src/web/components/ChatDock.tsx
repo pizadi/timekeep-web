@@ -298,7 +298,7 @@ function ChatBody({ groupId, myUserId, canModerate }: {
                 <b>{mine ? 'You' : (m.sender.name || '@' + m.sender.username)}</b>{' '}
                 {deleted
                   ? <span className="muted done-text">message removed</span>
-                  : <span style={m.updated_at > m.created_at ? { fontStyle: 'italic' } : undefined}>{m.body}</span>}
+                  : <span className="msg-body" style={m.updated_at > m.created_at ? { fontStyle: 'italic' } : undefined}>{m.body}</span>}
                 <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
                   {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   {!deleted && m.updated_at > m.created_at ? ' (edited)' : ''}

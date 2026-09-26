@@ -5,18 +5,16 @@
 // events fan out to the whole group. Sessions stay strictly user-owned.
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
-import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth, limitWrites } from '../middleware';
 import { taskCreateSchema, taskPatchSchema, subtaskCreateSchema, subtaskPatchSchema, depCreateSchema } from '../validators';
 import {
   assertTaskLimit, assertSubtaskLimit, assertNotSubtask,
-  createDependency, assertReparentSafe, RuleError
+  createDependency, assertReparentSafe
 } from '../rules';
-import { appendEvents, notifyHub, emitEntityEvents, EventDraft } from '../events';
+import { emitEntityEvents, EventDraft } from '../events';
 import { requireProjectAccess, requireTaskAccess, requireEditTasks } from '../access';
 import { ulid } from '../../shared/ids';
-import { findCyclePath } from '../../shared/validation';
 
 export const taskRoutes = new Hono<WorkerType>();
 taskRoutes.use('/tasks', requireAuth, limitWrites);

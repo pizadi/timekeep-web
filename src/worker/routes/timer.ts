@@ -61,12 +61,12 @@ timerRoutes.post('/timer/start', async (c) => {
   const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
   const res = await callHub(c, '/timer', { op: 'start', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
 timerRoutes.post('/timer/stop', async (c) => {
   const res = await callHub(c, '/timer', { op: 'stop', device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
 // "switch to" — atomically stop old + start new, one API call, one event (FR-S1);
@@ -75,7 +75,7 @@ timerRoutes.post('/timer/switch', async (c) => {
   const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
   const res = await callHub(c, '/timer', { op: 'switch', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
 // ---------- pomodoro (FR-F) ----------
@@ -95,20 +95,20 @@ timerRoutes.post('/pomo/start', async (c) => {
   const parsed = pomoStartSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   const res = await callHub(c, '/pomo', { op: 'start', task_id: parsed.data.task_id, device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
 timerRoutes.post('/pomo/start-break', async (c) => {
   const res = await callHub(c, '/pomo', { op: 'start_break', device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
 timerRoutes.post('/pomo/skip', async (c) => {
   const res = await callHub(c, '/pomo', { op: 'skip', device: c.get('deviceId') });
-  return forward(c, res);
+  return forward(res);
 });
 
-function forward(c: Context<WorkerType>, res: Response): Response {
+function forward(res: Response): Response {
   // Preserve the DO's JSON envelope (errors included) — it owns the semantics.
   const status = res.status;
   return new Response(res.body, {

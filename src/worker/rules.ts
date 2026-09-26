@@ -108,7 +108,6 @@ export async function createDependency(
     throw new RuleError(422, 'cycle', `this would create a circular dependency: ${path.join(' → ')}`, { path });
   }
 
-  const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO task_dependencies (task_id, depends_on_id, user_id, created_at) VALUES (?1, ?2, ?3, ?4)`
   ).bind(taskId, dependsOnId, userId, Date.now()).run();

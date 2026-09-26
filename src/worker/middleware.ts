@@ -16,10 +16,17 @@ const CSP_BODY = (turnstileOn: boolean) =>
   [
     "default-src 'self'",
     "script-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
-    // 'unsafe-inline' is a documented trade-off: React inline styles need it.
-    // Tightening requires extracted styles or nonce-based CSS — revisit if the
-    // stylesheet grows beyond inline style attributes.
+    // 'unsafe-inline' is a documented trade-off: React inline styles need it
+    // (~200 `style={{…}}` sites), and a CSS custom property set through the
+    // style attribute is still an inline style, so it buys nothing.
+    // `style-src-elem 'self'` is the cheap containment: an injected <style>
+    // block is refused while inline style attributes keep working. Browsers
+    // without CSP3's style-src-elem (pre-2022 Safari) ignore it and fall back
+    // to style-src, i.e. today's behavior — it can only tighten, never break.
+    // Dropping 'unsafe-inline' entirely means extracting every inline style
+    // (audit #5); test/csp.test.ts locks the "no HTML sinks" half of it.
     "style-src 'self' 'unsafe-inline'",
+    "style-src-elem 'self'",
     "img-src 'self' data:",
     "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
     "font-src 'self'",

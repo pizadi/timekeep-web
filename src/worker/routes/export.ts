@@ -195,7 +195,7 @@ exportRoutes.post('/import', async (c) => {
   // never a 500. merge mode additionally requires server-shaped ULID ids — a
   // crafted non-ULID id can no longer land in the DB (audit S3.1).
   const projects = (data.projects as any[]).map((p) => ({ raw: p, row: importProjectRow.safeParse(p) }))
-    .filter(({ row, raw }) => {
+    .filter(({ row }) => {
       const ok = row.success && typeof row.data.id === 'string' && (mode === 'duplicate' || isUlid(row.data.id));
       if (!ok) summary.projects.skipped++;
       return ok;

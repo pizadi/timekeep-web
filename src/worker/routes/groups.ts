@@ -15,8 +15,8 @@ import {
 import { emitToUsers, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { randomToken, sha256Hex } from '../auth';
-import { RuleError, isUniqueConstraintError } from '../rules';
-import { loadGroupContext, requireGroup, requireGroupPerm } from '../group-auth';
+import { isUniqueConstraintError } from '../rules';
+import { requireGroup, requireGroupPerm } from '../group-auth';
 import { dayBounds, civilDate, minutes } from '../../shared/time';
 import { LIMITS, REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 

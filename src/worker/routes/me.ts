@@ -7,7 +7,7 @@ import { profilePatchSchema, passwordChangeSchema } from '../validators';
 import { isValidTimezone } from '../../shared/time';
 import { passwordProblem } from '../../shared/validation';
 import { appendEvents, notifyHub, revokeHub, EventDraft } from '../events';
-import { sha256Hex, hashPassword, verifyPassword, isCommonPassword } from '../auth';
+import { hashPassword, verifyPassword, isCommonPassword } from '../auth';
 
 export const meRoutes = new Hono<WorkerType>();
 // scoped — a sub-app use('*') would leak requireAuth onto every /api path

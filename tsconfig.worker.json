@@ -8,6 +8,9 @@
     "types": ["@cloudflare/workers-types"],
     "strict": true,
     "noUncheckedIndexedAccess": false,
+    // dead code is a build failure, not a review note (audit #8)
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": false,

@@ -517,7 +517,7 @@ export class UserHub extends DurableObject {
       const timerRes = await this.timerStart(target, device, 'pomodoro');
       if (timerRes.status !== 200) return timerRes;
       // respond with the pomodoro envelope (the timer event already fanned out)
-      return this.pomoPhaseResponse(device, 'focus');
+      return this.pomoPhaseResponse(device);
     }
     if (this.pomo.phase === 'focus') {
       // idempotent restart: an in-flight focus segment keeps its accumulated
@@ -526,7 +526,7 @@ export class UserHub extends DurableObject {
       await this.persistPomo();
     }
     await this.rearmAlarm();
-    return this.pomoPhaseResponse(device, 'focus');
+    return this.pomoPhaseResponse(device);
   }
 
   /** Decide prompt's "Start break". Stops tracking first so no break time is ever logged (FR-F3). */
@@ -539,7 +539,7 @@ export class UserHub extends DurableObject {
     this.pomo.lastResumeMs = null;
     await this.persistPomo();
     await this.rearmAlarm();
-    return this.pomoPhaseResponse(device, 'break');
+    return this.pomoPhaseResponse(device);
   }
 
   /** Skippable from any non-idle phase; resets to idle, discards progress, logs nothing (FR-F4). */
@@ -548,10 +548,12 @@ export class UserHub extends DurableObject {
     this.pomo = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
     await this.persistPomo();
     await this.rearmAlarm();
-    return this.pomoPhaseResponse(device, 'idle');
+    return this.pomoPhaseResponse(device);
   }
 
-  private async pomoPhaseResponse(device: string, phase: PomoPhase): Promise<Response> {
+  // no `phase` argument: the response reports the DO's own state via visiblePomo(),
+  // so a passed-in phase could only ever disagree with it
+  private async pomoPhaseResponse(device: string): Promise<Response> {
     const now = Date.now();
     const ev: WsEvent = { id: 0, type: 'pomodoro.phase', actor: device, at: now, data: { pomo: this.visiblePomo() } };
     const result = await this.env.DB.prepare(

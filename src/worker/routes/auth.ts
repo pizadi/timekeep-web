@@ -21,7 +21,7 @@ const appUrl = (c: { req: { url: string } }) => new URL(c.req.url).origin;
 
 // Explicit 404 — self-signup does not exist (accounts are admin-created); the
 // explicit route keeps unmatched-path middleware from answering instead.
-authRoutes.post('/auth/signup', (c) => jsonError(404, 'not_found', 'unknown API route'));
+authRoutes.post('/auth/signup', () => jsonError(404, 'not_found', 'unknown API route'));
 
 // ---------- verify email (FR-A1) ----------
 authRoutes.post('/auth/verify-email', async (c) => {

@@ -4,9 +4,8 @@
 import { useEffect, useState, useCallback, Component, Suspense, lazy } from 'react';
 import type { ReactNode } from 'react';
 import { store, useStore, pushToast, dismissToast, go, pathForView, viewFromPath } from './lib/store';
-import type { AppState } from './lib/store';
 import { api } from './lib/api';
-import { applyTheme, currentThemePref } from './lib/theme';
+import { currentThemePref } from './lib/theme';
 import { useModalA11y } from './lib/modal';
 import AuthView from './views/AuthView';
 import ChangePasswordView from './views/ChangePasswordView';

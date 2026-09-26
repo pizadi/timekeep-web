@@ -39,7 +39,7 @@ export default function AuthView() {
         <h1>TimeKeep</h1>
         <p className="sub">Know where your hours go — private, fast, synced everywhere.</p>
 
-        <LoginForm siteKey={siteKey} turnstileToken={turnstileToken}
+        <LoginForm turnstileToken={turnstileToken}
           onDone={() => { store.setAuthed(true); go('/'); }} />
 
         {siteKey && (
@@ -53,12 +53,11 @@ export default function AuthView() {
 }
 
 interface LoginFormProps {
-  siteKey: string | null;
   turnstileToken: string;
   onDone: () => void;
 }
 
-function LoginForm({ siteKey, turnstileToken, onDone }: LoginFormProps) {
+function LoginForm({ turnstileToken, onDone }: LoginFormProps) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');

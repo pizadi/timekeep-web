@@ -5,7 +5,7 @@
 // refetches); mutations apply via refetch of the (small) group payloads.
 import { useEffect, useState } from 'react';
 import { store, useStore, pushToast } from '../lib/store';
-import type { GroupSummary, GroupInviteRow } from '../lib/store';
+import type { GroupSummary } from '../lib/store';
 import { api, ApiError } from '../lib/api';
 import { openPrompt } from '../components/PromptModal';
 import { GROUP_PERMS, parseGroupPerms, type GroupPerm } from '../../shared/constants';
@@ -102,7 +102,6 @@ interface MemberRow { id: string; username: string; name: string; role: 'owner' 
 type DetailTab = 'projects' | 'members' | 'invites';
 
 function GroupDetail({ group }: { group: GroupSummary }) {
-  const me = useStore((s) => s.user);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [myPerms, setMyPerms] = useState<GroupPerm[]>([]);
   const [myRole, setMyRole] = useState<string>('member');

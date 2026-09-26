@@ -3,7 +3,7 @@
 // Exported: the Hono fetch handler, the UserHub DO, and the scheduled cron.
 import { Hono } from 'hono';
 import type { WorkerType } from './env';
-import { securityHeaders, securityHeadersFor, csrfGuard, requireAuth, sanitizeDevice } from './middleware';
+import { securityHeaders, securityHeadersFor, csrfGuard, sanitizeDevice } from './middleware';
 import { sha256Hex } from './auth';
 import { SESSION_COOKIE } from '../shared/constants';
 import { authRoutes } from './routes/auth';
