@@ -30,6 +30,15 @@ WL_PORT=8788
 WL_STATE=.work/e2e-writelimit
 WL_LOG=.work/wrangler-writelimit.log
 
+# The session-rotation race needs seeded auth_sessions rows already inside the
+# 7-day rotation window, and a healthy account to re-login with afterwards — so
+# it gets its own disposable instance and a seeded SQL file.
+SR_PORT=8789
+SR_STATE=.work/e2e-sessionrace
+SR_LOG=.work/wrangler-sessionrace.log
+SR_SEED=.work/session-race-seed.sql
+SR_ROUNDS=15
+
 mkdir -p .work
 
 if [ "${CI:-}" = "true" ]; then
@@ -89,6 +98,28 @@ run_write_limit() {
 	wait "$wl_pid" 2>/dev/null || true
 }
 
+run_session_race() {
+	echo
+	echo "=== node e2e/session-race-test.mjs (dedicated instance, $SR_ROUNDS seeded pre-rotation sessions) ==="
+	rm -rf "$SR_STATE"
+	npx wrangler d1 migrations apply timekeep --local --persist-to "$SR_STATE" >/dev/null 2>&1
+	# Seed one user + N sessions expiring in 3 days (< the 7-day rotation
+	# window) — see scripts/gen-session-race-seed.mjs.
+	node scripts/gen-session-race-seed.mjs "$SR_ROUNDS" "$SR_SEED" "$SR_STATE/sessions.json"	npx wrangler d1 execute timekeep --local --persist-to "$SR_STATE" --file "$SR_SEED" >/dev/null 2>&1
+	npx wrangler dev --port "$SR_PORT" --persist-to "$SR_STATE" >"$SR_LOG" 2>&1 &
+	local sr_pid=$!
+	if wait_ready "http://127.0.0.1:$SR_PORT" "$sr_pid" wrangler-sessionrace "$SR_LOG"; then
+		TK_BASE="http://127.0.0.1:$SR_PORT/api" \
+			TK_ROUNDS=$((SR_ROUNDS - 1)) \
+			TK_SEEDED_SESSIONS="$(cat "$SR_STATE/sessions.json")" \
+			node e2e/session-race-test.mjs || fail=1
+	else
+		fail=1
+	fi
+	kill "$sr_pid" 2>/dev/null || true
+	wait "$sr_pid" 2>/dev/null || true
+}
+
 run bash e2e/smoke-test.sh
 run bash e2e/subtask-sessions.sh
 run node e2e/pomo-mode-test.mjs
@@ -97,6 +128,8 @@ run node e2e/undo-test.mjs
 run node e2e/pagination-day-check.mjs
 run node e2e/security-probes.mjs
 run_write_limit
+run_session_race
+run node e2e/race-test.mjs
 run node e2e/regression-check.mjs
 run bash e2e/social-test.sh
 run node e2e/roundtrip-test.mjs

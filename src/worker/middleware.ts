@@ -64,7 +64,7 @@ export const securityHeaders = createMiddleware<WorkerType>(async (c, next) => {
 
 type Ctx = Context<WorkerType>;
 
-interface SessionRow {
+export interface SessionRow {
   id: string;
   user_id: string;
   token_hash: string;
@@ -91,33 +91,68 @@ async function loadSession(c: Ctx): Promise<{ session: SessionRow } | null> {
   return { session: row };
 }
 
-async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<void> {
-  const now = Date.now();
-  const left = session.expires_at - now;
-  // Sliding expiry: every authenticated request extends the window; rotate the
-  // opaque token when it is within its final 7 days (FR-A6 "rotation on renewal").
-  if (left < SESSION_ROTATE_BEFORE_MS) {
-    const token = randomToken(32);
-    const hash = await sha256Hex(token);
-    const newId = crypto.randomUUID();
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        `INSERT INTO auth_sessions (id, user_id, token_hash, user_agent, ip, created_at, last_seen_at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`,
-      ).bind(
-        newId,
-        session.user_id,
-        hash,
-        c.req.header('user-agent') ?? '',
-        clientIp(c) ?? '',
-        now,
-        now + SESSION_TTL_MS,
-      ),
-      c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1').bind(session.id),
-    ]);
-    setSessionCookie(c, token, now + SESSION_TTL_MS);
-    c.set('authSessionId', newId);
-  }
+export type RotateOutcome =
+  /** outside the rotation window, or another request rotated first — no cookie change */
+  | 'skipped'
+  /** the token was rotated in place; `token` is the new cookie value */
+  | { rotated: true; token: string; expiresAt: number }
+  /** the session row disappeared mid-request (logout / revoke / reset) — INV-01 */
+  | 'revoked';
+
+/**
+ * Sliding expiry: every authenticated request extends the window; the opaque
+ * token is rotated when it is within its final 7 days (FR-A6 "rotation on
+ * renewal").
+ *
+ * The rotation is a single compare-and-swap on the hash that was read:
+ *
+ *   UPDATE auth_sessions SET token_hash = … WHERE id = ? AND token_hash = <read hash>
+ *
+ * not INSERT + DELETE. Every revocation path (logout, revoke-others, password
+ * change, reset, admin deactivate) DELETEs by `id` or by `user_id`, so once a
+ * revoke has removed the row the CAS affects 0 rows and the rotation fails —
+ * a revoked session can never produce a valid replacement, no matter how the
+ * two requests interleave (INV-01). The same CAS also disambiguates a peer
+ * request that rotated first: the row is still alive, so we return 'skipped'
+ * and set no cookie rather than clobbering the token the other response
+ * installed.
+ */
+export async function rotateSession(
+  db: D1Database,
+  session: SessionRow,
+  now: number,
+  userAgent: string,
+  ip: string,
+): Promise<RotateOutcome> {
+  if (session.expires_at - now >= SESSION_ROTATE_BEFORE_MS) return 'skipped';
+  const token = randomToken(32);
+  const hash = await sha256Hex(token);
+  const expiresAt = now + SESSION_TTL_MS;
+  const res = await db
+    .prepare(
+      `UPDATE auth_sessions
+       SET token_hash = ?1, user_agent = ?2, ip = ?3, last_seen_at = ?4, expires_at = ?5
+       WHERE id = ?6 AND token_hash = ?7`,
+    )
+    .bind(hash, userAgent, ip, now, expiresAt, session.id, session.token_hash)
+    .run();
+  if (Number(res.meta?.changes ?? 0) === 1) return { rotated: true, token, expiresAt };
+  // CAS lost — revoked, or a concurrent rotation of the same session.
+  const alive = await db.prepare('SELECT 1 AS ok FROM auth_sessions WHERE id = ?1').bind(session.id).first();
+  return alive ? 'skipped' : 'revoked';
+}
+
+async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<boolean> {
+  const outcome = await rotateSession(
+    c.env.DB,
+    session,
+    Date.now(),
+    c.req.header('user-agent') ?? '',
+    clientIp(c) ?? '',
+  );
+  if (outcome === 'revoked') return false;
+  if (outcome !== 'skipped') setSessionCookie(c, outcome.token, outcome.expiresAt);
+  return true;
 }
 
 export function setSessionCookie(c: Ctx, token: string, expiresAtMs: number): void {
@@ -157,6 +192,14 @@ export function sanitizeDevice(raw: string | null | undefined): string {
  * (at most once a minute) to keep D1 writes off the hot path.
  */
 export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
+  // Route files register BOTH a bare path and its wildcard
+  // (`use('/me', …)` + `use('/me/*', …)`), and Hono matches a bare path
+  // against both — so without this guard requireAuth runs TWICE for every bare
+  // path. The second run re-reads the session from the *request* cookie, which
+  // a rotation has already invalidated, and 401s a request the first run had
+  // already authorized (signing the user out in the last 7 days of a session).
+  // It also doubled the D1 reads on the hot path.
+  if (c.get('user')) return next();
   const loaded = await loadSession(c);
   if (!loaded) return jsonError(401, 'unauthenticated', 'sign in required');
   const { session } = loaded;
@@ -185,7 +228,10 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
   c.set('user', user);
   c.set('authSessionId', session.id);
   c.set('deviceId', sanitizeDevice(c.req.header('x-device-id')));
-  await rotateIfNeeded(c, session);
+  // Rotation is a CAS on this row: if the session was revoked while the request
+  // was in flight, the rotation fails and the request is rejected here rather
+  // than minting a replacement token for a dead session (INV-01).
+  if (!(await rotateIfNeeded(c, session))) return jsonError(401, 'unauthenticated', 'sign in required');
   await next();
   // Re-issue the double-submit cookie if it was lost (browser restart while the
   // 30-day session cookie persists) so the second CSRF layer resumes.
