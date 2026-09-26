@@ -83,7 +83,9 @@ A scheduled handler runs at **03:17 UTC** daily (`cron.ts`):
 `.github/workflows/deploy.yml` deploys from GitHub — no local machine needed:
 
 - **Triggers:** manual (**Actions → Deploy → Run workflow**) and automatic on
-  any `vX.Y.Z` tag push.
+  any `vX.Y.Z` tag push. Dev versions never deploy from tags: the tag filter
+  excludes `v*.dev*` and `scripts/check-release-tag.mjs` fails the run if the
+  tagged commit's package.json isn't a clean `x.y.z` matching the tag.
 - **Approval gate:** the job runs in the `production` environment — add
   required reviewers under **Settings → Environments → production** and every
   deploy waits for (your) approval in the UI.

@@ -4,6 +4,11 @@
 #   1. Actions → Deploy → Run workflow (manual, any time)
 #   2. push a vX.Y.Z tag — releases deploy automatically
 #
+# The tag glob is guarded twice against dev versions (x.y.z.devN must never
+# deploy): the `!v*.dev*` exclusion below, and scripts/check-release-tag.mjs
+# failing the run when the tagged commit's package.json isn't a clean x.y.z
+# matching the tag.
+#
 # One-time setup (details in docs/deployment.md → "Deploying from GitHub"):
 #   Secrets:   CLOUDFLARE_API_TOKEN (scoped: Workers Scripts Edit, D1 Edit,
 #              Workers KV Storage Edit), CLOUDFLARE_ACCOUNT_ID
@@ -17,7 +22,7 @@ name: Deploy
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    tags: ['v*', '!v*.dev*', '!v*-dev*']
 
 permissions:
   contents: read
@@ -37,6 +42,15 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
+
+      # release discipline: fail before anything runs if the tag is a dev
+      # version (x.y.z.devN) or doesn't match the tagged commit's package.json
+      - name: Guard release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/check-release-tag.mjs
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

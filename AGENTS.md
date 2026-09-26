@@ -84,7 +84,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   happens ONLY after the user live-tests the build and explicitly tells me to release.
 - **Every non-dev commit must be tagged:** after a clean `X.Y.Z` release commit, create the
   matching annotated `vX.Y.Z` tag. Dev commits are never tagged. The Deploy workflow is
-  release-only and runs from that tag.
+  release-only and runs from that tag; its tag filter excludes `v*.dev*` and
+  `scripts/check-release-tag.mjs` fails a tagged run whose package.json isn't a clean
+  `x.y.z` matching the tag (belt and braces — don't tag dev iterations anyway).
 
 ## Architecture rules
 
