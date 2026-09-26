@@ -72,21 +72,23 @@ groupRoutes.post('/groups', async (c) => {
   const parsed = groupCreateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid group payload', parsed.error.flatten());
   const me = c.get('user').id;
-  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM group_members WHERE user_id = ?1')
-    .bind(me).first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.groupsPerUser)
-    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.groupsPerUser} groups per account`);
 
   const now = Date.now();
   const id = ulid(now);
   const color = parsed.data.color ?? '#4f8cff';
-  // group + owner membership in one transactional batch
-  await c.env.DB.batch([
-    c.env.DB.prepare('INSERT INTO groups (id, name, color, owner_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)')
-      .bind(id, parsed.data.name, color, me, now),
-    c.env.DB.prepare("INSERT INTO group_members (group_id, user_id, role, perms, created_at) VALUES (?1, ?2, 'owner', '', ?3)")
-      .bind(id, me, now)
-  ]);
+  // Capacity is enforced INSIDE the insert, not by a prior SELECT COUNT: D1
+  // serializes writes per database, so a concurrent create can't slip past a
+  // count taken microseconds earlier (audit 🟡2 TOCTOU).
+  const ins = await c.env.DB.prepare(
+    `INSERT INTO groups (id, name, color, owner_id, created_at, updated_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?5
+     WHERE (SELECT COUNT(*) FROM group_members WHERE user_id = ?4) < ?6`
+  ).bind(id, parsed.data.name, color, me, now, LIMITS.groupsPerUser).run();
+  if (Number(ins.meta.changes ?? 0) !== 1)
+    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.groupsPerUser} groups per account`);
+  // owner membership second: the group id is brand new, so nothing can race here
+  await c.env.DB.prepare("INSERT INTO group_members (group_id, user_id, role, perms, created_at) VALUES (?1, ?2, 'owner', '', ?3)")
+    .bind(id, me, now).run();
   const group = await c.env.DB.prepare('SELECT id, name, color, owner_id, created_at, updated_at FROM groups WHERE id = ?1')
     .bind(id).first();
   await emitToUsers(c.env, [{ userId: me, draft: { type: 'group.created', actor: c.get('deviceId'), data: { group_id: id } } }], c.executionCtx);
@@ -112,21 +114,29 @@ groupRoutes.post('/groups/join', async (c) => {
   ).bind(tokenHash, Date.now()).first<{ link_id: string; group_id: string }>();
   if (!link) return jsonError(404, 'not_found', 'this invite link is invalid, expired or revoked');
 
-  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?1')
-    .bind(link.group_id).first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.membersPerGroup)
-    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.membersPerGroup} members per group`);
-
   const now = Date.now();
   try {
-    // increment + membership in ONE transactional batch — a duplicate join
-    // (already a member) rolls the use_count back
-    await c.env.DB.batch([
-      c.env.DB.prepare('UPDATE group_invite_links SET use_count = use_count + 1 WHERE id = ?1')
-        .bind(link.link_id),
-      c.env.DB.prepare("INSERT INTO group_members (group_id, user_id, role, perms, created_at) VALUES (?1, ?2, 'member', '', ?3)")
-        .bind(link.group_id, me, now)
+    // Both capacity guards live in the statements themselves (audit 🟡2): the
+    // member count inside the INSERT, the remaining uses inside the UPDATE, so
+    // concurrent joins can't both pass a prior SELECT. In one transactional
+    // batch — a duplicate join (UNIQUE violation) rolls the use_count back.
+    // A join refused for a full group still burns that link use; conservative
+    // (fewer joins than allowed), never over the cap.
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE group_invite_links SET use_count = use_count + 1
+         WHERE id = ?1 AND (max_uses IS NULL OR use_count < max_uses)`
+      ).bind(link.link_id),
+      c.env.DB.prepare(
+        `INSERT INTO group_members (group_id, user_id, role, perms, created_at)
+         SELECT ?1, ?2, 'member', '', ?3
+         WHERE (SELECT COUNT(*) FROM group_members WHERE group_id = ?1) < ?4`
+      ).bind(link.group_id, me, now, LIMITS.membersPerGroup)
     ]);
+    if (Number(results[0]?.meta.changes ?? 0) !== 1)
+      return jsonError(422, 'limit', 'this invite link has no uses left');
+    if (Number(results[1]?.meta.changes ?? 0) !== 1)
+      return jsonError(422, 'limit', `limit reached: at most ${LIMITS.membersPerGroup} members per group`);
   } catch (e) {
     if (isUniqueConstraintError(e)) return jsonError(409, 'already_member', 'you are already a member of this group');
     throw e;
@@ -246,19 +256,24 @@ groupRoutes.post('/groups/invites/:inviteId/accept', async (c) => {
   ).bind(parsed.data, me).first<{ id: string; group_id: string }>();
   if (!invite) return jsonError(404, 'not_found', 'invite not found');
 
-  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?1')
-    .bind(invite.group_id).first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.membersPerGroup)
-    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.membersPerGroup} members per group`);
-
   const now = Date.now();
   try {
-    await c.env.DB.batch([
-      c.env.DB.prepare("DELETE FROM group_invites WHERE id = ?1 AND invitee_id = ?2 AND status = 'pending'")
-        .bind(invite.id, me),
-      c.env.DB.prepare("INSERT INTO group_members (group_id, user_id, role, perms, created_at) VALUES (?1, ?2, 'member', '', ?3)")
-        .bind(invite.group_id, me, now)
+    // member cap enforced inside the INSERT (audit 🟡2); the invite is deleted
+    // only once the membership row exists, so a full group leaves the invite
+    // pending and retryable
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO group_members (group_id, user_id, role, perms, created_at)
+         SELECT ?1, ?2, 'member', '', ?3
+         WHERE (SELECT COUNT(*) FROM group_members WHERE group_id = ?1) < ?4`
+      ).bind(invite.group_id, me, now, LIMITS.membersPerGroup),
+      c.env.DB.prepare(
+        `DELETE FROM group_invites WHERE id = ?1 AND invitee_id = ?2 AND status = 'pending'
+           AND EXISTS (SELECT 1 FROM group_members WHERE group_id = ?3 AND user_id = ?2)`
+      ).bind(invite.id, me, invite.group_id)
     ]);
+    if (Number(results[0]?.meta.changes ?? 0) !== 1)
+      return jsonError(422, 'limit', `limit reached: at most ${LIMITS.membersPerGroup} members per group`);
   } catch (e) {
     if (isUniqueConstraintError(e)) return jsonError(409, 'already_member', 'you are already a member of this group');
     throw e;
@@ -470,20 +485,20 @@ groupRoutes.post('/groups/:id/links', async (c) => {
   const parsed = groupLinkCreateSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid link payload', parsed.error.flatten());
 
-  const count = await c.env.DB.prepare(
-    'SELECT COUNT(*) AS n FROM group_invite_links WHERE group_id = ?1 AND revoked_at IS NULL'
-  ).bind(ctx.group.id).first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.inviteLinksPerGroup)
-    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.inviteLinksPerGroup} active invite links`);
-
   const token = randomToken(32);                       // returned ONCE, never stored raw
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
   const id = ulid(now);
   const expiresAt = parsed.data.expires_in_days == null ? null : now + parsed.data.expires_in_days * 24 * 3600_000;
-  await c.env.DB.prepare(
-    'INSERT INTO group_invite_links (id, group_id, token_hash, created_by, expires_at, max_uses, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)'
-  ).bind(id, ctx.group.id, tokenHash, c.get('user').id, expiresAt, parsed.data.max_uses ?? null, now).run();
+  // active-link cap enforced inside the INSERT (audit 🟡2)
+  const ins = await c.env.DB.prepare(
+    `INSERT INTO group_invite_links (id, group_id, token_hash, created_by, expires_at, max_uses, created_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+     WHERE (SELECT COUNT(*) FROM group_invite_links WHERE group_id = ?2 AND revoked_at IS NULL) < ?8`
+  ).bind(id, ctx.group.id, tokenHash, c.get('user').id, expiresAt, parsed.data.max_uses ?? null, now,
+    LIMITS.inviteLinksPerGroup).run();
+  if (Number(ins.meta.changes ?? 0) !== 1)
+    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.inviteLinksPerGroup} active invite links`);
   return c.json({
     link: { id, expires_at: expiresAt, max_uses: parsed.data.max_uses ?? null },
     token,                       // the only time the raw token is ever returned

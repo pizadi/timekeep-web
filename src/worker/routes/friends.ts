@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env, WorkerType } from '../env';
 import { jsonError } from '../env';
-import { requireAuth, limitHeavy, limitWrites, rateLimitHit, rateRules } from '../middleware';
+import { requireAuth, limitHeavy, rateLimitHit, rateRules } from '../middleware';
 import { friendRequestSchema, ulidish, USERNAME_RE } from '../validators';
 import { emitToUsers } from '../events';
 import { ulid } from '../../shared/ids';
@@ -19,9 +19,9 @@ import { dayBounds, civilDate, minutes } from '../../shared/time';
 import { LIMITS, REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
 
 export const friendRoutes = new Hono<WorkerType>();
-friendRoutes.use('/friends', requireAuth, limitWrites);
-friendRoutes.use('/friends/*', requireAuth, limitWrites);
-friendRoutes.use('/users/lookup', requireAuth, limitWrites);
+friendRoutes.use('/friends', requireAuth);
+friendRoutes.use('/friends/*', requireAuth);
+friendRoutes.use('/users/lookup', requireAuth);
 
 interface UserSummary { id: string; username: string; name: string }
 
@@ -111,20 +111,23 @@ friendRoutes.post('/friends/requests', async (c) => {
     .bind(me, target.id).first();
   if (dup) return jsonError(409, 'already_requested', 'a friend request is already pending');
 
-  const [friendCount, outCount] = await Promise.all([
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM friendships WHERE user_id = ?1').bind(me).first<{ n: number }>(),
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM friend_requests WHERE from_user_id = ?1').bind(me).first<{ n: number }>()
-  ]);
+  // Early-out only: a request doesn't create a friendship, so this is a UX
+  // guard, not the cap. The cap that actually grows (pending sent requests) is
+  // enforced inside the INSERT below (audit 🟡2).
+  const friendCount = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM friendships WHERE user_id = ?1')
+    .bind(me).first<{ n: number }>();
   if (Number(friendCount?.n ?? 0) >= LIMITS.friendsMax)
     return jsonError(422, 'limit', `limit reached: at most ${LIMITS.friendsMax} friends`);
-  if (Number(outCount?.n ?? 0) >= LIMITS.pendingRequestsMax)
-    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.pendingRequestsMax} pending sent requests`);
 
   const now = Date.now();
   const id = ulid(now);
-  await c.env.DB.prepare(
-    'INSERT INTO friend_requests (id, from_user_id, to_user_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)'
-  ).bind(id, me, target.id, now).run();
+  const ins = await c.env.DB.prepare(
+    `INSERT INTO friend_requests (id, from_user_id, to_user_id, created_at, updated_at)
+     SELECT ?1, ?2, ?3, ?4, ?4
+     WHERE (SELECT COUNT(*) FROM friend_requests WHERE from_user_id = ?2) < ?5`
+  ).bind(id, me, target.id, now, LIMITS.pendingRequestsMax).run();
+  if (Number(ins.meta.changes ?? 0) !== 1)
+    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.pendingRequestsMax} pending sent requests`);
 
   const meSummary = { id: me, username: c.get('user').username, name: c.get('user').name };
   const themSummary = { id: target.id, username: target.username, name: target.name };
@@ -136,20 +139,30 @@ friendRoutes.post('/friends/requests', async (c) => {
 });
 
 /** Shared accept path (explicit accept + auto-accept of a reverse request).
- *  One batch: delete the request + insert both friendship rows (transactional —
- *  a UNIQUE violation means already friends and the whole batch rolls back). */
+ *  One batch: insert both friendship rows, then delete the request — and the
+ *  delete only fires once the membership exists, so a refusal leaves the
+ *  request pending. Both directions are inserted by ONE guarded statement
+ *  (audit 🟡2): the pair is all-or-nothing, and each side's friend cap is
+ *  checked against the pre-insert state, so concurrent accepts can't push
+ *  either user past the cap or leave a one-sided friendship. */
 async function acceptById(env: Env, requestId: string, me: string, fromUser: string, actor: string): Promise<UserSummary> {
   const now = Date.now();
-  const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM friendships WHERE user_id = ?1').bind(me).first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.friendsMax)
-    throw new RuleError(422, 'limit', `limit reached: at most ${LIMITS.friendsMax} friends`);
   try {
     const results = await env.DB.batch([
-      env.DB.prepare('DELETE FROM friend_requests WHERE id = ?1 AND to_user_id = ?2').bind(requestId, me),
-      env.DB.prepare('INSERT INTO friendships (user_id, friend_id, created_at) VALUES (?1, ?2, ?3)').bind(me, fromUser, now),
-      env.DB.prepare('INSERT INTO friendships (user_id, friend_id, created_at) VALUES (?1, ?2, ?3)').bind(fromUser, me, now)
+      env.DB.prepare(
+        `INSERT INTO friendships (user_id, friend_id, created_at)
+         SELECT * FROM (SELECT ?1 AS u, ?2 AS f, ?3 AS t UNION ALL SELECT ?2, ?1, ?3)
+         WHERE (SELECT COUNT(*) FROM friendships WHERE user_id = ?1) < ?4
+           AND (SELECT COUNT(*) FROM friendships WHERE user_id = ?2) < ?4`
+      ).bind(me, fromUser, now, LIMITS.friendsMax),
+      env.DB.prepare(
+        `DELETE FROM friend_requests WHERE id = ?1 AND to_user_id = ?2
+           AND EXISTS (SELECT 1 FROM friendships WHERE user_id = ?2 AND friend_id = ?3)`
+      ).bind(requestId, me, fromUser)
     ]);
-    if (Number(results[0]?.meta.changes ?? 0) !== 1) throw new RuleError(404, 'not_found', 'request not found');
+    if (Number(results[0]?.meta.changes ?? 0) !== 2)
+      throw new RuleError(422, 'limit', `limit reached: at most ${LIMITS.friendsMax} friends`);
+    if (Number(results[1]?.meta.changes ?? 0) !== 1) throw new RuleError(404, 'not_found', 'request not found');
   } catch (e) {
     if (isUniqueConstraintError(e)) throw new RuleError(409, 'already_friends', 'you are already friends');
     throw e;
