@@ -45,8 +45,8 @@ dev server with hot reload (proxies `/api` to :8787).
 
 ## Deploy to Cloudflare
 
-Requires Workers Paid ($5/mo) — see
-[docs/deployment.md](docs/deployment.md#why-workers-paid).
+Runs on the Workers **free** plan (see
+[docs/deployment.md](docs/deployment.md#plan-requirements)).
 
 ```bash
 npx wrangler d1 create timekeep && npx wrangler kv namespace create KV

@@ -1,8 +1,8 @@
 # Deployment (Cloudflare)
 
 Deploying your own TimeKeep Web instance. One Worker serves the API and the
-SPA; you need a Cloudflare **Workers Paid** plan (see
-[Why Workers Paid](#why-workers-paid)).
+SPA; the Workers **free** plan is sufficient (see
+[Plan requirements](#plan-requirements)).
 
 ## 1. Create resources
 
@@ -62,12 +62,28 @@ All of these are optional — the app degrades gracefully:
 | `ALLOWED_ORIGINS` | var | comma-separated origins allowed for state-changing requests (defaults to the request origin; set it when serving from a custom domain) |
 | `EMAIL_DEV_MODE` | var | dev only — logs mail links to the console instead of sending |
 
-## Why Workers Paid
+## Plan requirements
 
-The default PBKDF2 iteration count (600,000, chained as 6 × 100k rounds
-because the runtime caps a single call at 100k) exceeds the free tier's
-10 ms CPU budget on the login path. Workers Paid ($5/mo) is required for the
-default KDF settings. Lower `PBKDF2_ITERATIONS` only for local dev.
+The Workers **free** plan is sufficient — TimeKeep runs on it in production.
+A previous revision of this doc claimed Workers Paid ($5/mo) was required for
+the default KDF settings; that was a mistake, and the reasoning behind it was
+wrong too: the chained PBKDF2 rounds are runtime-provided async WebCrypto
+calls (`crypto.subtle.deriveBits`), whose wall time is not billed against the
+free plan's 10 ms/request **CPU** budget the way JS execution is. The 600k
+default (6 × 100k chained rounds) runs comfortably on free — check
+**Workers & Pages → timekeep-web → Metrics → CPU time** to see it.
+
+Limits that actually apply on free (raise only if an instance outgrows them):
+
+| Resource | Free allowance |
+|---|---|
+| Workers requests | 100,000/day, 10 ms CPU per request |
+| D1 rows read / written | 5M/day, 100k/day |
+| D1 storage | 500 MB per database, 5 GB per account |
+| D1 Time Travel (point-in-time recovery) | 7 days |
+| Durable Objects, KV, cron, R2 dumps | available on free (standard free allowances) |
+
+An upgrade to Workers Paid removes the daily caps — that's its only role here.
 
 ## Daily cron
 

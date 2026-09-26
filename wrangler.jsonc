@@ -70,9 +70,11 @@
 	},
 	"vars": {
 		// KDF iterations (NFR-3: >= 600_000). Workers caps a single PBKDF2 deriveBits
-		// call at 100k — the code chains rounds to reach this total. Each chained
-		// round costs CPU, so free-tier (10 ms CPU) still can't do 600k; Workers
-		// Paid recommended. Lower this only for local dev.
+		// call at 100k — the code chains rounds to reach this total. The Workers
+		// FREE plan handles this fine (the chained deriveBits calls are async
+		// WebCrypto ops, not billed against the 10 ms/request CPU budget — an
+		// earlier "Paid required" note here was wrong). Lower this only for local
+		// dev.
 		"PBKDF2_ITERATIONS": "600000",
 		// Comma-separated origins allowed for state-changing requests (defaults to the request origin).
 		"ALLOWED_ORIGINS": "",
