@@ -23,17 +23,23 @@ friendRoutes.use('/friends', requireAuth);
 friendRoutes.use('/friends/*', requireAuth);
 friendRoutes.use('/users/lookup', requireAuth);
 
-interface UserSummary { id: string; username: string; name: string }
+interface UserSummary {
+  id: string;
+  username: string;
+  name: string;
+}
 
 async function getFriendSummary(env: Env, userId: string): Promise<UserSummary | null> {
   return await env.DB.prepare('SELECT id, username, name FROM users WHERE id = ?1 AND active = 1')
-    .bind(userId).first<UserSummary>();
+    .bind(userId)
+    .first<UserSummary>();
 }
 
 /** 404 unless `other` is an active friend of `me`. */
 async function requireFriendship(env: Env, me: string, other: string): Promise<void> {
   const row = await env.DB.prepare('SELECT 1 FROM friendships WHERE user_id = ?1 AND friend_id = ?2')
-    .bind(me, other).first();
+    .bind(me, other)
+    .first();
   if (!row) throw new RuleError(404, 'not_found', 'friend not found');
 }
 
@@ -42,21 +48,30 @@ async function requireFriendship(env: Env, me: string, other: string): Promise<v
 /** Friends + pending requests, shared by GET /friends and GET /bootstrap. */
 export async function socialLists(db: D1Database, userId: string) {
   const [friends, incoming, outgoing] = await Promise.all([
-    db.prepare(
-      `SELECT u.id, u.username, u.name, f.created_at AS since
+    db
+      .prepare(
+        `SELECT u.id, u.username, u.name, f.created_at AS since
        FROM friendships f JOIN users u ON u.id = f.friend_id
-       WHERE f.user_id = ?1 AND u.active = 1 ORDER BY u.username`
-    ).bind(userId).all(),
-    db.prepare(
-      `SELECT r.id AS request_id, r.created_at, u.id AS user_id, u.username, u.name
+       WHERE f.user_id = ?1 AND u.active = 1 ORDER BY u.username`,
+      )
+      .bind(userId)
+      .all(),
+    db
+      .prepare(
+        `SELECT r.id AS request_id, r.created_at, u.id AS user_id, u.username, u.name
        FROM friend_requests r JOIN users u ON u.id = r.from_user_id
-       WHERE r.to_user_id = ?1 AND u.active = 1 ORDER BY r.created_at`
-    ).bind(userId).all(),
-    db.prepare(
-      `SELECT r.id AS request_id, r.created_at, u.id AS user_id, u.username, u.name
+       WHERE r.to_user_id = ?1 AND u.active = 1 ORDER BY r.created_at`,
+      )
+      .bind(userId)
+      .all(),
+    db
+      .prepare(
+        `SELECT r.id AS request_id, r.created_at, u.id AS user_id, u.username, u.name
        FROM friend_requests r JOIN users u ON u.id = r.to_user_id
-       WHERE r.from_user_id = ?1 AND u.active = 1 ORDER BY r.created_at`
-    ).bind(userId).all()
+       WHERE r.from_user_id = ?1 AND u.active = 1 ORDER BY r.created_at`,
+      )
+      .bind(userId)
+      .all(),
   ]);
   return { friends: friends.results, incoming: incoming.results, outgoing: outgoing.results };
 }
@@ -75,7 +90,8 @@ friendRoutes.get('/users/lookup', async (c) => {
   const parsed = lookupSchema.safeParse({ username: c.req.query('username') ?? '' });
   if (!parsed.success) return jsonError(422, 'validation', 'invalid username');
   const user = await c.env.DB.prepare('SELECT id, username, name FROM users WHERE username = ?1 AND active = 1')
-    .bind(parsed.data.username).first<UserSummary>();
+    .bind(parsed.data.username)
+    .first<UserSummary>();
   // one message for "no such user" and "deactivated user" — no existence oracle
   if (!user) return jsonError(404, 'not_found', 'no such user');
   return c.json({ user });
@@ -92,14 +108,16 @@ friendRoutes.post('/friends/requests', async (c) => {
   const actor = c.get('deviceId');
 
   const target = await c.env.DB.prepare('SELECT id, username, name, active FROM users WHERE username = ?1')
-    .bind(parsed.data.username).first<UserSummary & { active: 0 | 1 }>();
+    .bind(parsed.data.username)
+    .first<UserSummary & { active: 0 | 1 }>();
   if (!target || !target.active) return jsonError(404, 'not_found', 'no such user');
   if (target.id === me) return jsonError(422, 'self', "you can't befriend yourself");
 
   const [already, reverse] = await Promise.all([
     c.env.DB.prepare('SELECT 1 FROM friendships WHERE user_id = ?1 AND friend_id = ?2').bind(me, target.id).first(),
     c.env.DB.prepare('SELECT id FROM friend_requests WHERE from_user_id = ?1 AND to_user_id = ?2')
-      .bind(target.id, me).first<{ id: string }>()
+      .bind(target.id, me)
+      .first<{ id: string }>(),
   ]);
   if (already) return jsonError(409, 'already_friends', 'you are already friends');
   if (reverse) {
@@ -108,14 +126,16 @@ friendRoutes.post('/friends/requests', async (c) => {
     return c.json({ accepted: true, request: null, friend }, 201);
   }
   const dup = await c.env.DB.prepare('SELECT 1 FROM friend_requests WHERE from_user_id = ?1 AND to_user_id = ?2')
-    .bind(me, target.id).first();
+    .bind(me, target.id)
+    .first();
   if (dup) return jsonError(409, 'already_requested', 'a friend request is already pending');
 
   // Early-out only: a request doesn't create a friendship, so this is a UX
   // guard, not the cap. The cap that actually grows (pending sent requests) is
   // enforced inside the INSERT below (audit 🟡2).
   const friendCount = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM friendships WHERE user_id = ?1')
-    .bind(me).first<{ n: number }>();
+    .bind(me)
+    .first<{ n: number }>();
   if (Number(friendCount?.n ?? 0) >= LIMITS.friendsMax)
     return jsonError(422, 'limit', `limit reached: at most ${LIMITS.friendsMax} friends`);
 
@@ -124,17 +144,23 @@ friendRoutes.post('/friends/requests', async (c) => {
   const ins = await c.env.DB.prepare(
     `INSERT INTO friend_requests (id, from_user_id, to_user_id, created_at, updated_at)
      SELECT ?1, ?2, ?3, ?4, ?4
-     WHERE (SELECT COUNT(*) FROM friend_requests WHERE from_user_id = ?2) < ?5`
-  ).bind(id, me, target.id, now, LIMITS.pendingRequestsMax).run();
+     WHERE (SELECT COUNT(*) FROM friend_requests WHERE from_user_id = ?2) < ?5`,
+  )
+    .bind(id, me, target.id, now, LIMITS.pendingRequestsMax)
+    .run();
   if (Number(ins.meta.changes ?? 0) !== 1)
     return jsonError(422, 'limit', `limit reached: at most ${LIMITS.pendingRequestsMax} pending sent requests`);
 
   const meSummary = { id: me, username: c.get('user').username, name: c.get('user').name };
   const themSummary = { id: target.id, username: target.username, name: target.name };
-  await emitToUsers(c.env, [
-    { userId: target.id, draft: { type: 'friend.requested', actor, data: { user: meSummary } } },
-    { userId: me, draft: { type: 'friend.requested', actor, data: { user: themSummary } } }
-  ], c.executionCtx);
+  await emitToUsers(
+    c.env,
+    [
+      { userId: target.id, draft: { type: 'friend.requested', actor, data: { user: meSummary } } },
+      { userId: me, draft: { type: 'friend.requested', actor, data: { user: themSummary } } },
+    ],
+    c.executionCtx,
+  );
   return c.json({ request: { id, user: themSummary } }, 201);
 });
 
@@ -145,7 +171,13 @@ friendRoutes.post('/friends/requests', async (c) => {
  *  (audit 🟡2): the pair is all-or-nothing, and each side's friend cap is
  *  checked against the pre-insert state, so concurrent accepts can't push
  *  either user past the cap or leave a one-sided friendship. */
-async function acceptById(env: Env, requestId: string, me: string, fromUser: string, actor: string): Promise<UserSummary> {
+async function acceptById(
+  env: Env,
+  requestId: string,
+  me: string,
+  fromUser: string,
+  actor: string,
+): Promise<UserSummary> {
   const now = Date.now();
   try {
     const results = await env.DB.batch([
@@ -153,12 +185,12 @@ async function acceptById(env: Env, requestId: string, me: string, fromUser: str
         `INSERT INTO friendships (user_id, friend_id, created_at)
          SELECT * FROM (SELECT ?1 AS u, ?2 AS f, ?3 AS t UNION ALL SELECT ?2, ?1, ?3)
          WHERE (SELECT COUNT(*) FROM friendships WHERE user_id = ?1) < ?4
-           AND (SELECT COUNT(*) FROM friendships WHERE user_id = ?2) < ?4`
+           AND (SELECT COUNT(*) FROM friendships WHERE user_id = ?2) < ?4`,
       ).bind(me, fromUser, now, LIMITS.friendsMax),
       env.DB.prepare(
         `DELETE FROM friend_requests WHERE id = ?1 AND to_user_id = ?2
-           AND EXISTS (SELECT 1 FROM friendships WHERE user_id = ?2 AND friend_id = ?3)`
-      ).bind(requestId, me, fromUser)
+           AND EXISTS (SELECT 1 FROM friendships WHERE user_id = ?2 AND friend_id = ?3)`,
+      ).bind(requestId, me, fromUser),
     ]);
     if (Number(results[0]?.meta.changes ?? 0) !== 2)
       throw new RuleError(422, 'limit', `limit reached: at most ${LIMITS.friendsMax} friends`);
@@ -172,7 +204,7 @@ async function acceptById(env: Env, requestId: string, me: string, fromUser: str
   const meSummary = await getFriendSummary(env, me);
   await emitToUsers(env, [
     { userId: me, draft: { type: 'friend.accepted', actor, data: { user: them } } },
-    { userId: fromUser, draft: { type: 'friend.accepted', actor, data: { user: meSummary } } }
+    { userId: fromUser, draft: { type: 'friend.accepted', actor, data: { user: meSummary } } },
   ]);
   return them;
 }
@@ -181,7 +213,8 @@ friendRoutes.post('/friends/requests/:id/accept', async (c) => {
   const parsed = ulidish.safeParse(c.req.param('id'));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid id');
   const row = await c.env.DB.prepare('SELECT id, from_user_id FROM friend_requests WHERE id = ?1 AND to_user_id = ?2')
-    .bind(parsed.data, c.get('user').id).first<{ id: string; from_user_id: string }>();
+    .bind(parsed.data, c.get('user').id)
+    .first<{ id: string; from_user_id: string }>();
   if (!row) return jsonError(404, 'not_found', 'request not found');
   const friend = await acceptById(c.env, row.id, c.get('user').id, row.from_user_id, c.get('deviceId'));
   return c.json({ accepted: true, friend });
@@ -192,10 +225,18 @@ friendRoutes.post('/friends/requests/:id/accept', async (c) => {
  * both sides get a `friend.removed` signal. The sender receives no rejection
  * notice beyond their outgoing entry vanishing.
  */
-async function removeRequest(env: Env, requestId: string, me: string, side: 'to_user_id' | 'from_user_id', actor: string): Promise<void> {
+async function removeRequest(
+  env: Env,
+  requestId: string,
+  me: string,
+  side: 'to_user_id' | 'from_user_id',
+  actor: string,
+): Promise<void> {
   const row = await env.DB.prepare(
-    `SELECT id, from_user_id, to_user_id FROM friend_requests WHERE id = ?1 AND ${side} = ?2`
-  ).bind(requestId, me).first<{ id: string; from_user_id: string; to_user_id: string }>();
+    `SELECT id, from_user_id, to_user_id FROM friend_requests WHERE id = ?1 AND ${side} = ?2`,
+  )
+    .bind(requestId, me)
+    .first<{ id: string; from_user_id: string; to_user_id: string }>();
   if (!row) throw new RuleError(404, 'not_found', 'request not found');
   await env.DB.prepare('DELETE FROM friend_requests WHERE id = ?1').bind(row.id).run();
   const otherId = side === 'to_user_id' ? row.from_user_id : row.to_user_id;
@@ -207,7 +248,7 @@ async function emitRemoved(env: Env, actor: string, a: string, b: string): Promi
   const [aSummary, bSummary] = await Promise.all([getFriendSummary(env, a), getFriendSummary(env, b)]);
   await emitToUsers(env, [
     ...(aSummary ? [{ userId: a, draft: { type: 'friend.removed' as const, actor, data: { user: bSummary } } }] : []),
-    ...(bSummary ? [{ userId: b, draft: { type: 'friend.removed' as const, actor, data: { user: aSummary } } }] : [])
+    ...(bSummary ? [{ userId: b, draft: { type: 'friend.removed' as const, actor, data: { user: aSummary } } }] : []),
   ]);
 }
 
@@ -235,10 +276,9 @@ friendRoutes.delete('/friends/:friendId', async (c) => {
   const otherId = parsed.data;
   const results = await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2').bind(me, otherId),
-    c.env.DB.prepare('DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2').bind(otherId, me)
+    c.env.DB.prepare('DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2').bind(otherId, me),
   ]);
-  if (Number(results[0]?.meta.changes ?? 0) !== 1)
-    return jsonError(404, 'not_found', 'friend not found');
+  if (Number(results[0]?.meta.changes ?? 0) !== 1) return jsonError(404, 'not_found', 'friend not found');
   await emitRemoved(c.env, c.get('deviceId'), me, otherId);
   return c.json({ ok: true });
 });
@@ -250,7 +290,8 @@ friendRoutes.delete('/friends/:friendId', async (c) => {
 friendRoutes.post('/friends/presence', async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
-  const parsed = z.object({ ids: z.array(ulidish).max(LIMITS.friendsMax) })
+  const parsed = z
+    .object({ ids: z.array(ulidish).max(LIMITS.friendsMax) })
     .safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid ids');
   const me = c.get('user').id;
@@ -258,12 +299,16 @@ friendRoutes.post('/friends/presence', async (c) => {
   const presence: Record<string, unknown> = {};
   if (ids.length > 0) {
     const checks = await c.env.DB.prepare(
-      `SELECT friend_id FROM friendships WHERE user_id = ?1 AND friend_id IN (${ids.map(() => '?').join(',')})`
-    ).bind(me, ...ids).all<{ friend_id: string }>();
+      `SELECT friend_id FROM friendships WHERE user_id = ?1 AND friend_id IN (${ids.map(() => '?').join(',')})`,
+    )
+      .bind(me, ...ids)
+      .all<{ friend_id: string }>();
     const allowed = new Set(checks.results.map((r) => r.friend_id));
-    await Promise.all(ids.map(async (id) => {
-      presence[id] = allowed.has(id) ? await friendVisiblePresence(c.env, id) : null;
-    }));
+    await Promise.all(
+      ids.map(async (id) => {
+        presence[id] = allowed.has(id) ? await friendVisiblePresence(c.env, id) : null;
+      }),
+    );
   }
   return c.json({ presence, server_now: Date.now() });
 });
@@ -282,9 +327,11 @@ friendRoutes.get('/friends/:friendId/projects', async (c) => {
       `SELECT id, name, color, archived, position, created_at, updated_at, visibility
        FROM projects
        WHERE user_id = ?1 AND visibility = 'friends' AND group_id IS NULL
-       ORDER BY position, created_at`
-    ).bind(friendId).all(),
-    friendVisiblePresence(c.env, friendId)
+       ORDER BY position, created_at`,
+    )
+      .bind(friendId)
+      .all(),
+    friendVisiblePresence(c.env, friendId),
   ]);
   return c.json({ friend, projects: projects.results, running: presence, server_now: Date.now() });
 });
@@ -301,8 +348,10 @@ friendRoutes.get('/friends/:friendId/projects/:projectId', async (c) => {
 
   const project = await c.env.DB.prepare(
     `SELECT id, name, color, archived, position, created_at, updated_at, visibility
-     FROM projects WHERE id = ?1 AND user_id = ?2 AND visibility = 'friends' AND group_id IS NULL`
-  ).bind(projectId, friendId).first();
+     FROM projects WHERE id = ?1 AND user_id = ?2 AND visibility = 'friends' AND group_id IS NULL`,
+  )
+    .bind(projectId, friendId)
+    .first();
   if (!project) return jsonError(404, 'not_found', 'project not found');
 
   const now = Date.now();
@@ -321,13 +370,17 @@ friendRoutes.get('/friends/:friendId/projects/:projectId', async (c) => {
 
   const [tasks, subtasks, bucketRows, presence] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT id, name, done, position FROM tasks WHERE project_id = ?1 AND user_id = ?2 ORDER BY position, created_at`
-    ).bind(projectId, friendId).all(),
+      `SELECT id, name, done, position FROM tasks WHERE project_id = ?1 AND user_id = ?2 ORDER BY position, created_at`,
+    )
+      .bind(projectId, friendId)
+      .all(),
     c.env.DB.prepare(
       `SELECT sb.id, sb.task_id, sb.name, sb.done, sb.position
        FROM subtasks sb JOIN tasks t ON t.id = sb.task_id
-       WHERE t.project_id = ?1 AND t.user_id = ?2 ORDER BY sb.position, sb.created_at`
-    ).bind(projectId, friendId).all(),
+       WHERE t.project_id = ?1 AND t.user_id = ?2 ORDER BY sb.position, sb.created_at`,
+    )
+      .bind(projectId, friendId)
+      .all(),
     c.env.DB.prepare(
       `WITH days(day, start_ms, end_ms) AS (
          SELECT json_extract(je.value, '$[0]'), json_extract(je.value, '$[1]'), json_extract(je.value, '$[2]')
@@ -339,16 +392,24 @@ friendRoutes.get('/friends/:friendId/projects/:projectId', async (c) => {
        JOIN tasks t ON t.id = s.task_id
        JOIN days d ON s.started_at < d.end_ms AND COALESCE(s.ended_at, ?2) > d.start_ms
        WHERE s.user_id = ?3 AND t.project_id = ?4 AND s.started_at < ?5 AND COALESCE(s.ended_at, ?2) > ?6
-       GROUP BY d.day`
-    ).bind(daysJson, now, friendId, projectId, rangeEnd, rangeStart).all<{ day: string; ms: number }>(),
-    friendVisiblePresence(c.env, friendId)
+       GROUP BY d.day`,
+    )
+      .bind(daysJson, now, friendId, projectId, rangeEnd, rangeStart)
+      .all<{ day: string; ms: number }>(),
+    friendVisiblePresence(c.env, friendId),
   ]);
 
   const days = bucketRows.results.map((r) => ({ day: r.day, minutes: minutes(Number(r.ms)) }));
   return c.json({
-    project, tasks: tasks.results, subtasks: subtasks.results, days,
+    project,
+    tasks: tasks.results,
+    subtasks: subtasks.results,
+    days,
     total_minutes: minutes(bucketRows.results.reduce((a, r) => a + Number(r.ms ?? 0), 0)),
     running: presence && presence.project_id === projectId ? presence : null,
-    from, to, timezone: tz, server_now: now
+    from,
+    to,
+    timezone: tz,
+    server_now: now,
   });
 });

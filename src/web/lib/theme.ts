@@ -9,11 +9,17 @@ export function currentThemePref(): ThemePref {
   try {
     const raw = localStorage.getItem('tk.theme');
     return raw ? (JSON.parse(raw) as ThemePref) : 'system';
-  } catch { return 'system'; }
+  } catch {
+    return 'system';
+  }
 }
 
 export function applyTheme(pref: ThemePref, persistServer = false): void {
-  try { localStorage.setItem('tk.theme', JSON.stringify(pref)); } catch { /* private mode */ }
+  try {
+    localStorage.setItem('tk.theme', JSON.stringify(pref));
+  } catch {
+    /* private mode */
+  }
   const dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = pref === 'system' ? (dark ? 'dark' : 'light') : pref;
   document.documentElement.dataset.themePref = pref;

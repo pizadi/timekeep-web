@@ -2,7 +2,7 @@ export interface Env {
   DB: D1Database;
   KV: KVNamespace;
   USER_HUB: DurableObjectNamespace;
-  R2?: R2Bucket;                 // optional (FR-D3 dumps)
+  R2?: R2Bucket; // optional (FR-D3 dumps)
   ASSETS: Fetcher;
 
   // vars
@@ -33,10 +33,18 @@ export type WorkerType = {
   Bindings: Env;
   Variables: {
     user: {
-      id: string; username: string; email: string; name: string; timezone: string;
-      week_start: number; theme: 'system' | 'light' | 'dark';
-      role: UserRole; active: 0 | 1; must_change_password: 0 | 1;
-      email_verified_at: number | null; created_at: number;
+      id: string;
+      username: string;
+      email: string;
+      name: string;
+      timezone: string;
+      week_start: number;
+      theme: 'system' | 'light' | 'dark';
+      role: UserRole;
+      active: 0 | 1;
+      must_change_password: 0 | 1;
+      email_verified_at: number | null;
+      created_at: number;
     };
     deviceId: string;
     authSessionId: string;

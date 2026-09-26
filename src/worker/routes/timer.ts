@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 const timerOpSchema = z.object({
   task_id: ulidish,
-  subtask_id: ulidish.nullable().optional()   // 0..1 subtask per session
+  subtask_id: ulidish.nullable().optional(), // 0..1 subtask per session
 });
 
 export const timerRoutes = new Hono<WorkerType>();
@@ -24,13 +24,14 @@ timerRoutes.use('/pomo/*', requireAuth, limitWrites);
 async function callHub(c: Context<WorkerType>, path: string, body?: unknown, method = 'POST'): Promise<Response> {
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(c.get('user').id));
   const url = `https://do${path}`;
-  const req = body === undefined
-    ? new Request(url, { method: 'GET', headers: { 'x-internal': '1' } })
-    : new Request(url, {
-      method,
-      headers: { 'content-type': 'application/json', 'x-internal': '1' },
-      body: JSON.stringify(body)
-    });
+  const req =
+    body === undefined
+      ? new Request(url, { method: 'GET', headers: { 'x-internal': '1' } })
+      : new Request(url, {
+          method,
+          headers: { 'content-type': 'application/json', 'x-internal': '1' },
+          body: JSON.stringify(body),
+        });
   return stub.fetch(req);
 }
 
@@ -42,8 +43,10 @@ async function timerFallback(c: Context<WorkerType>) {
      JOIN time_sessions s ON s.id = at.session_id
      JOIN tasks t ON t.id = s.task_id
      JOIN projects p ON p.id = t.project_id
-     WHERE at.user_id = ?1`
-  ).bind(c.get('user').id).first();
+     WHERE at.user_id = ?1`,
+  )
+    .bind(c.get('user').id)
+    .first();
   return row ? { session: row, pomo: null } : { session: null, pomo: null };
 }
 
@@ -60,7 +63,12 @@ timerRoutes.get('/timer', async (c) => {
 timerRoutes.post('/timer/start', async (c) => {
   const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
-  const res = await callHub(c, '/timer', { op: 'start', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
+  const res = await callHub(c, '/timer', {
+    op: 'start',
+    task_id: parsed.data.task_id,
+    subtask_id: parsed.data.subtask_id ?? null,
+    device: c.get('deviceId'),
+  });
   return forward(res);
 });
 
@@ -74,7 +82,12 @@ timerRoutes.post('/timer/stop', async (c) => {
 timerRoutes.post('/timer/switch', async (c) => {
   const parsed = timerOpSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'task_id required');
-  const res = await callHub(c, '/timer', { op: 'switch', task_id: parsed.data.task_id, subtask_id: parsed.data.subtask_id ?? null, device: c.get('deviceId') });
+  const res = await callHub(c, '/timer', {
+    op: 'switch',
+    task_id: parsed.data.task_id,
+    subtask_id: parsed.data.subtask_id ?? null,
+    device: c.get('deviceId'),
+  });
   return forward(res);
 });
 
@@ -113,6 +126,6 @@ function forward(res: Response): Response {
   const status = res.status;
   return new Response(res.body, {
     status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' }
+    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
   });
 }

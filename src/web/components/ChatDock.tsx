@@ -29,21 +29,29 @@ const MAX_EXPANDED = 3; // beyond this, the oldest expanded windows auto-collaps
 function loadDock(): DockState {
   try {
     const raw = JSON.parse(localStorage.getItem(LS_KEY) ?? '{}');
-    const ids = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+    const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
     return { open: ids(raw.open), collapsed: ids(raw.collapsed), launcherOpen: false };
-  } catch { return { open: [], collapsed: [], launcherOpen: false }; }
+  } catch {
+    return { open: [], collapsed: [], launcherOpen: false };
+  }
 }
 
 let dock: DockState = loadDock();
 const dockListeners = new Set<() => void>();
 function setDock(patch: Partial<DockState>): void {
   dock = { ...dock, ...patch };
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ open: dock.open, collapsed: dock.collapsed })); } catch { /* storage may be blocked */ }
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({ open: dock.open, collapsed: dock.collapsed }));
+  } catch {
+    /* storage may be blocked */
+  }
   for (const l of dockListeners) l();
 }
 function subscribeDock(l: () => void): () => void {
   dockListeners.add(l);
-  return () => { dockListeners.delete(l); };
+  return () => {
+    dockListeners.delete(l);
+  };
 }
 
 export const chatDock = {
@@ -55,26 +63,32 @@ export const chatDock = {
     const open = [...dock.open, groupId];
     const collapsed = new Set(dock.collapsed);
     let expanded = open.filter((id) => !collapsed.has(id)).length;
-    for (const id of open) { // collapse oldest expanded windows beyond the cap
+    for (const id of open) {
+      // collapse oldest expanded windows beyond the cap
       if (expanded <= MAX_EXPANDED) break;
-      if (!collapsed.has(id) && id !== groupId) { collapsed.add(id); expanded--; }
+      if (!collapsed.has(id) && id !== groupId) {
+        collapsed.add(id);
+        expanded--;
+      }
     }
     setDock({ open, collapsed: [...collapsed] });
   },
   close(groupId: string): void {
     setDock({
       open: dock.open.filter((id) => id !== groupId),
-      collapsed: dock.collapsed.filter((id) => id !== groupId)
+      collapsed: dock.collapsed.filter((id) => id !== groupId),
     });
   },
   toggleCollapsed(groupId: string): void {
     setDock({
       collapsed: dock.collapsed.includes(groupId)
         ? dock.collapsed.filter((id) => id !== groupId)
-        : [...dock.collapsed, groupId]
+        : [...dock.collapsed, groupId],
     });
   },
-  toggleLauncher(): void { setDock({ launcherOpen: !dock.launcherOpen }); }
+  toggleLauncher(): void {
+    setDock({ launcherOpen: !dock.launcherOpen });
+  },
 };
 
 export function useChatDock(): DockState {
@@ -100,9 +114,7 @@ export default function ChatDock() {
   }, [ds.launcherOpen]);
 
   // only windows for groups the user is still a member of
-  const openGroups = ds.open
-    .map((id) => groups.find((g) => g.id === id))
-    .filter((g): g is GroupSummary => !!g);
+  const openGroups = ds.open.map((id) => groups.find((g) => g.id === id)).filter((g): g is GroupSummary => !!g);
   const unreadElsewhere = groups.reduce((a, g) => a + (!ds.open.includes(g.id) && g.unread > 0 ? g.unread : 0), 0);
 
   return (
@@ -113,23 +125,42 @@ export default function ChatDock() {
         return (
           <section key={g.id} className={`chat-win${collapsed ? ' collapsed' : ''}`} aria-label={`Chat: ${g.name}`}>
             <div
-              className="chat-win-head" role="button" tabIndex={0} aria-expanded={!collapsed}
+              className="chat-win-head"
+              role="button"
+              tabIndex={0}
+              aria-expanded={!collapsed}
               onClick={() => chatDock.toggleCollapsed(g.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter') chatDock.toggleCollapsed(g.id); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') chatDock.toggleCollapsed(g.id);
+              }}
             >
               <span className="chip" style={{ background: g.color }} aria-hidden />
-              <span className="grow" title={g.name}>{g.name}</span>
+              <span className="grow" title={g.name}>
+                {g.name}
+              </span>
               {collapsed && g.unread > 0 && <span className="chat-badge">{g.unread > 99 ? '99+' : g.unread}</span>}
-              <button className="icon-btn" aria-label={collapsed ? 'Expand chat' : 'Collapse chat'}
-                onClick={(e) => { e.stopPropagation(); chatDock.toggleCollapsed(g.id); }}>
+              <button
+                className="icon-btn"
+                aria-label={collapsed ? 'Expand chat' : 'Collapse chat'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  chatDock.toggleCollapsed(g.id);
+                }}
+              >
                 {collapsed ? '▴' : '▾'}
               </button>
-              <button className="icon-btn" aria-label={`Close ${g.name} chat`}
-                onClick={(e) => { e.stopPropagation(); chatDock.close(g.id); }}>✕</button>
+              <button
+                className="icon-btn"
+                aria-label={`Close ${g.name} chat`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  chatDock.close(g.id);
+                }}
+              >
+                ✕
+              </button>
             </div>
-            {!collapsed && me && (
-              <ChatBody groupId={g.id} myUserId={me.id} canModerate={canModerate} />
-            )}
+            {!collapsed && me && <ChatBody groupId={g.id} myUserId={me.id} canModerate={canModerate} />}
           </section>
         );
       })}
@@ -137,25 +168,44 @@ export default function ChatDock() {
       <div className="chat-launcher-wrap" ref={popRef}>
         {ds.launcherOpen && (
           <div className="chat-pop" role="menu" aria-label="Group chats">
-            {groups.length === 0 && <div className="muted" style={{ padding: '10px 12px' }}>No groups yet.</div>}
+            {groups.length === 0 && (
+              <div className="muted" style={{ padding: '10px 12px' }}>
+                No groups yet.
+              </div>
+            )}
             {groups.map((g) => {
               const isOpen = ds.open.includes(g.id);
               return (
-                <button key={g.id} role="menuitem" className="chat-pop-item"
-                  onClick={() => (isOpen ? chatDock.close(g.id) : chatDock.open(g.id))}>
+                <button
+                  key={g.id}
+                  role="menuitem"
+                  className="chat-pop-item"
+                  onClick={() => (isOpen ? chatDock.close(g.id) : chatDock.open(g.id))}
+                >
                   <span className="chip" style={{ background: g.color }} aria-hidden />
                   <span className="grow">{g.name}</span>
-                  {isOpen ? <span className="muted" style={{ fontSize: 12 }}>open</span>
-                    : g.unread > 0 ? <span className="chat-badge">{g.unread > 99 ? '99+' : g.unread}</span> : null}
+                  {isOpen ? (
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      open
+                    </span>
+                  ) : g.unread > 0 ? (
+                    <span className="chat-badge">{g.unread > 99 ? '99+' : g.unread}</span>
+                  ) : null}
                 </button>
               );
             })}
           </div>
         )}
-        <button className="chat-launcher" aria-label={`Group chats${unreadElsewhere ? ` — ${unreadElsewhere} unread` : ''}`}
-          aria-expanded={ds.launcherOpen} onClick={() => chatDock.toggleLauncher()}>
+        <button
+          className="chat-launcher"
+          aria-label={`Group chats${unreadElsewhere ? ` — ${unreadElsewhere} unread` : ''}`}
+          aria-expanded={ds.launcherOpen}
+          onClick={() => chatDock.toggleLauncher()}
+        >
           💬
-          {unreadElsewhere > 0 && <span className="chat-badge chat-launcher-badge">{unreadElsewhere > 99 ? '99+' : unreadElsewhere}</span>}
+          {unreadElsewhere > 0 && (
+            <span className="chat-badge chat-launcher-badge">{unreadElsewhere > 99 ? '99+' : unreadElsewhere}</span>
+          )}
         </button>
       </div>
     </div>
@@ -164,9 +214,7 @@ export default function ChatDock() {
 
 // ---------- one window's message list + composer ----------
 
-function ChatBody({ groupId, myUserId, canModerate }: {
-  groupId: string; myUserId: string; canModerate: boolean;
-}) {
+function ChatBody({ groupId, myUserId, canModerate }: { groupId: string; myUserId: string; canModerate: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -185,10 +233,18 @@ function ChatBody({ groupId, myUserId, canModerate }: {
       setHasMore(res.has_more);
       await api(`/groups/${groupId}/read`, { method: 'POST' }); // open + caught up
       store.markGroupRead(groupId);
-      requestAnimationFrame(() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; });
-    } catch (e: any) { pushToast('error', e.message); setMessages([]); }
+      requestAnimationFrame(() => {
+        const el = listRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    } catch (e: any) {
+      pushToast('error', e.message);
+      setMessages([]);
+    }
   }
-  useEffect(() => { void load(); /* eslint-disable-line */ }, [groupId]);
+  useEffect(() => {
+    void load(); /* eslint-disable-line */
+  }, [groupId]);
 
   // live updates: created / updated / deleted relayed from store.applyEvent
   useEffect(() => {
@@ -205,10 +261,15 @@ function ChatBody({ groupId, myUserId, canModerate }: {
           next[i] = msg;
           return next;
         });
-        if (nearBottom()) requestAnimationFrame(() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; });
+        if (nearBottom())
+          requestAnimationFrame(() => {
+            const el = listRef.current;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
       } else if (d.message_id) {
-        setMessages((prev) => (prev ?? []).map((m) => m.id === d.message_id
-          ? { ...m, body: '', deleted_at: Date.now() } : m));
+        setMessages((prev) =>
+          (prev ?? []).map((m) => (m.id === d.message_id ? { ...m, body: '', deleted_at: Date.now() } : m)),
+        );
       }
       // any traffic while open = caught up: clear the badge + persist read state
       store.markGroupRead(groupId);
@@ -228,15 +289,19 @@ function ChatBody({ groupId, myUserId, canModerate }: {
     const prevTop = el?.scrollTop ?? 0;
     try {
       const res = await api<{ messages: ChatMessage[]; has_more: boolean }>(
-        `/groups/${groupId}/messages?before=${messages[0]!.id}`);
+        `/groups/${groupId}/messages?before=${messages[0]!.id}`,
+      );
       setMessages((prev) => [...res.messages, ...(prev ?? [])]);
       setHasMore(res.has_more);
       requestAnimationFrame(() => {
         const el2 = listRef.current;
         if (el2) el2.scrollTop = el2.scrollHeight - prevHeight + prevTop;
       });
-    } catch (e: any) { pushToast('error', e.message); }
-    finally { setLoadingOlder(false); }
+    } catch (e: any) {
+      pushToast('error', e.message);
+    } finally {
+      setLoadingOlder(false);
+    }
   }
 
   async function send() {
@@ -245,16 +310,23 @@ function ChatBody({ groupId, myUserId, canModerate }: {
     setBusy(true);
     try {
       const res = await api<{ message: ChatMessage }>(`/groups/${groupId}/messages`, {
-        method: 'POST', body: { body }
+        method: 'POST',
+        body: { body },
       });
       setDraft('');
       setMessages((prev) => {
         const list = prev ?? [];
         return list.some((m) => m.id === res.message.id) ? list : [...list, res.message];
       });
-      requestAnimationFrame(() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; });
-    } catch (e: any) { pushToast('error', e.message); }
-    finally { setBusy(false); }
+      requestAnimationFrame(() => {
+        const el = listRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    } catch (e: any) {
+      pushToast('error', e.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function editMsg(m: ChatMessage) {
@@ -262,25 +334,36 @@ function ChatBody({ groupId, myUserId, canModerate }: {
     if (v === null || !v.trim() || v.trim() === m.body) return;
     try {
       const res = await api<{ message: ChatMessage }>(`/groups/${groupId}/messages/${m.id}`, {
-        method: 'PATCH', body: { body: v.trim() }
+        method: 'PATCH',
+        body: { body: v.trim() },
       });
-      setMessages((prev) => (prev ?? []).map((x) => x.id === res.message.id ? res.message : x));
-    } catch (e: any) { pushToast('error', e.message); }
+      setMessages((prev) => (prev ?? []).map((x) => (x.id === res.message.id ? res.message : x)));
+    } catch (e: any) {
+      pushToast('error', e.message);
+    }
   }
 
   async function deleteMsg(m: ChatMessage) {
     try {
       await api(`/groups/${groupId}/messages/${m.id}`, { method: 'DELETE' });
-      setMessages((prev) => (prev ?? []).map((x) => x.id === m.id ? { ...x, body: '', deleted_at: Date.now() } : x));
-    } catch (e: any) { pushToast('error', e.message); }
+      setMessages((prev) => (prev ?? []).map((x) => (x.id === m.id ? { ...x, body: '', deleted_at: Date.now() } : x)));
+    } catch (e: any) {
+      pushToast('error', e.message);
+    }
   }
 
   if (messages === null) return <div className="muted chat-loading">Loading chat…</div>;
 
   return (
     <>
-      <div className="chat-msgs" ref={listRef}
-        onScroll={() => { const el = listRef.current; if (el && el.scrollTop < 40) void loadOlder(); }}>
+      <div
+        className="chat-msgs"
+        ref={listRef}
+        onScroll={() => {
+          const el = listRef.current;
+          if (el && el.scrollTop < 40) void loadOlder();
+        }}
+      >
         {hasMore && (
           <div style={{ textAlign: 'center', padding: '2px 0 6px' }}>
             <button className="btn small" disabled={loadingOlder} onClick={() => void loadOlder()}>
@@ -288,40 +371,67 @@ function ChatBody({ groupId, myUserId, canModerate }: {
             </button>
           </div>
         )}
-        {messages.length === 0 && <div className="muted" style={{ padding: 8 }}>No messages yet — say hi.</div>}
+        {messages.length === 0 && (
+          <div className="muted" style={{ padding: 8 }}>
+            No messages yet — say hi.
+          </div>
+        )}
         {messages.map((m) => {
           const mine = m.sender.id === myUserId;
           const deleted = m.deleted_at !== null;
           return (
             <div key={m.id} className="chat-msg">
               <span className="grow">
-                <b>{mine ? 'You' : (m.sender.name || '@' + m.sender.username)}</b>{' '}
-                {deleted
-                  ? <span className="muted done-text">message removed</span>
-                  : <span className="msg-body" style={m.updated_at > m.created_at ? { fontStyle: 'italic' } : undefined}>{m.body}</span>}
+                <b>{mine ? 'You' : m.sender.name || '@' + m.sender.username}</b>{' '}
+                {deleted ? (
+                  <span className="muted done-text">message removed</span>
+                ) : (
+                  <span className="msg-body" style={m.updated_at > m.created_at ? { fontStyle: 'italic' } : undefined}>
+                    {m.body}
+                  </span>
+                )}
                 <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
                   {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   {!deleted && m.updated_at > m.created_at ? ' (edited)' : ''}
                 </span>
               </span>
               {!deleted && mine && (
-                <button className="icon-btn" aria-label="Edit message" title="Edit"
-                  onClick={() => void editMsg(m)}>✎</button>
+                <button className="icon-btn" aria-label="Edit message" title="Edit" onClick={() => void editMsg(m)}>
+                  ✎
+                </button>
               )}
               {!deleted && (mine || canModerate) && (
-                <button className="icon-btn" aria-label="Delete message" title={mine ? 'Delete' : 'Delete (moderator)'}
-                  onClick={() => void deleteMsg(m)}>✕</button>
+                <button
+                  className="icon-btn"
+                  aria-label="Delete message"
+                  title={mine ? 'Delete' : 'Delete (moderator)'}
+                  onClick={() => void deleteMsg(m)}
+                >
+                  ✕
+                </button>
               )}
             </div>
           );
         })}
       </div>
       <div className="chat-compose">
-        <input className="input" value={draft} placeholder="Message the group…"
-          aria-label="Chat message" maxLength={2000}
+        <input
+          className="input"
+          value={draft}
+          placeholder="Message the group…"
+          aria-label="Chat message"
+          maxLength={2000}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
-        <button className="btn small primary" disabled={busy || !draft.trim()} onClick={() => void send()}>Send</button>
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <button className="btn small primary" disabled={busy || !draft.trim()} onClick={() => void send()}>
+          Send
+        </button>
       </div>
     </>
   );

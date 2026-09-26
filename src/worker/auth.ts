@@ -11,7 +11,10 @@ export type { Env };
 // and admin user creation.
 import passwordList from './10k-most-common.txt';
 const COMMON = new Set(
-  passwordList.split('\n').map((l) => l.trim().toLowerCase()).filter((l) => l.length > 0)
+  passwordList
+    .split('\n')
+    .map((l) => l.trim().toLowerCase())
+    .filter((l) => l.length > 0),
 );
 export const isCommonPassword = (pw: string) => COMMON.has(pw);
 
@@ -55,12 +58,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 function pbkdf2(password: BufferSource, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
-  return crypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits'])
-    .then((key) => crypto.subtle.deriveBits(
-      { name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations },
-      key,
-      256
-    ));
+  return crypto.subtle
+    .importKey('raw', password, 'PBKDF2', false, ['deriveBits'])
+    .then((key) =>
+      crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations }, key, 256),
+    );
 }
 
 // The Workers runtime rejects a single PBKDF2 deriveBits call above 100,000
@@ -104,14 +106,14 @@ export function getEmailSender(env: Env): EmailSender {
         const res = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ from: env.FROM_EMAIL, to, subject, text })
+          body: JSON.stringify({ from: env.FROM_EMAIL, to, subject, text }),
         });
         if (!res.ok) {
           // Never log email bodies (NFR-3); status only.
           console.error(`email send failed status=${res.status}`);
           throw new Error('email_send_failed');
         }
-      }
+      },
     };
   }
   // Dev fallback: log to console only (never a real delivery). The body contains
@@ -121,6 +123,6 @@ export function getEmailSender(env: Env): EmailSender {
     async send(to, subject, text) {
       const dev = env.EMAIL_DEV_MODE === '1';
       console.log(`[dev-email] to=${to} subject=${subject}${dev ? ` body=${text}` : ' (body redacted)'}`);
-    }
+    },
   };
 }

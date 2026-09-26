@@ -10,9 +10,14 @@ function formatter(tz: string): Intl.DateTimeFormat {
   let f = partsCache.get(tz);
   if (!f) {
     f = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hourCycle: 'h23',
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
     });
     partsCache.set(tz, f);
   }
@@ -36,8 +41,12 @@ export function zoneOffsetMs(instant: number, tz: string): number {
   const m: Record<string, string> = {};
   for (const p of parts) if (p.type !== 'literal') m[p.type] = p.value;
   const asUTC = Date.UTC(
-    Number(m.year), Number(m.month) - 1, Number(m.day),
-    Number(m.hour) % 24, Number(m.minute), Number(m.second)
+    Number(m.year),
+    Number(m.month) - 1,
+    Number(m.day),
+    Number(m.hour) % 24,
+    Number(m.minute),
+    Number(m.second),
   );
   return asUTC - instant;
 }
@@ -108,7 +117,11 @@ export function civilRange(fromCivil: string, toCivil: string): string[] {
 }
 
 /** [start, end) UTC instant bounds for each civil day in the range (per-day buckets). */
-export function dayBounds(fromCivil: string, toCivil: string, tz: string): { day: string; start: number; end: number }[] {
+export function dayBounds(
+  fromCivil: string,
+  toCivil: string,
+  tz: string,
+): { day: string; start: number; end: number }[] {
   const days = civilRange(fromCivil, toCivil);
   return days.map((day) => {
     const start = dayStartInstant(day, tz);
@@ -126,7 +139,12 @@ export function overlapMs(start: number, end: number, bStart: number, bEnd: numb
   return e > s ? e - s : 0;
 }
 
-export interface DayBucket { day: string; start: number; end: number; ms: number }
+export interface DayBucket {
+  day: string;
+  start: number;
+  end: number;
+  ms: number;
+}
 
 /**
  * Pure reference implementation of the day-bucketing contract (FR-R1 / NFR-6).
@@ -135,7 +153,10 @@ export interface DayBucket { day: string; start: number; end: number; ms: number
  */
 export function bucketByDay(
   sessions: { started_at: number; ended_at: number | null }[],
-  fromCivil: string, toCivil: string, tz: string, now: number
+  fromCivil: string,
+  toCivil: string,
+  tz: string,
+  now: number,
 ): DayBucket[] {
   const bounds = dayBounds(fromCivil, toCivil, tz);
   return bounds.map((b) => {
@@ -163,6 +184,8 @@ export function minutes(ms: number): number {
 
 export function fmtHMS(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const h = Math.floor(total / 3600),
+    m = Math.floor((total % 3600) / 60),
+    s = total % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }

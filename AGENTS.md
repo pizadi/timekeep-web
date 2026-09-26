@@ -162,7 +162,7 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   `SELECT COUNT(*)`** (audit 🟡2). D1 serializes writes per database, so a guarded statement
   (`INSERT … SELECT … WHERE (SELECT COUNT(*) …) < ?` plus a `meta.changes` check) cannot be
   raced, while count-then-insert can overshoot the cap. Applies to group creation, join-by-link
-  (member cap *and* the link's `use_count < max_uses`), invite accept, invite-link minting,
+  (member cap _and_ the link's `use_count < max_uses`), invite accept, invite-link minting,
   friend requests, and friend-request accept (both friendship rows in ONE guarded statement so
   the pair is all-or-nothing). Keep the same 422 `limit` error when `changes` comes back short.
 - End-of-run pomodoro notifications (`decide`/`ready` phases) bypass the `notifications_enabled`

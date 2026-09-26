@@ -4,7 +4,12 @@
 import type { Env } from './env';
 
 export class RuleError extends Error {
-  constructor(public status: number, public code: string, message: string, public details?: unknown) {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public details?: unknown,
+  ) {
     super(message);
   }
 }
@@ -24,16 +29,25 @@ export function isUniqueConstraintError(e: unknown): boolean {
 // ---------- hierarchy (FR-T3, FR-T1) ----------
 
 export interface TaskRow {
-  id: string; user_id: string; project_id: string; parent_id: string | null;
-  name: string; notes: string; done: number; position: number;
-  created_at: number; updated_at: number;
+  id: string;
+  user_id: string;
+  project_id: string;
+  parent_id: string | null;
+  name: string;
+  notes: string;
+  done: number;
+  position: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export async function getTaskOwned(env: Env, userId: string, taskId: string): Promise<TaskRow> {
   const t = await env.DB.prepare(
     `SELECT id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at
-     FROM tasks WHERE id = ?1 AND user_id = ?2`
-  ).bind(taskId, userId).first<TaskRow>();
+     FROM tasks WHERE id = ?1 AND user_id = ?2`,
+  )
+    .bind(taskId, userId)
+    .first<TaskRow>();
   if (!t) throw new RuleError(404, 'not_found', 'task not found');
   return t;
 }
@@ -51,17 +65,22 @@ export async function requireRootTaskForSubtask(env: Env, userId: string, taskId
  *  Id-only on purpose: group-project subtasks carry their creator's user_id,
  *  and the caller's project-access check authorizes the actual operation. */
 export async function assertNotSubtask(env: Env, id: string): Promise<void> {
-  const sub = await env.DB.prepare('SELECT 1 FROM subtasks WHERE id = ?1')
-    .bind(id).first();
+  const sub = await env.DB.prepare('SELECT 1 FROM subtasks WHERE id = ?1').bind(id).first();
   if (sub) throw new RuleError(422, 'two_level_hierarchy', "a subtask can't have subtasks");
 }
 
 // ---------- dependencies (FR-M4/M5) ----------
 
-async function getTaskFull(env: Env, taskId: string, scopeUserId: string | null): Promise<{ id: string; project_id: string; parent_id: string | null; name: string }> {
+async function getTaskFull(
+  env: Env,
+  taskId: string,
+  scopeUserId: string | null,
+): Promise<{ id: string; project_id: string; parent_id: string | null; name: string }> {
   const t = await env.DB.prepare(
-    `SELECT id, project_id, parent_id, name FROM tasks WHERE id = ?1 ${scopeUserId ? 'AND user_id = ?2' : ''}`
-  ).bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId])).first<{ id: string; project_id: string; parent_id: string | null; name: string }>();
+    `SELECT id, project_id, parent_id, name FROM tasks WHERE id = ?1 ${scopeUserId ? 'AND user_id = ?2' : ''}`,
+  )
+    .bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId]))
+    .first<{ id: string; project_id: string; parent_id: string | null; name: string }>();
   if (!t) throw new RuleError(404, 'not_found', 'task not found');
   return t;
 }
@@ -77,7 +96,11 @@ async function getTaskFull(env: Env, taskId: string, scopeUserId: string | null)
  * member, so cycle detection must see the whole project's graph.
  */
 export async function createDependency(
-  env: Env, userId: string, taskId: string, dependsOnId: string, scopeUserId: string | null = userId
+  env: Env,
+  userId: string,
+  taskId: string,
+  dependsOnId: string,
+  scopeUserId: string | null = userId,
 ) {
   if (taskId === dependsOnId) throw new RuleError(422, 'self_dependency', "a task can't depend on itself");
   const [a, b] = await Promise.all([getTaskFull(env, taskId, scopeUserId), getTaskFull(env, dependsOnId, scopeUserId)]);
@@ -86,9 +109,9 @@ export async function createDependency(
   if (a.project_id !== b.project_id)
     throw new RuleError(422, 'cross_project_edge', 'dependencies may only connect tasks of the same project');
 
-  const dup = await env.DB.prepare(
-    `SELECT 1 FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2`
-  ).bind(taskId, dependsOnId).first();
+  const dup = await env.DB.prepare(`SELECT 1 FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2`)
+    .bind(taskId, dependsOnId)
+    .first();
   if (dup) throw new RuleError(422, 'duplicate_edge', 'this dependency already exists');
 
   // Reachability: edge "taskId depends on dependsOnId" is illegal when taskId is
@@ -101,21 +124,30 @@ export async function createDependency(
        JOIN REACH r ON td.task_id = r.id
        ${scopeUserId ? 'WHERE td.user_id = ?2' : ''}
      )
-     SELECT id FROM REACH WHERE id = ?3`
-  ).bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId]), taskId).first();
+     SELECT id FROM REACH WHERE id = ?3`,
+  )
+    .bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId]), taskId)
+    .first();
   if (reach) {
     const path = await cyclePathNames(env, taskId, dependsOnId, scopeUserId);
     throw new RuleError(422, 'cycle', `this would create a circular dependency: ${path.join(' → ')}`, { path });
   }
 
   await env.DB.prepare(
-    `INSERT INTO task_dependencies (task_id, depends_on_id, user_id, created_at) VALUES (?1, ?2, ?3, ?4)`
-  ).bind(taskId, dependsOnId, userId, Date.now()).run();
+    `INSERT INTO task_dependencies (task_id, depends_on_id, user_id, created_at) VALUES (?1, ?2, ?3, ?4)`,
+  )
+    .bind(taskId, dependsOnId, userId, Date.now())
+    .run();
   return { task_id: taskId, depends_on_id: dependsOnId };
 }
 
 /** Reconstruct the would-be cycle path with task names for the toast (FR-M4 AC). */
-async function cyclePathNames(env: Env, taskId: string, dependsOnId: string, scopeUserId: string | null): Promise<string[]> {
+async function cyclePathNames(
+  env: Env,
+  taskId: string,
+  dependsOnId: string,
+  scopeUserId: string | null,
+): Promise<string[]> {
   // chain from target following depends_on edges: [target, …, source]
   const rows = await env.DB.prepare(
     `WITH REACH(id, depth) AS (
@@ -125,8 +157,10 @@ async function cyclePathNames(env: Env, taskId: string, dependsOnId: string, sco
        JOIN REACH r ON td.task_id = r.id
        WHERE ${scopeUserId ? 'td.user_id = ?2 AND' : ''} r.depth < 50
      )
-     SELECT id FROM REACH ORDER BY depth`
-  ).bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId])).all<{ id: string }>();
+     SELECT id FROM REACH ORDER BY depth`,
+  )
+    .bind(...(scopeUserId ? [dependsOnId, scopeUserId] : [dependsOnId]))
+    .all<{ id: string }>();
   const ids = rows.results.map((r) => r.id);
   // full loop display: source → target → … → source
   // (ids already ends at the source — drop it before closing the loop)
@@ -142,15 +176,21 @@ async function cyclePathNames(env: Env, taskId: string, dependsOnId: string, sco
 /** Re-parenting a task must not strand cross-project dependencies (FR-T1).
  *  scopeUserId = null widens to the whole project's edges (group projects). */
 export async function assertReparentSafe(
-  env: Env, userId: string, taskId: string, targetProjectId: string, scopeUserId: string | null = userId
+  env: Env,
+  userId: string,
+  taskId: string,
+  targetProjectId: string,
+  scopeUserId: string | null = userId,
 ) {
   const bad = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM task_dependencies td
      JOIN tasks other ON other.id = CASE WHEN td.task_id = ?1 THEN td.depends_on_id ELSE td.task_id END
      WHERE (td.task_id = ?1 OR td.depends_on_id = ?1)
        ${scopeUserId ? 'AND td.user_id = ?2' : ''}
-       AND other.project_id <> ?3`
-  ).bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId]), targetProjectId).first<{ n: number }>();
+       AND other.project_id <> ?3`,
+  )
+    .bind(...(scopeUserId ? [taskId, scopeUserId] : [taskId]), targetProjectId)
+    .first<{ n: number }>();
   if (Number(bad?.n ?? 0) > 0) {
     throw new RuleError(422, 'cross_project_dep', 'cannot move this task: it has dependencies in another project');
   }
@@ -159,7 +199,9 @@ export async function assertReparentSafe(
 // ---------- limits (NFR-2) ----------
 
 async function countOne(env: Env, sql: string, ...binds: unknown[]): Promise<number> {
-  const r = await env.DB.prepare(sql).bind(...binds).first<{ n: number }>();
+  const r = await env.DB.prepare(sql)
+    .bind(...binds)
+    .first<{ n: number }>();
   return Number(r?.n ?? 0);
 }
 
@@ -174,7 +216,12 @@ export async function assertTaskLimit(env: Env, userId: string) {
 }
 
 export async function assertSubtaskLimit(env: Env, userId: string, taskId: string) {
-  const n = await countOne(env, 'SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ?1 AND user_id = ?2', taskId, userId);
+  const n = await countOne(
+    env,
+    'SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ?1 AND user_id = ?2',
+    taskId,
+    userId,
+  );
   if (n >= 100) throw new RuleError(422, 'limit', 'limit reached: at most 100 subtasks per task');
 }
 
@@ -182,8 +229,13 @@ export async function assertSubtaskLimit(env: Env, userId: string, taskId: strin
 
 /** Same-task overlap query; a running session occupies until `now`. Returns conflicting rows. */
 export async function findSameTaskOverlaps(
-  env: Env, userId: string, taskId: string,
-  start: number, end: number, now: number, excludeId?: string
+  env: Env,
+  userId: string,
+  taskId: string,
+  start: number,
+  end: number,
+  now: number,
+  excludeId?: string,
 ) {
   const sql = `
     SELECT id, started_at, ended_at FROM time_sessions
@@ -203,8 +255,8 @@ export function conflictError(rows: { id: string; started_at: number; ended_at: 
 
 /** The running session may not be edited/deleted — stop or switch first (FR-S6). */
 export async function assertNotRunning(env: Env, userId: string, sessionId: string) {
-  const r = await env.DB.prepare(
-    'SELECT 1 FROM time_sessions WHERE id = ?1 AND user_id = ?2 AND ended_at IS NULL'
-  ).bind(sessionId, userId).first();
+  const r = await env.DB.prepare('SELECT 1 FROM time_sessions WHERE id = ?1 AND user_id = ?2 AND ended_at IS NULL')
+    .bind(sessionId, userId)
+    .first();
   if (r) throw new RuleError(409, 'running_session', 'the running session cannot be edited — stop or switch first');
 }

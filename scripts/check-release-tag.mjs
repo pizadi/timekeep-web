@@ -12,19 +12,19 @@ const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 const tag = process.env.GITHUB_REF_NAME ?? '';
 
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
-	console.error(
-		`check-release-tag: package.json version is "${version}" — releases deploy from` +
-			` clean x.y.z versions only (dev iterations like "${version}.dev1" must never be tagged).`
-	);
-	process.exit(1);
+  console.error(
+    `check-release-tag: package.json version is "${version}" — releases deploy from` +
+      ` clean x.y.z versions only (dev iterations like "${version}.dev1" must never be tagged).`,
+  );
+  process.exit(1);
 }
 
 if (tag && tag !== `v${version}`) {
-	console.error(
-		`check-release-tag: tag "${tag}" does not match package.json version "${version}"` +
-			` (expected "v${version}"). Tag the release commit that bumps the version.`
-	);
-	process.exit(1);
+  console.error(
+    `check-release-tag: tag "${tag}" does not match package.json version "${version}"` +
+      ` (expected "v${version}"). Tag the release commit that bumps the version.`,
+  );
+  process.exit(1);
 }
 
 console.log(`check-release-tag: ${tag || '(no tag)'} matches package.json (${version})`);

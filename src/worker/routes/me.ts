@@ -15,10 +15,17 @@ meRoutes.use('/me', requireAuth, limitWrites);
 meRoutes.use('/me/*', requireAuth, limitWrites);
 
 const publicUser = (u: any): UserInfo => ({
-  id: u.id, username: u.username, email: u.email, name: u.name, timezone: u.timezone,
-  week_start: u.week_start, theme: u.theme,
-  role: u.role, must_change_password: !!u.must_change_password,
-  email_verified_at: u.email_verified_at, created_at: u.created_at
+  id: u.id,
+  username: u.username,
+  email: u.email,
+  name: u.name,
+  timezone: u.timezone,
+  week_start: u.week_start,
+  theme: u.theme,
+  role: u.role,
+  must_change_password: !!u.must_change_password,
+  email_verified_at: u.email_verified_at,
+  created_at: u.created_at,
 });
 
 meRoutes.get('/me', (c) => c.json({ user: publicUser(c.get('user')) }));
@@ -32,21 +39,33 @@ meRoutes.patch('/me', async (c) => {
 
   const sets: string[] = [];
   const binds: unknown[] = [];
-  if (u.name !== undefined) { sets.push('name = ?'); binds.push(u.name); }
-  if (u.timezone !== undefined) { sets.push('timezone = ?'); binds.push(u.timezone); }
+  if (u.name !== undefined) {
+    sets.push('name = ?');
+    binds.push(u.name);
+  }
+  if (u.timezone !== undefined) {
+    sets.push('timezone = ?');
+    binds.push(u.timezone);
+  }
   if (u.week_start !== undefined) {
     // effective week start (0=Sun…6=Sat) lives in week_start_dow; the legacy
     // 0|1 column is kept in sync when possible for export compatibility
-    sets.push('week_start_dow = ?'); binds.push(u.week_start);
+    sets.push('week_start_dow = ?');
+    binds.push(u.week_start);
     sets.push('week_start = CASE WHEN ? IN (0, 1) THEN ? ELSE week_start END');
     binds.push(u.week_start, u.week_start);
   }
-  if (u.theme !== undefined) { sets.push('theme = ?'); binds.push(u.theme); }
+  if (u.theme !== undefined) {
+    sets.push('theme = ?');
+    binds.push(u.theme);
+  }
   if (sets.length === 0) return c.json({ user: publicUser(c.get('user')) });
 
   sets.push('updated_at = ?');
   binds.push(Date.now(), c.get('user').id);
-  await c.env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  await c.env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...binds)
+    .run();
 
   // timezone/theme changes sync to other devices (FR-A7 AC, FR-U1)
   const drafts: EventDraft[] = [{ type: 'settings.updated', actor: c.get('deviceId'), data: { profile: u } }];
@@ -56,8 +75,10 @@ meRoutes.patch('/me', async (c) => {
   const fresh = await c.env.DB.prepare(
     `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
             theme, role, must_change_password, email_verified_at, created_at
-     FROM users WHERE id = ?1`
-  ).bind(c.get('user').id).first();
+     FROM users WHERE id = ?1`,
+  )
+    .bind(c.get('user').id)
+    .first();
   return c.json({ user: publicUser(fresh) });
 });
 
@@ -68,7 +89,8 @@ meRoutes.post('/me/password', async (c) => {
 
   const user = c.get('user');
   const row = await c.env.DB.prepare('SELECT password_hash FROM users WHERE id = ?1')
-    .bind(user.id).first<{ password_hash: string | null }>();
+    .bind(user.id)
+    .first<{ password_hash: string | null }>();
   if (!row?.password_hash || !(await verifyPassword(parsed.data.current_password, row.password_hash)))
     return jsonError(403, 'bad_password', 'current password is incorrect');
 
@@ -78,22 +100,21 @@ meRoutes.post('/me/password', async (c) => {
   // keep the current session, revoke every other one
   await c.env.DB.batch([
     c.env.DB.prepare(
-      'UPDATE users SET password_hash = ?1, must_change_password = 0, updated_at = ?2 WHERE id = ?3'
+      'UPDATE users SET password_hash = ?1, must_change_password = 0, updated_at = ?2 WHERE id = ?3',
     ).bind(await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS)), Date.now(), user.id),
-    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2')
-      .bind(user.id, c.get('authSessionId'))
+    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2').bind(user.id, c.get('authSessionId')),
   ]);
   // audit S1: the D1 deletes alone leave revoked devices' WebSockets live —
   // close them, sparing the acting device's own session/socket
   revokeHub(c.env, user.id, { keep: c.get('authSessionId') });
-  return c.json({ ok: true });});
+  return c.json({ ok: true });
+});
 
 /** Hard delete: FK cascades remove every user-owned row (FR-A8, NFR-4). */
 meRoutes.delete('/me', async (c) => {
   // the admin account must not be deletable — with no self-signup, deleting it
   // would leave the installation permanently locked out
-  if (c.get('user').role === 'admin')
-    return jsonError(403, 'forbidden', 'the admin account cannot be deleted');
+  if (c.get('user').role === 'admin') return jsonError(403, 'forbidden', 'the admin account cannot be deleted');
   const userId = c.get('user').id;
   const now = new Date().toISOString();
   // deletion request log (route + user id only — NFR-3 log hygiene)
@@ -111,7 +132,7 @@ meRoutes.delete('/me', async (c) => {
     c.env.DB.prepare('DELETE FROM email_tokens WHERE user_id = ?1').bind(userId),
     c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(userId),
     c.env.DB.prepare('DELETE FROM oauth_accounts WHERE user_id = ?1').bind(userId),
-    c.env.DB.prepare('DELETE FROM users WHERE id = ?1').bind(userId)
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?1').bind(userId),
   ]);
   clearSessionCookie(c);
   revokeHub(c.env, userId);
@@ -121,18 +142,19 @@ meRoutes.delete('/me', async (c) => {
 meRoutes.get('/me/sessions', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT id, user_agent, ip, created_at, last_seen_at, expires_at
-     FROM auth_sessions WHERE user_id = ?1 ORDER BY last_seen_at DESC`
-  ).bind(c.get('user').id).all<any>();
+     FROM auth_sessions WHERE user_id = ?1 ORDER BY last_seen_at DESC`,
+  )
+    .bind(c.get('user').id)
+    .all<any>();
   const currentId = c.get('authSessionId');
   return c.json({
-    sessions: rows.results.map((s) => ({ ...s, current: s.id === currentId }))
+    sessions: rows.results.map((s) => ({ ...s, current: s.id === currentId })),
   });
 });
 
 meRoutes.delete('/me/sessions/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1 AND user_id = ?2')
-    .bind(id, c.get('user').id).run();
+  await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1 AND user_id = ?2').bind(id, c.get('user').id).run();
   // audit S1: if this was a live device, its socket must die too (selective —
   // deleting the current session's own row kills only this session's sockets)
   revokeHub(c.env, c.get('user').id, { only: id });
@@ -141,7 +163,8 @@ meRoutes.delete('/me/sessions/:id', async (c) => {
 
 meRoutes.post('/me/sessions/revoke-others', async (c) => {
   await c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1 AND id <> ?2')
-    .bind(c.get('user').id, c.get('authSessionId')).run();
+    .bind(c.get('user').id, c.get('authSessionId'))
+    .run();
   revokeHub(c.env, c.get('user').id, { keep: c.get('authSessionId') });
   return c.json({ ok: true });
 });

@@ -12,13 +12,16 @@ export default function ResetPasswordView() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setError('');
+    setBusy(true);
+    setError('');
     try {
       await api('/auth/reset-confirm', { method: 'POST', body: { token, password } });
       setDone(true);
     } catch (err: any) {
       setError(err instanceof ApiError ? err.message : 'Reset failed');
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -28,21 +31,39 @@ export default function ResetPasswordView() {
         {done ? (
           <>
             <p className="sub">Password updated — all previous sessions were signed out.</p>
-            <button className="btn primary" style={{ width: '100%' }} onClick={() => go('/login')}>Sign in</button>
+            <button className="btn primary" style={{ width: '100%' }} onClick={() => go('/login')}>
+              Sign in
+            </button>
           </>
         ) : !token ? (
           <>
             <p className="sub">This reset link is incomplete.</p>
-            <button className="btn" style={{ width: '100%' }} onClick={() => go('/login')}>Back to sign in</button>
+            <button className="btn" style={{ width: '100%' }} onClick={() => go('/login')}>
+              Back to sign in
+            </button>
           </>
         ) : (
           <form onSubmit={submit}>
             <p className="sub">Choose a new password.</p>
-            <label className="field"><span>New password</span>
-              <input className="input" type="password" required minLength={10} maxLength={200}
-                value={password} autoFocus autoComplete="new-password"
-                onChange={(e) => setPassword(e.target.value)} /></label>
-            {error && <div className="error-text" role="alert">{error}</div>}
+            <label className="field">
+              <span>New password</span>
+              <input
+                className="input"
+                type="password"
+                required
+                minLength={10}
+                maxLength={200}
+                value={password}
+                autoFocus
+                autoComplete="new-password"
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            {error && (
+              <div className="error-text" role="alert">
+                {error}
+              </div>
+            )}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>
               {busy ? 'Saving…' : 'Set password'}
             </button>

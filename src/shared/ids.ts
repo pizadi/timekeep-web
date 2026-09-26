@@ -30,7 +30,10 @@ export function ulid(now: number = Date.now()): string {
     // symbol first), with carry — symbols saturate at 31, never exceed the alphabet
     rand = lastRand.slice();
     for (let i = rand.length - 1; i >= 0; i--) {
-      if (rand[i]! < 31) { rand[i] = rand[i]! + 1; break; }
+      if (rand[i]! < 31) {
+        rand[i] = rand[i]! + 1;
+        break;
+      }
       rand[i] = 0;
     }
   } else {

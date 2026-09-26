@@ -7,17 +7,68 @@ import { api, getDeviceId, wsUrl, ApiError } from './api';
 import { mergeRecent, recentFromBootstrap, type RecentEntry } from './recent';
 import { deviceTimezone } from './time';
 
-export interface Project { id: string; user_id?: string; name: string; color: string; archived: 0 | 1; position: number; visibility?: 'private' | 'friends'; group_id?: string | null; created_at: number; updated_at: number }
-export interface Task { id: string; project_id: string; parent_id: string | null; name: string; notes: string; done: 0 | 1; position: number; created_at: number; updated_at: number }
-export interface Subtask { id: string; task_id: string; name: string; done: 0 | 1; position: number; created_at: number }
-export interface Dependency { task_id: string; depends_on_id: string; created_at: number }
-export interface SessionRow { id: string; task_id: string; subtask_id?: string | null; started_at: number; ended_at: number | null; source: 'timer' | 'manual' | 'pomodoro'; note: string; created_at: number; updated_at: number }
-export interface RunningSession { id: string; task_id: string; subtask_id?: string | null; started_at: number; source: string; ended_at?: null }
+export interface Project {
+  id: string;
+  user_id?: string;
+  name: string;
+  color: string;
+  archived: 0 | 1;
+  position: number;
+  visibility?: 'private' | 'friends';
+  group_id?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+export interface Task {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  name: string;
+  notes: string;
+  done: 0 | 1;
+  position: number;
+  created_at: number;
+  updated_at: number;
+}
+export interface Subtask {
+  id: string;
+  task_id: string;
+  name: string;
+  done: 0 | 1;
+  position: number;
+  created_at: number;
+}
+export interface Dependency {
+  task_id: string;
+  depends_on_id: string;
+  created_at: number;
+}
+export interface SessionRow {
+  id: string;
+  task_id: string;
+  subtask_id?: string | null;
+  started_at: number;
+  ended_at: number | null;
+  source: 'timer' | 'manual' | 'pomodoro';
+  note: string;
+  created_at: number;
+  updated_at: number;
+}
+export interface RunningSession {
+  id: string;
+  task_id: string;
+  subtask_id?: string | null;
+  started_at: number;
+  source: string;
+  ended_at?: null;
+}
 export interface PomoState {
   phase: 'idle' | 'focus' | 'decide' | 'break' | 'ready';
   taskId: string | null;
-  focus_ms_live: number; focus_goal_ms: number;
-  break_ms_left: number | null; break_ms_total: number;
+  focus_ms_live: number;
+  focus_goal_ms: number;
+  break_ms_left: number | null;
+  break_ms_total: number;
   server_now?: number;
 }
 
@@ -29,30 +80,61 @@ export interface Settings {
   theme: 'system' | 'light' | 'dark';
 }
 export interface UserProfile {
-  id: string; username: string; email: string; name: string; timezone: string;
-  week_start: number; theme: 'system' | 'light' | 'dark'; // 0–6 since migration 0003
+  id: string;
+  username: string;
+  email: string;
+  name: string;
+  timezone: string;
+  week_start: number;
+  theme: 'system' | 'light' | 'dark'; // 0–6 since migration 0003
   role: 'user' | 'admin';
   must_change_password: boolean;
-  email_verified_at: number | null; created_at: number;
+  email_verified_at: number | null;
+  created_at: number;
 }
 
 // ---------- social (phase 1: friends + visibility) ----------
-export interface FriendSummary { id: string; username: string; name: string; since?: number }
-export interface FriendRequestRow { request_id: string; created_at: number; user_id: string; username: string; name: string }
+export interface FriendSummary {
+  id: string;
+  username: string;
+  name: string;
+  since?: number;
+}
+export interface FriendRequestRow {
+  request_id: string;
+  created_at: number;
+  user_id: string;
+  username: string;
+  name: string;
+}
 /** A friend's live tracking state — only for friends-visible projects. */
-export interface FriendPresence { project_id: string; task_id: string; task_name: string; started_at: number }
+export interface FriendPresence {
+  project_id: string;
+  task_id: string;
+  task_name: string;
+  started_at: number;
+}
 
 // ---------- social (phase 2: groups) ----------
 export interface GroupSummary {
-  id: string; name: string; color: string; owner_id: string;
+  id: string;
+  name: string;
+  color: string;
+  owner_id: string;
   role: 'owner' | 'admin' | 'member';
-  perms: string;               // raw JSON array of GROUP_PERMS keys (parse client-side)
-  created_at: number; member_count: number;
-  unread: number;              // chat messages since last_read_at (others' only)
+  perms: string; // raw JSON array of GROUP_PERMS keys (parse client-side)
+  created_at: number;
+  member_count: number;
+  unread: number; // chat messages since last_read_at (others' only)
 }
 export interface GroupInviteRow {
-  invite_id: string; created_at: number; group_id: string;
-  name: string; color: string; inviter_username: string; inviter_name: string;
+  invite_id: string;
+  created_at: number;
+  group_id: string;
+  name: string;
+  color: string;
+  inviter_username: string;
+  inviter_name: string;
 }
 
 export interface Toast {
@@ -79,7 +161,7 @@ export interface AppState {
   selectedTaskId: string | null;
   view: 'tree' | 'log' | 'map' | 'dashboard' | 'social';
   recentEntries: RecentEntry[]; // "Jump back in" / Resume — newest-first, one per task, with its last subtask
-  reportsVersion: number;      // bumped on relevant events → charts refetch (FR-R5)
+  reportsVersion: number; // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
   lastEventId: number;
   serverNow: number;
@@ -117,7 +199,7 @@ let state: AppState = {
   outgoing: [],
   friendPresence: {},
   groups: [],
-  groupInvites: []
+  groupInvites: [],
 };
 
 const listeners = new Set<() => void>();
@@ -130,13 +212,19 @@ export let bootRetry: number | null = null;
 
 export const store = {
   get: () => state,
-  subscribe(l: () => void) { listeners.add(l); return () => listeners.delete(l); },
+  subscribe(l: () => void) {
+    listeners.add(l);
+    return () => listeners.delete(l);
+  },
 
   // ---------- bootstrap ----------
   async boot(): Promise<void> {
     try {
       const b = await api<any>('/bootstrap');
-      if (bootRetry !== null) { window.clearTimeout(bootRetry); bootRetry = null; }
+      if (bootRetry !== null) {
+        window.clearTimeout(bootRetry);
+        bootRetry = null;
+      }
       state = {
         ...state,
         booted: true,
@@ -157,7 +245,7 @@ export const store = {
         outgoing: b.outgoing_requests ?? [],
         groups: b.groups ?? [],
         groupInvites: b.group_invites ?? [],
-        selectedProjectId: b.projects.find((p: Project) => !p.archived)?.id ?? null
+        selectedProjectId: b.projects.find((p: Project) => !p.archived)?.id ?? null,
       };
       set({});
       startWsAndSync();
@@ -183,31 +271,69 @@ export const store = {
         // tracked retry: a login during the retry window must not leave two
         // boot loops racing (audit)
         if (bootRetry === null) {
-          bootRetry = window.setTimeout(() => { bootRetry = null; void store.boot(); }, 3000);
+          bootRetry = window.setTimeout(() => {
+            bootRetry = null;
+            void store.boot();
+          }, 3000);
         }
       }
     }
   },
 
-  setAuthed(v: boolean) { set({ authed: v }); if (v) void store.boot(); },
+  setAuthed(v: boolean) {
+    set({ authed: v });
+    if (v) void store.boot();
+  },
   /** Session ended (logout, revoke, expiry) → back to the login screen. */
   signOut() {
-    try { localStorage.removeItem('tk.device'); } catch { /* storage may be blocked */ }
-    state = { ...state, authed: false, user: null, settings: null, projects: [], tasks: [], subtasks: [], deps: [], running: null, pomo: null, recentEntries: [], selectedTaskId: null, friends: [], incoming: [], outgoing: [], friendPresence: {}, groups: [], groupInvites: [] };
+    try {
+      localStorage.removeItem('tk.device');
+    } catch {
+      /* storage may be blocked */
+    }
+    state = {
+      ...state,
+      authed: false,
+      user: null,
+      settings: null,
+      projects: [],
+      tasks: [],
+      subtasks: [],
+      deps: [],
+      running: null,
+      pomo: null,
+      recentEntries: [],
+      selectedTaskId: null,
+      friends: [],
+      incoming: [],
+      outgoing: [],
+      friendPresence: {},
+      groups: [],
+      groupInvites: [],
+    };
     set({});
   },
 
   // ---------- selection / view ----------
-  selectProject(id: string | null) { set({ selectedProjectId: id }); },
+  selectProject(id: string | null) {
+    set({ selectedProjectId: id });
+  },
   selectTask(id: string | null) {
     const t = state.tasks.find((x) => x.id === id);
     set({ selectedTaskId: id, selectedProjectId: t ? t.project_id : state.selectedProjectId });
   },
-  setView(view: AppState['view']) { set({ view }); },
+  setView(view: AppState['view']) {
+    set({ view });
+  },
   /** View switch with URL sync: routes are /, /log, /map, /dashboard. */
-  navigateToView(view: AppState['view']) { set({ view }); go(pathForView(view)); },
+  navigateToView(view: AppState['view']) {
+    set({ view });
+    go(pathForView(view));
+  },
 
-  setConnection(c: AppState['connection']) { set({ connection: c }); },
+  setConnection(c: AppState['connection']) {
+    set({ connection: c });
+  },
 
   /**
    * Timer start with switch-fallback — THE one implementation (audit: this was
@@ -237,7 +363,11 @@ export const store = {
 
   // ---------- event reconciliation (FR-N2/N3) ----------
   applyEvent(ev: WsEvent): void {
-    if (ev.actor === getDeviceId()) { state = { ...state, lastEventId: Math.max(state.lastEventId, ev.id) }; set({}); return; }
+    if (ev.actor === getDeviceId()) {
+      state = { ...state, lastEventId: Math.max(state.lastEventId, ev.id) };
+      set({});
+      return;
+    }
     const d = ev.data as any;
     const patch: Partial<AppState> = { lastEventId: Math.max(state.lastEventId, ev.id) };
     const upsert = <T extends { id: string }>(arr: T[], item: T): T[] => {
@@ -262,18 +392,30 @@ export const store = {
         patch.recentEntries = markRecent(d.session.task_id, d.session.subtask_id ?? null);
         patch.reportsVersion = state.reportsVersion + 1;
         break;
-      case 'timer.stopped': patch.running = null; patch.reportsVersion = state.reportsVersion + 1; break;
+      case 'timer.stopped':
+        patch.running = null;
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
       case 'timer.switched':
         patch.running = d.started;
         patch.recentEntries = markRecent(d.started.task_id, d.started.subtask_id ?? null);
         patch.reportsVersion = state.reportsVersion + 1;
         break;
-      case 'timer.nudge': pushToast('info', 'This timer has been running for more than 12 hours'); break;
+      case 'timer.nudge':
+        pushToast('info', 'This timer has been running for more than 12 hours');
+        break;
 
-      case 'session.created': case 'session.updated': patch.reportsVersion = state.reportsVersion + 1; break;
-      case 'session.deleted': patch.reportsVersion = state.reportsVersion + 1; break;
+      case 'session.created':
+      case 'session.updated':
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
+      case 'session.deleted':
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
 
-      case 'project.created': patch.projects = upsert(state.projects, d.project); break;
+      case 'project.created':
+        patch.projects = upsert(state.projects, d.project);
+        break;
       case 'project.updated':
         patch.projects = upsert(state.projects, d.project);
         patch.reportsVersion = state.reportsVersion + 1;
@@ -294,10 +436,18 @@ export const store = {
         break;
       }
 
-      case 'task.created': patch.tasks = upsert(state.tasks, d.task); break;
-      case 'task.updated': patch.tasks = upsert(state.tasks, d.task); patch.reportsVersion = state.reportsVersion + 1; break;
+      case 'task.created':
+        patch.tasks = upsert(state.tasks, d.task);
+        break;
+      case 'task.updated':
+        patch.tasks = upsert(state.tasks, d.task);
+        patch.reportsVersion = state.reportsVersion + 1;
+        break;
       case 'task.deleted': {
-        const ids = new Set<string>([d.task.id, ...(d.subtasks ?? []).map((s: Subtask) => s.task_id === d.task.id ? s.id : '')]);
+        const ids = new Set<string>([
+          d.task.id,
+          ...(d.subtasks ?? []).map((s: Subtask) => (s.task_id === d.task.id ? s.id : '')),
+        ]);
         patch.tasks = state.tasks.filter((t) => t.id !== d.task.id);
         patch.subtasks = state.subtasks.filter((s) => s.task_id !== d.task.id);
         patch.deps = state.deps.filter((dep) => dep.task_id !== d.task.id && dep.depends_on_id !== d.task.id);
@@ -309,20 +459,30 @@ export const store = {
         break;
       }
 
-      case 'subtask.created': case 'subtask.updated': case 'subtask.toggled':
+      case 'subtask.created':
+      case 'subtask.updated':
+      case 'subtask.toggled':
         patch.subtasks = upsert(state.subtasks, d.subtask);
         break;
-      case 'subtask.deleted': patch.subtasks = state.subtasks.filter((s) => s.id !== d.subtask.id); break;
+      case 'subtask.deleted':
+        patch.subtasks = state.subtasks.filter((s) => s.id !== d.subtask.id);
+        break;
 
       case 'dependency.created':
-        if (!state.deps.some((x) => x.task_id === d.dependency.task_id && x.depends_on_id === d.dependency.depends_on_id))
+        if (
+          !state.deps.some((x) => x.task_id === d.dependency.task_id && x.depends_on_id === d.dependency.depends_on_id)
+        )
           patch.deps = [...state.deps, d.dependency];
         break;
       case 'dependency.deleted':
-        patch.deps = state.deps.filter((x) => !(x.task_id === d.dependency.task_id && x.depends_on_id === d.dependency.depends_on_id));
+        patch.deps = state.deps.filter(
+          (x) => !(x.task_id === d.dependency.task_id && x.depends_on_id === d.dependency.depends_on_id),
+        );
         break;
 
-      case 'pomodoro.phase': patch.pomo = d.pomo; break;
+      case 'pomodoro.phase':
+        patch.pomo = d.pomo;
+        break;
       case 'layout.updated':
         // map positions changed on another device — refetch happens in MapView
         // (it listens for this via reportsVersion-style bump on a dedicated
@@ -339,12 +499,20 @@ export const store = {
         void refreshAll();
         break;
       // social state changes are signals — the small social lists are refetched
-      case 'friend.requested': case 'friend.accepted': case 'friend.removed':
+      case 'friend.requested':
+      case 'friend.accepted':
+      case 'friend.removed':
         void store.loadSocial();
         break;
-      case 'group.created': case 'group.updated': case 'group.deleted':
-      case 'group.member_joined': case 'group.member_left': case 'group.member_removed':
-      case 'group.member_updated': case 'group.invite_created': case 'group.invite_removed':
+      case 'group.created':
+      case 'group.updated':
+      case 'group.deleted':
+      case 'group.member_joined':
+      case 'group.member_left':
+      case 'group.member_removed':
+      case 'group.member_updated':
+      case 'group.invite_created':
+      case 'group.invite_removed':
         void store.loadGroups();
         break;
       case 'group.message_created': {
@@ -352,21 +520,24 @@ export const store = {
         // need the unread badge, patched locally — no refetch per message
         window.dispatchEvent(new CustomEvent('tk:group-message', { detail: d }));
         if (state.groups.some((g) => g.id === d.group_id)) {
-          patch.groups = state.groups.map((g) => g.id === d.group_id ? { ...g, unread: g.unread + 1 } : g);
+          patch.groups = state.groups.map((g) => (g.id === d.group_id ? { ...g, unread: g.unread + 1 } : g));
         }
         break;
       }
-      case 'group.message_updated': case 'group.message_deleted':
+      case 'group.message_updated':
+      case 'group.message_deleted':
         window.dispatchEvent(new CustomEvent('tk:group-message', { detail: d }));
         break;
       case 'friend.timer': {
-        const p = d.running && d.project && d.task
-          ? { project_id: d.project.id, task_id: d.task.id, task_name: d.task.name, started_at: d.started_at }
-          : null;
+        const p =
+          d.running && d.project && d.task
+            ? { project_id: d.project.id, task_id: d.task.id, task_name: d.task.name, started_at: d.started_at }
+            : null;
         patch.friendPresence = { ...state.friendPresence, [d.user?.id ?? '']: p };
         break;
       }
-      default: break; // unknown event types are ignored gracefully (forward-compat)
+      default:
+        break; // unknown event types are ignored gracefully (forward-compat)
     }
     set(patch);
   },
@@ -383,7 +554,7 @@ export const store = {
       subtasks: state.subtasks.filter((s) => s.task_id !== id),
       deps: state.deps.filter((d) => d.task_id !== id && d.depends_on_id !== id),
       selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId,
-      reportsVersion: state.reportsVersion + 1
+      reportsVersion: state.reportsVersion + 1,
     });
   },
   removeLocalProject(id: string) {
@@ -396,10 +567,12 @@ export const store = {
       deps: state.deps.filter((d) => !ids.has(d.task_id) && !ids.has(d.depends_on_id)),
       selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
       selectedTaskId: state.selectedTaskId && ids.has(state.selectedTaskId) ? null : state.selectedTaskId,
-      reportsVersion: state.reportsVersion + 1
+      reportsVersion: state.reportsVersion + 1,
     });
   },
-  removeLocalSubtask(id: string) { set({ subtasks: state.subtasks.filter((s) => s.id !== id) }); },
+  removeLocalSubtask(id: string) {
+    set({ subtasks: state.subtasks.filter((s) => s.id !== id) });
+  },
   upsertDep(dep: Dependency) {
     if (!state.deps.some((x) => x.task_id === dep.task_id && x.depends_on_id === dep.depends_on_id))
       set({ deps: [...state.deps, dep] });
@@ -407,13 +580,21 @@ export const store = {
   removeDep(taskId: string, dependsOnId: string) {
     set({ deps: state.deps.filter((d) => !(d.task_id === taskId && d.depends_on_id === dependsOnId)) });
   },
-  setRunning(session: RunningSession | null) { set({ running: session, reportsVersion: state.reportsVersion + 1 }); },
+  setRunning(session: RunningSession | null) {
+    set({ running: session, reportsVersion: state.reportsVersion + 1 });
+  },
   markRecentTask(id: string, subtaskId: string | null = null) {
     set({ recentEntries: mergeRecent(state.recentEntries, id, subtaskId) });
   },
-  setPomo(pomo: PomoState | null) { set({ pomo }); },
-  setSettings(s: Settings) { set({ settings: s }); },
-  setUser(u: UserProfile) { set({ user: u }); },
+  setPomo(pomo: PomoState | null) {
+    set({ pomo });
+  },
+  setSettings(s: Settings) {
+    set({ settings: s });
+  },
+  setUser(u: UserProfile) {
+    set({ user: u });
+  },
   /**
    * Seed the profile timezone from the device (the manual-timeslot tz fix).
    * Every admin-created user starts with the seeded 'UTC' (routes/admin.ts) and
@@ -433,10 +614,16 @@ export const store = {
       store.setUser(res.user);
       store.bumpReports(); // day buckets moved → refetch charts
       pushToast('info', `Timezone set to ${deviceTz} (from this device) — change it any time in Settings`);
-    } catch { /* non-fatal: stays UTC; Settings offers a one-click device-zone button */ }
+    } catch {
+      /* non-fatal: stays UTC; Settings offers a one-click device-zone button */
+    }
   },
-  bumpReports() { set({ reportsVersion: state.reportsVersion + 1 }); },
-  tickServerNow() { set({ serverNow: Date.now() }); },
+  bumpReports() {
+    set({ reportsVersion: state.reportsVersion + 1 });
+  },
+  tickServerNow() {
+    set({ serverNow: Date.now() });
+  },
 
   // ---------- social ----------
   /** Refetch friends + pending requests (after a social event or a local mutation). */
@@ -444,7 +631,9 @@ export const store = {
     try {
       const res = await api<any>('/friends');
       set({ friends: res.friends ?? [], incoming: res.incoming ?? [], outgoing: res.outgoing ?? [] });
-    } catch { /* offline — keep the last lists */ }
+    } catch {
+      /* offline — keep the last lists */
+    }
   },
   /** Merge one-shot presence results (POST /friends/presence). */
   setFriendPresence(map: Record<string, FriendPresence | null>) {
@@ -455,14 +644,16 @@ export const store = {
     try {
       const res = await api<any>('/groups');
       set({ groups: res.groups ?? [], groupInvites: res.incoming_invites ?? [] });
-    } catch { /* offline — keep the last lists */ }
+    } catch {
+      /* offline — keep the last lists */
+    }
   },
   /** The chat panel for this group is open and caught up — clear its badge. */
   markGroupRead(groupId: string) {
-    set({ groups: state.groups.map((g) => g.id === groupId ? { ...g, unread: 0 } : g) });
+    set({ groups: state.groups.map((g) => (g.id === groupId ? { ...g, unread: 0 } : g)) });
   },
 
-  refreshAll: async () => refreshAll()
+  refreshAll: async () => refreshAll(),
 };
 
 function upsertLocalList<T extends { id: string }>(arr: T[], item: T): T[] {
@@ -476,7 +667,12 @@ function upsertLocalList<T extends { id: string }>(arr: T[], item: T): T[] {
 // ---------- toasts (incl. 5-second undo, FR-T4) ----------
 
 let toastSeq = 1;
-export function pushToast(kind: Toast['kind'], message: string, undoPayload?: () => Promise<unknown>, ttlMs = 5000): void {
+export function pushToast(
+  kind: Toast['kind'],
+  message: string,
+  undoPayload?: () => Promise<unknown>,
+  ttlMs = 5000,
+): void {
   const t: Toast = { id: toastSeq++, kind, message, undoPayload, until: Date.now() + ttlMs };
   set({ toasts: [...state.toasts, t] });
   setTimeout(() => {
@@ -493,26 +689,44 @@ export function dismissToast(id: number): void {
 export function undoableDelete(message: string, undoPayload: unknown): void {
   // large deletes restore row-by-row collections server-side — give a bigger
   // window than the default 5 s toast
-  const rows = undoPayload && typeof undoPayload === 'object'
-    ? Object.values(undoPayload as Record<string, unknown[]>)
-      .reduce((a, v) => a + (Array.isArray(v) ? v.length : 0), 0)
-    : 0;
+  const rows =
+    undoPayload && typeof undoPayload === 'object'
+      ? Object.values(undoPayload as Record<string, unknown[]>).reduce(
+          (a, v) => a + (Array.isArray(v) ? v.length : 0),
+          0,
+        )
+      : 0;
   const ttl = rows > 1000 ? 20_000 : 5000;
-  pushToast('undo', message, async () => {
-    await api('/restore', { method: 'POST', body: undoPayload });
-    await store.refreshAll();
-  }, ttl);
+  pushToast(
+    'undo',
+    message,
+    async () => {
+      await api('/restore', { method: 'POST', body: undoPayload });
+      await store.refreshAll();
+    },
+    ttl,
+  );
 }
 
 export async function refreshAll(): Promise<void> {
   const b = await api<any>('/bootstrap');
   set({
-    user: b.user, settings: b.settings, projects: b.projects, tasks: b.tasks,
-    subtasks: b.subtasks, deps: b.dependencies, recentEntries: recentFromBootstrap(b),
-    friends: b.friends ?? [], incoming: b.incoming_requests ?? [], outgoing: b.outgoing_requests ?? [],
-    groups: b.groups ?? [], groupInvites: b.group_invites ?? [],
+    user: b.user,
+    settings: b.settings,
+    projects: b.projects,
+    tasks: b.tasks,
+    subtasks: b.subtasks,
+    deps: b.dependencies,
+    recentEntries: recentFromBootstrap(b),
+    friends: b.friends ?? [],
+    incoming: b.incoming_requests ?? [],
+    outgoing: b.outgoing_requests ?? [],
+    groups: b.groups ?? [],
+    groupInvites: b.group_invites ?? [],
     running: b.running ?? null,
-    pomo: b.pomo ?? null, lastEventId: b.last_event_id ?? 0, reportsVersion: state.reportsVersion + 1
+    pomo: b.pomo ?? null,
+    lastEventId: b.last_event_id ?? 0,
+    reportsVersion: state.reportsVersion + 1,
   });
 }
 
@@ -573,7 +787,9 @@ function connectWs(): void {
         const ev = JSON.parse(m.data as string) as WsEvent & { type: string };
         if ((ev.type as string) === 'pong') return;
         store.applyEvent(ev as WsEvent);
-      } catch { /* malformed frame ignored */ }
+      } catch {
+        /* malformed frame ignored */
+      }
     };
     socket.onclose = () => {
       if (ws === socket) ws = null;
@@ -581,7 +797,11 @@ function connectWs(): void {
       scheduleReconnect();
     };
     socket.onerror = () => {
-      try { socket.close(); } catch { /* already closing */ }
+      try {
+        socket.close();
+      } catch {
+        /* already closing */
+      }
     };
     // if this connection cannot establish (proxy), poll while the socket keeps
     // retrying in the background — no permanent downgrade
@@ -630,8 +850,8 @@ const poll = async (): Promise<void> => {
       if (list.length < SYNC_PAGE) break;
     }
     if (!ws) {
-      if (res.running !== undefined
-          && JSON.stringify(res.running) !== JSON.stringify(state.running)) store.setRunning(res.running);
+      if (res.running !== undefined && JSON.stringify(res.running) !== JSON.stringify(state.running))
+        store.setRunning(res.running);
       if (res.pomo) store.setPomo(res.pomo);
       store.setConnection('online'); // polling path works — not offline
     }

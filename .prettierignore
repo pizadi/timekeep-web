@@ -1,0 +1,25 @@
+# build output + local state
+dist/
+node_modules/
+.wrangler/
+.work/
+*.tsbuildinfo
+
+# generated deploy configs carry real resource ids (gitignored, but never format them)
+wrangler.local.jsonc
+wrangler.ci.jsonc
+
+# committed deploy template is hand-annotated (REPLACE_ME placeholders + notes)
+wrangler.jsonc
+
+# dependency lockfile — never reformatted
+package-lock.json
+
+# local-only config
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# scratch: audits, plans, ad-hoc verification scripts
+*AUDIT.md
+.plan/

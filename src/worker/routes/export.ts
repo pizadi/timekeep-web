@@ -5,7 +5,16 @@ import { Hono } from 'hono';
 import type { WorkerType } from '../env';
 import { jsonError } from '../env';
 import { requireAuth, limitHeavy } from '../middleware';
-import { importSchema, restoreSchema, settingsSchema, importProjectRow, importTaskRow, importSubtaskRow, importDependencyRow, importSessionRow } from '../validators';
+import {
+  importSchema,
+  restoreSchema,
+  settingsSchema,
+  importProjectRow,
+  importTaskRow,
+  importSubtaskRow,
+  importDependencyRow,
+  importSessionRow,
+} from '../validators';
 import { ulid, isUlid } from '../../shared/ids';
 import { EXPORT_SCHEMA_VERSION, LIMITS, SESSION_RULES } from '../../shared/constants';
 import { findCyclePath } from '../../shared/validation';
@@ -29,13 +38,17 @@ exportRoutes.get('/export', async (c) => {
   // NOTE: all tables are buffered in memory before responding (bounded by the
   // per-account LIMITS). Chunked/streaming export is a future optimization.
   const [user, settingsRow, projects, tasks, subtasks, deps, sessions] = await Promise.all([
-    c.env.DB.prepare('SELECT id, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start, theme, created_at FROM users WHERE id = ?1').bind(userId).first(),
+    c.env.DB.prepare(
+      'SELECT id, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start, theme, created_at FROM users WHERE id = ?1',
+    )
+      .bind(userId)
+      .first(),
     c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
     c.env.DB.prepare('SELECT * FROM projects WHERE user_id = ?1 ORDER BY position').bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM tasks WHERE user_id = ?1 ORDER BY position').bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM subtasks WHERE user_id = ?1 ORDER BY position').bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM task_dependencies WHERE user_id = ?1').bind(userId).all(),
-    c.env.DB.prepare('SELECT * FROM time_sessions WHERE user_id = ?1 ORDER BY started_at').bind(userId).all()
+    c.env.DB.prepare('SELECT * FROM time_sessions WHERE user_id = ?1 ORDER BY started_at').bind(userId).all(),
   ]);
 
   if (format === 'csv') {
@@ -57,19 +70,23 @@ exportRoutes.get('/export', async (c) => {
     for (const s of rows) {
       const mins = Math.round(((s.ended_at ?? Date.now()) - s.started_at) / 60000);
       const projectId = taskById.get(s.task_id)?.project_id;
-      lines.push([
-        esc(csvSafe(projectId != null ? projName.get(projectId) ?? '' : '')),
-        esc(csvSafe(taskById.get(s.task_id)?.name ?? '')),
-        new Date(s.started_at).toISOString(),
-        s.ended_at ? new Date(s.ended_at).toISOString() : '',
-        String(mins), esc(csvSafe(s.source)), esc(csvSafe(s.note))
-      ].join(','));
+      lines.push(
+        [
+          esc(csvSafe(projectId != null ? (projName.get(projectId) ?? '') : '')),
+          esc(csvSafe(taskById.get(s.task_id)?.name ?? '')),
+          new Date(s.started_at).toISOString(),
+          s.ended_at ? new Date(s.ended_at).toISOString() : '',
+          String(mins),
+          esc(csvSafe(s.source)),
+          esc(csvSafe(s.note)),
+        ].join(','),
+      );
     }
     return new Response(lines.join('\r\n'), {
       headers: {
         'content-type': 'text/csv; charset=utf-8',
-        'content-disposition': `attachment; filename="timekeep-sessions.csv"`
-      }
+        'content-disposition': `attachment; filename="timekeep-sessions.csv"`,
+      },
     });
   }
 
@@ -82,18 +99,22 @@ exportRoutes.get('/export', async (c) => {
     tasks: tasks.results,
     subtasks: subtasks.results,
     dependencies: deps.results,
-    sessions: sessions.results
+    sessions: sessions.results,
   };
   return new Response(JSON.stringify(payload, null, 2), {
     headers: {
       'content-type': 'application/json; charset=utf-8',
-      'content-disposition': `attachment; filename="timekeep-export.json"`
-    }
+      'content-disposition': `attachment; filename="timekeep-export.json"`,
+    },
   });
 });
 
 function safeJson(s: string): unknown {
-  try { return JSON.parse(s); } catch { return {}; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
 }
 
 // ---------- import (FR-D2) ----------
@@ -112,25 +133,27 @@ const IMPORT_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Ids of `table` rows owned by the user among `ids` (chunked under D1's 100-param limit). */
 async function existingIds(
-  env: WorkerType['Bindings'], userId: string, table: string, ids: string[]
+  env: WorkerType['Bindings'],
+  userId: string,
+  table: string,
+  ids: string[],
 ): Promise<Set<string>> {
   const out = new Set<string>();
   for (const part of chunk(ids, 90)) {
     const marks = part.map((_, k) => `?${k + 2}`).join(',');
-    const rows = await env.DB.prepare(
-      `SELECT id FROM ${table} WHERE user_id = ?1 AND id IN (${marks})`
-    ).bind(userId, ...part).all<{ id: string }>();
+    const rows = await env.DB.prepare(`SELECT id FROM ${table} WHERE user_id = ?1 AND id IN (${marks})`)
+      .bind(userId, ...part)
+      .all<{ id: string }>();
     for (const r of rows.results) out.add(r.id);
   }
   return out;
 }
 
 /** Count rows in a user-scoped table. */
-async function countFor(
-  env: WorkerType['Bindings'], userId: string, table: string
-): Promise<number> {
+async function countFor(env: WorkerType['Bindings'], userId: string, table: string): Promise<number> {
   const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?1`)
-    .bind(userId).first<{ n: number }>();
+    .bind(userId)
+    .first<{ n: number }>();
   return Number(r?.n ?? 0);
 }
 
@@ -146,7 +169,13 @@ exportRoutes.post('/import', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid import payload', parsed.error.flatten());
   const { mode, data } = parsed.data;
   const now = Date.now();
-  const summary = { projects: { created: 0, updated: 0, skipped: 0 }, tasks: { created: 0, updated: 0, skipped: 0 }, subtasks: { created: 0, updated: 0, skipped: 0 }, dependencies: { created: 0, updated: 0, skipped: 0 }, sessions: { created: 0, updated: 0, skipped: 0 } };
+  const summary = {
+    projects: { created: 0, updated: 0, skipped: 0 },
+    tasks: { created: 0, updated: 0, skipped: 0 },
+    subtasks: { created: 0, updated: 0, skipped: 0 },
+    dependencies: { created: 0, updated: 0, skipped: 0 },
+    sessions: { created: 0, updated: 0, skipped: 0 },
+  };
 
   // duplicate mode: remap every id to a fresh one (project → task → subtask → dep → session)
   const map = new Map<string, string>();
@@ -162,7 +191,7 @@ exportRoutes.post('/import', async (c) => {
   const [nProjects, nTasks, nSessions] = await Promise.all([
     countFor(c.env, userId, 'projects'),
     countFor(c.env, userId, 'tasks'),
-    countFor(c.env, userId, 'time_sessions')
+    countFor(c.env, userId, 'time_sessions'),
   ]);
   if (nProjects + data.projects.length > LIMITS.projectsActive)
     return jsonError(422, 'limit', `import rejected: at most ${LIMITS.projectsActive} projects per account`);
@@ -180,8 +209,10 @@ exportRoutes.post('/import', async (c) => {
   if (incomingSubtasksByTask.size) {
     const existing = await c.env.DB.prepare(
       `SELECT task_id, COUNT(*) AS n FROM subtasks WHERE user_id = ?1 AND task_id IN
-       (SELECT value FROM json_each(?2)) GROUP BY task_id`
-    ).bind(userId, JSON.stringify([...incomingSubtasksByTask.keys()])).all<{ task_id: string; n: number }>();
+       (SELECT value FROM json_each(?2)) GROUP BY task_id`,
+    )
+      .bind(userId, JSON.stringify([...incomingSubtasksByTask.keys()]))
+      .all<{ task_id: string; n: number }>();
     for (const row of existing.results) {
       if (Number(row.n) + (incomingSubtasksByTask.get(row.task_id) ?? 0) > LIMITS.subtasksPerTask)
         return jsonError(422, 'limit', `import rejected: at most ${LIMITS.subtasksPerTask} subtasks per task`);
@@ -194,23 +225,30 @@ exportRoutes.post('/import', async (c) => {
   // per-row schema validation (audit S3): a malformed row is skipped + counted,
   // never a 500. merge mode additionally requires server-shaped ULID ids — a
   // crafted non-ULID id can no longer land in the DB (audit S3.1).
-  const projects = (data.projects as any[]).map((p) => ({ raw: p, row: importProjectRow.safeParse(p) }))
+  const projects = (data.projects as any[])
+    .map((p) => ({ raw: p, row: importProjectRow.safeParse(p) }))
     .filter(({ row }) => {
       const ok = row.success && typeof row.data.id === 'string' && (mode === 'duplicate' || isUlid(row.data.id));
       if (!ok) summary.projects.skipped++;
       return ok;
-    }).map(({ raw, row }) => ({ raw, p: row.success ? row.data : null }));
+    })
+    .map(({ raw, row }) => ({ raw, p: row.success ? row.data : null }));
 
-  const tasks = (data.tasks as any[]).map((t) => ({ raw: t, row: importTaskRow.safeParse(t) }))
+  const tasks = (data.tasks as any[])
+    .map((t) => ({ raw: t, row: importTaskRow.safeParse(t) }))
     .filter(({ row }) => {
       const ok = row.success && (mode === 'duplicate' || isUlid(row.data.id));
       if (!ok) summary.tasks.skipped++;
       return ok;
-    }).map(({ row }) => ({ t: row.success ? row.data : null }));
+    })
+    .map(({ row }) => ({ t: row.success ? row.data : null }));
 
   const subtasks = (data.subtasks as any[]).flatMap((s) => {
     const r = importSubtaskRow.safeParse(s);
-    if (!r.success) { summary.subtasks.skipped++; return []; }
+    if (!r.success) {
+      summary.subtasks.skipped++;
+      return [];
+    }
     return [r.data];
   });
 
@@ -221,9 +259,11 @@ exportRoutes.post('/import', async (c) => {
   // pass below.
   const acceptedEdges = new Set<string>();
   {
-    const existingEdges = (await c.env.DB.prepare(
-      'SELECT task_id, depends_on_id FROM task_dependencies WHERE user_id = ?1'
-    ).bind(userId).all<{ task_id: string; depends_on_id: string }>()).results;
+    const existingEdges = (
+      await c.env.DB.prepare('SELECT task_id, depends_on_id FROM task_dependencies WHERE user_id = ?1')
+        .bind(userId)
+        .all<{ task_id: string; depends_on_id: string }>()
+    ).results;
     const accepted = [...existingEdges];
     for (const e of accepted) acceptedEdges.add(`${e.task_id}>${e.depends_on_id}`);
     // task graph info for the edge-legality pre-checks (root-only, same project —
@@ -235,10 +275,15 @@ exportRoutes.post('/import', async (c) => {
     }
     for (const d of data.dependencies as any[]) {
       const parsedDep = importDependencyRow.safeParse(d);
-      if (!parsedDep.success
-        || !tasks.some((x) => x.t?.id === parsedDep.data.task_id)
-        || !tasks.some((x) => x.t?.id === parsedDep.data.depends_on_id)
-        || parsedDep.data.task_id === parsedDep.data.depends_on_id) { summary.dependencies.skipped++; continue; }
+      if (
+        !parsedDep.success ||
+        !tasks.some((x) => x.t?.id === parsedDep.data.task_id) ||
+        !tasks.some((x) => x.t?.id === parsedDep.data.depends_on_id) ||
+        parsedDep.data.task_id === parsedDep.data.depends_on_id
+      ) {
+        summary.dependencies.skipped++;
+        continue;
+      }
       const edge = { task_id: idOf(parsedDep.data.task_id), depends_on_id: idOf(parsedDep.data.depends_on_id) };
       const a = taskInfo.get(edge.task_id);
       const b = taskInfo.get(edge.depends_on_id);
@@ -275,16 +320,24 @@ exportRoutes.post('/import', async (c) => {
       const stmts = batch.map(({ p }) => {
         const id = idOf(p!.id);
         const isUpdate = exist.has(id);
-        if (isUpdate) summary.projects.updated++; else summary.projects.created++;
+        if (isUpdate) summary.projects.updated++;
+        else summary.projects.created++;
         return c.env.DB.prepare(
           `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
            ON CONFLICT (id) DO UPDATE SET name = excluded.name, color = excluded.color,
              archived = excluded.archived, position = excluded.position, updated_at = excluded.updated_at
-           WHERE projects.user_id = excluded.user_id`
-        ).bind(id, userId, String(p!.name ?? 'Imported').slice(0, LIMITS.nameMax),
+           WHERE projects.user_id = excluded.user_id`,
+        ).bind(
+          id,
+          userId,
+          String(p!.name ?? 'Imported').slice(0, LIMITS.nameMax),
           /^#[0-9a-fA-F]{6}$/.test(p!.color ?? '') ? p!.color : '#4f8cff',
-          p!.archived, p!.position, clampTs(p!.created_at), now);
+          p!.archived,
+          p!.position,
+          clampTs(p!.created_at),
+          now,
+        );
       });
       if (stmts.length) await c.env.DB.batch(stmts);
     }
@@ -296,7 +349,10 @@ exportRoutes.post('/import', async (c) => {
     // task routes enforce (FR-T3)
     const plannedTasks = tasks.filter(({ t }) => {
       if (!t) return false;
-      if (!data.projects.some((x: any) => x?.id === t.project_id)) { summary.tasks.skipped++; return false; }
+      if (!data.projects.some((x: any) => x?.id === t.project_id)) {
+        summary.tasks.skipped++;
+        return false;
+      }
       return true;
     });
     const byFileId = new Map<string, { id: string; projectId: string; parentId: string | null }>();
@@ -314,21 +370,36 @@ exportRoutes.post('/import', async (c) => {
       }
       return true;
     });
-    const exist = await existingIds(c.env, userId, 'tasks', acceptedTasks.map(({ t }) => idOf(t!.id)));
+    const exist = await existingIds(
+      c.env,
+      userId,
+      'tasks',
+      acceptedTasks.map(({ t }) => idOf(t!.id)),
+    );
     for (const batch of chunk(acceptedTasks, IMPORT_CHUNK)) {
       const stmts = batch.map(({ t }) => {
         const id = idOf(t!.id);
-        if (exist.has(id)) summary.tasks.updated++; else summary.tasks.created++;
+        if (exist.has(id)) summary.tasks.updated++;
+        else summary.tasks.created++;
         return c.env.DB.prepare(
           `INSERT INTO tasks (id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
            ON CONFLICT (id) DO UPDATE SET project_id = excluded.project_id, parent_id = excluded.parent_id,
              name = excluded.name, notes = excluded.notes, done = excluded.done,
              position = excluded.position, updated_at = excluded.updated_at
-           WHERE tasks.user_id = excluded.user_id`
-        ).bind(id, userId, idOf(t!.project_id), t!.parent_id ? idOf(t!.parent_id) : null,
-          String(t!.name ?? 'Task').slice(0, LIMITS.nameMax), String(t!.notes ?? '').slice(0, LIMITS.noteMax),
-          t!.done, t!.position, clampTs(t!.created_at), now);
+           WHERE tasks.user_id = excluded.user_id`,
+        ).bind(
+          id,
+          userId,
+          idOf(t!.project_id),
+          t!.parent_id ? idOf(t!.parent_id) : null,
+          String(t!.name ?? 'Task').slice(0, LIMITS.nameMax),
+          String(t!.notes ?? '').slice(0, LIMITS.noteMax),
+          t!.done,
+          t!.position,
+          clampTs(t!.created_at),
+          now,
+        );
       });
       if (stmts.length) await c.env.DB.batch(stmts);
     }
@@ -337,22 +408,38 @@ exportRoutes.post('/import', async (c) => {
   {
     const plannedSubs = subtasks.filter((s) => {
       // task must be in the file (it will exist after the tasks pass above)
-      if (!tasks.some((x) => x.t?.id === s.task_id)) { summary.subtasks.skipped++; return false; }
+      if (!tasks.some((x) => x.t?.id === s.task_id)) {
+        summary.subtasks.skipped++;
+        return false;
+      }
       return true;
     });
-    const exist = await existingIds(c.env, userId, 'subtasks', plannedSubs.map((s) => idOf(s.id)));
+    const exist = await existingIds(
+      c.env,
+      userId,
+      'subtasks',
+      plannedSubs.map((s) => idOf(s.id)),
+    );
     for (const batch of chunk(plannedSubs, IMPORT_CHUNK)) {
       const stmts = batch.map((s) => {
         const id = idOf(s.id);
-        if (exist.has(id)) summary.subtasks.updated++; else summary.subtasks.created++;
+        if (exist.has(id)) summary.subtasks.updated++;
+        else summary.subtasks.created++;
         return c.env.DB.prepare(
           `INSERT INTO subtasks (id, task_id, user_id, name, done, position, created_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
            ON CONFLICT (id) DO UPDATE SET task_id = excluded.task_id, name = excluded.name,
              done = excluded.done, position = excluded.position
-           WHERE subtasks.user_id = excluded.user_id`
-        ).bind(id, idOf(s.task_id), userId, String(s.name ?? 'Subtask').slice(0, LIMITS.nameMax),
-          s.done, s.position, clampTs(s.created_at));
+           WHERE subtasks.user_id = excluded.user_id`,
+        ).bind(
+          id,
+          idOf(s.task_id),
+          userId,
+          String(s.name ?? 'Subtask').slice(0, LIMITS.nameMax),
+          s.done,
+          s.position,
+          clampTs(s.created_at),
+        );
       });
       if (stmts.length) await c.env.DB.batch(stmts);
     }
@@ -362,18 +449,28 @@ exportRoutes.post('/import', async (c) => {
     // dependency insert pass — everything (membership, root-only, same-project,
     // duplicate, cycle) was already decided by the cycle-check pass above; only
     // accepted edges are inserted
-    const depRows = (data.dependencies as any[]).map((d) => importDependencyRow.safeParse(d))
-      .filter(({ success }) => { if (!success) summary.dependencies.skipped++; return success; })
-      .map(({ data: d }) => ({ task_id: idOf(d!.task_id), depends_on_id: idOf(d!.depends_on_id), created_at: d!.created_at }))
+    const depRows = (data.dependencies as any[])
+      .map((d) => importDependencyRow.safeParse(d))
+      .filter(({ success }) => {
+        if (!success) summary.dependencies.skipped++;
+        return success;
+      })
+      .map(({ data: d }) => ({
+        task_id: idOf(d!.task_id),
+        depends_on_id: idOf(d!.depends_on_id),
+        created_at: d!.created_at,
+      }))
       .filter((e) => {
         if (!acceptedEdges.has(`${e.task_id}>${e.depends_on_id}`)) return false; // counted above
         return true;
       });
     for (const batch of chunk(depRows, IMPORT_CHUNK)) {
-      const stmts = batch.map((e) => c.env.DB.prepare(
-        `INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, user_id, created_at)
-         VALUES (?1, ?2, ?3, ?4)`
-      ).bind(e.task_id, e.depends_on_id, userId, clampTs(e.created_at)));
+      const stmts = batch.map((e) =>
+        c.env.DB.prepare(
+          `INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, user_id, created_at)
+         VALUES (?1, ?2, ?3, ?4)`,
+        ).bind(e.task_id, e.depends_on_id, userId, clampTs(e.created_at)),
+      );
       if (stmts.length) {
         await c.env.DB.batch(stmts);
         summary.dependencies.created += stmts.length;
@@ -382,8 +479,12 @@ exportRoutes.post('/import', async (c) => {
   }
 
   {
-    const plannedSessions = (data.sessions as any[]).map((s) => importSessionRow.safeParse(s))
-      .filter(({ success }) => { if (!success) summary.sessions.skipped++; return success; })
+    const plannedSessions = (data.sessions as any[])
+      .map((s) => importSessionRow.safeParse(s))
+      .filter(({ success }) => {
+        if (!success) summary.sessions.skipped++;
+        return success;
+      })
       .map(({ data: s }) => ({ s: s!, started: s!.started_at, ended: s!.ended_at }))
       .filter(({ started, ended }) => {
         // closed interval + future tolerance, matching the session-create rules
@@ -394,7 +495,12 @@ exportRoutes.post('/import', async (c) => {
         }
         return true;
       });
-    const exist = await existingIds(c.env, userId, 'time_sessions', plannedSessions.map(({ s }) => idOf(s.id)));
+    const exist = await existingIds(
+      c.env,
+      userId,
+      'time_sessions',
+      plannedSessions.map(({ s }) => idOf(s.id)),
+    );
     // subtask links survive import only when the subtask exists AND belongs to
     // the session's task (subtasks import first; a skipped row → link drops,
     // the session's time still imports)
@@ -402,24 +508,34 @@ exportRoutes.post('/import', async (c) => {
     const importSubs = new Map<string, string>();
     for (const batch of chunk(importSubIds, 90)) {
       const marks = batch.map((_, k) => `?${k + 2}`).join(',');
-      const rows = await c.env.DB.prepare(
-        `SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`
-      ).bind(userId, ...batch).all<{ id: string; task_id: string }>();
+      const rows = await c.env.DB.prepare(`SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`)
+        .bind(userId, ...batch)
+        .all<{ id: string; task_id: string }>();
       for (const r of rows.results) importSubs.set(r.id, r.task_id);
     }
     for (const batch of chunk(plannedSessions, IMPORT_CHUNK)) {
       const stmts = batch.map(({ s, started, ended }) => {
         const id = idOf(s.id);
-        if (exist.has(id)) summary.sessions.updated++; else summary.sessions.created++;
+        if (exist.has(id)) summary.sessions.updated++;
+        else summary.sessions.created++;
         const sub = s.subtask_id && importSubs.get(s.subtask_id) === idOf(s.task_id) ? s.subtask_id : null;
         return c.env.DB.prepare(
           `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
            ON CONFLICT (id) DO UPDATE SET task_id = excluded.task_id, started_at = excluded.started_at,
              ended_at = excluded.ended_at, note = excluded.note, updated_at = excluded.updated_at
-           WHERE time_sessions.user_id = excluded.user_id`
-        ).bind(id, userId, idOf(s.task_id), started, ended, s.source,
-          String(s.note ?? '').slice(0, LIMITS.noteMax), clampTs(s.created_at), sub);
+           WHERE time_sessions.user_id = excluded.user_id`,
+        ).bind(
+          id,
+          userId,
+          idOf(s.task_id),
+          started,
+          ended,
+          s.source,
+          String(s.note ?? '').slice(0, LIMITS.noteMax),
+          clampTs(s.created_at),
+          sub,
+        );
       });
       if (stmts.length) await c.env.DB.batch(stmts);
     }
@@ -430,7 +546,8 @@ exportRoutes.post('/import', async (c) => {
     const ps = settingsSchema.safeParse(data.settings);
     if (ps.success) {
       const row = await c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1')
-        .bind(userId).first<{ data: string }>();
+        .bind(userId)
+        .first<{ data: string }>();
       const current = mergeSettings(row?.data);
       const s = ps.data;
       const next = {
@@ -439,19 +556,18 @@ exportRoutes.post('/import', async (c) => {
         ...(s.grace_min !== undefined ? { grace_min: s.grace_min } : {}),
         ...(s.notifications_enabled !== undefined ? { notifications_enabled: s.notifications_enabled } : {}),
         ...(s.sound_enabled !== undefined ? { sound_enabled: s.sound_enabled } : {}),
-        ...(s.theme !== undefined ? { theme: s.theme } : {})
+        ...(s.theme !== undefined ? { theme: s.theme } : {}),
       };
       // settings + profile theme mirror in ONE batch (audit: the PUT /settings
       // path does the same — a crash between them used to leave them divergent)
       await c.env.DB.batch([
         c.env.DB.prepare(
           `INSERT INTO settings (user_id, data) VALUES (?1, ?2)
-           ON CONFLICT (user_id) DO UPDATE SET data = excluded.data`
+           ON CONFLICT (user_id) DO UPDATE SET data = excluded.data`,
         ).bind(userId, JSON.stringify(next)),
         ...(s.theme !== undefined
-          ? [c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3')
-            .bind(s.theme, now, userId)]
-          : [])
+          ? [c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3').bind(s.theme, now, userId)]
+          : []),
       ]);
     }
   }
@@ -492,80 +608,144 @@ exportRoutes.post('/restore', async (c) => {
   for (const batch of chunk(d.projects, 50)) {
     const stmts = batch
       .filter((p) => isUlid(p.id))
-      .map((p) => c.env.DB.prepare(
-        `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
+      .map((p) =>
+        c.env.DB.prepare(
+          `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (id) DO UPDATE SET archived = 0, updated_at = excluded.updated_at
-         WHERE projects.user_id = excluded.user_id`
-      ).bind(p.id, userId, String(p.name ?? 'Restored').slice(0, LIMITS.nameMax),
-        /^#[0-9a-fA-F]{6}$/.test(p.color ?? '') ? p.color : '#4f8cff',
-        p.archived, safePos(p.position), clampTs(p.created_at), now));
-    if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
+         WHERE projects.user_id = excluded.user_id`,
+        ).bind(
+          p.id,
+          userId,
+          String(p.name ?? 'Restored').slice(0, LIMITS.nameMax),
+          /^#[0-9a-fA-F]{6}$/.test(p.color ?? '') ? p.color : '#4f8cff',
+          p.archived,
+          safePos(p.position),
+          clampTs(p.created_at),
+          now,
+        ),
+      );
+    if (stmts.length) {
+      await c.env.DB.batch(stmts);
+      restored += stmts.length;
+    }
   }
 
   // tasks: parent must be a root task of the SAME project within the payload
   // (audit S3.2 — a crafted 3-level payload must not land)
   {
     const payloadById = new Map(d.tasks.map((t) => [t.id, t]));
-    const valid = d.tasks.filter((t) =>
-      isUlid(t.id)
-      && typeof t.project_id === 'string'
-      && (!t.parent_id
-        || (payloadById.get(t.parent_id) !== undefined && payloadById.get(t.parent_id)!.parent_id === null)));
-    if (!valid.length) { /* skip */ }
-    else {
-      const ownedProjects = await existingIds(c.env, userId, 'projects', valid.map((t) => t.project_id));
+    const valid = d.tasks.filter(
+      (t) =>
+        isUlid(t.id) &&
+        typeof t.project_id === 'string' &&
+        (!t.parent_id ||
+          (payloadById.get(t.parent_id) !== undefined && payloadById.get(t.parent_id)!.parent_id === null)),
+    );
+    if (!valid.length) {
+      /* skip */
+    } else {
+      const ownedProjects = await existingIds(
+        c.env,
+        userId,
+        'projects',
+        valid.map((t) => t.project_id),
+      );
       // same-project parent check (project of parent row == project of child)
       const stmts = valid
-        .filter((t) => ownedProjects.has(t.project_id)
-          && (!t.parent_id || payloadById.get(t.parent_id)!.project_id === t.project_id))
-        .map((t) => c.env.DB.prepare(
-          `INSERT INTO tasks (id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at)
+        .filter(
+          (t) =>
+            ownedProjects.has(t.project_id) &&
+            (!t.parent_id || payloadById.get(t.parent_id)!.project_id === t.project_id),
+        )
+        .map((t) =>
+          c.env.DB.prepare(
+            `INSERT INTO tasks (id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
            ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at
-           WHERE tasks.user_id = excluded.user_id`
-        ).bind(t.id, userId, t.project_id, t.parent_id ?? null,
-          String(t.name ?? 'Task').slice(0, LIMITS.nameMax), String(t.notes ?? '').slice(0, LIMITS.noteMax),
-          t.done, safePos(t.position), clampTs(t.created_at), now));
-      if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
+           WHERE tasks.user_id = excluded.user_id`,
+          ).bind(
+            t.id,
+            userId,
+            t.project_id,
+            t.parent_id ?? null,
+            String(t.name ?? 'Task').slice(0, LIMITS.nameMax),
+            String(t.notes ?? '').slice(0, LIMITS.noteMax),
+            t.done,
+            safePos(t.position),
+            clampTs(t.created_at),
+            now,
+          ),
+        );
+      if (stmts.length) {
+        await c.env.DB.batch(stmts);
+        restored += stmts.length;
+      }
     }
   }
 
   for (const batch of chunk(d.subtasks, 50)) {
     const valid = batch.filter((s) => isUlid(s.id) && typeof s.task_id === 'string');
     if (!valid.length) continue;
-    const ownedTasks = await existingIds(c.env, userId, 'tasks', valid.map((s) => s.task_id));
+    const ownedTasks = await existingIds(
+      c.env,
+      userId,
+      'tasks',
+      valid.map((s) => s.task_id),
+    );
     const stmts = valid
       .filter((s) => ownedTasks.has(s.task_id))
-      .map((s) => c.env.DB.prepare(
-        `INSERT INTO subtasks (id, task_id, user_id, name, done, position, created_at)
+      .map((s) =>
+        c.env.DB.prepare(
+          `INSERT INTO subtasks (id, task_id, user_id, name, done, position, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (id) DO UPDATE SET done = excluded.done, name = excluded.name
-         WHERE subtasks.user_id = excluded.user_id`
-      ).bind(s.id, s.task_id, userId, String(s.name ?? 'Subtask').slice(0, LIMITS.nameMax),
-        s.done, safePos(s.position), clampTs(s.created_at)));
-    if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
+         WHERE subtasks.user_id = excluded.user_id`,
+        ).bind(
+          s.id,
+          s.task_id,
+          userId,
+          String(s.name ?? 'Subtask').slice(0, LIMITS.nameMax),
+          s.done,
+          safePos(s.position),
+          clampTs(s.created_at),
+        ),
+      );
+    if (stmts.length) {
+      await c.env.DB.batch(stmts);
+      restored += stmts.length;
+    }
   }
 
   for (const batch of chunk(d.dependencies, 50)) {
-    const valid = batch.filter((dep) =>
-      isUlid(dep.task_id) && isUlid(dep.depends_on_id) && dep.task_id !== dep.depends_on_id);
+    const valid = batch.filter(
+      (dep) => isUlid(dep.task_id) && isUlid(dep.depends_on_id) && dep.task_id !== dep.depends_on_id,
+    );
     if (!valid.length) continue;
     // both endpoints must belong to the caller — dependency rows pointing at
     // other users' tasks are rejected
-    const ownedTasks = await existingIds(c.env, userId, 'tasks',
-      valid.flatMap((dep) => [dep.task_id, dep.depends_on_id]));
+    const ownedTasks = await existingIds(
+      c.env,
+      userId,
+      'tasks',
+      valid.flatMap((dep) => [dep.task_id, dep.depends_on_id]),
+    );
     const candidates = valid.filter((dep) => ownedTasks.has(dep.task_id) && ownedTasks.has(dep.depends_on_id));
     if (!candidates.length) continue;
     // FR-M5 parity (audit S3.3): edges may only connect root tasks of the same
     // project — verified against the actual DB rows (endpoints may be
     // pre-existing tasks, not just payload rows)
     const info = new Map<string, { project_id: string; parent_id: string | null }>();
-    for (const part of chunk(candidates.flatMap((dep) => [dep.task_id, dep.depends_on_id]), 90)) {
+    for (const part of chunk(
+      candidates.flatMap((dep) => [dep.task_id, dep.depends_on_id]),
+      90,
+    )) {
       const marks = part.map((_, k) => `?${k + 2}`).join(',');
       const rows = await c.env.DB.prepare(
-        `SELECT id, project_id, parent_id FROM tasks WHERE user_id = ?1 AND id IN (${marks})`
-      ).bind(userId, ...part).all<{ id: string; project_id: string; parent_id: string | null }>();
+        `SELECT id, project_id, parent_id FROM tasks WHERE user_id = ?1 AND id IN (${marks})`,
+      )
+        .bind(userId, ...part)
+        .all<{ id: string; project_id: string; parent_id: string | null }>();
       for (const r of rows.results) info.set(r.id, r);
     }
     const stmts = candidates
@@ -574,11 +754,16 @@ exportRoutes.post('/restore', async (c) => {
         const b = info.get(dep.depends_on_id);
         return a && b && a.parent_id === null && b.parent_id === null && a.project_id === b.project_id;
       })
-      .map((dep) => c.env.DB.prepare(
-        `INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, user_id, created_at)
-         VALUES (?1, ?2, ?3, ?4)`
-      ).bind(dep.task_id, dep.depends_on_id, userId, clampTs(dep.created_at)));
-    if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
+      .map((dep) =>
+        c.env.DB.prepare(
+          `INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, user_id, created_at)
+         VALUES (?1, ?2, ?3, ?4)`,
+        ).bind(dep.task_id, dep.depends_on_id, userId, clampTs(dep.created_at)),
+      );
+    if (stmts.length) {
+      await c.env.DB.batch(stmts);
+      restored += stmts.length;
+    }
   }
 
   for (const batch of chunk(d.sessions, 50)) {
@@ -594,7 +779,12 @@ exportRoutes.post('/restore', async (c) => {
       planned.push({ s, started, ended });
     }
     if (!planned.length) continue;
-    const ownedTasks = await existingIds(c.env, userId, 'tasks', planned.map((p) => p.s.task_id));
+    const ownedTasks = await existingIds(
+      c.env,
+      userId,
+      'tasks',
+      planned.map((p) => p.s.task_id),
+    );
     // a subtask link survives restore only when the subtask exists AND belongs
     // to the session's task (subtasks restore earlier in this handler; a
     // dropped link must NOT abort the batch — the time is the precious part)
@@ -602,9 +792,9 @@ exportRoutes.post('/restore', async (c) => {
     const restoreSubs = new Map<string, string>();
     for (const part of chunk(restoreSubIds, 90)) {
       const marks = part.map((_, k) => `?${k + 2}`).join(',');
-      const rows = await c.env.DB.prepare(
-        `SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`
-      ).bind(userId, ...part).all<{ id: string; task_id: string }>();
+      const rows = await c.env.DB.prepare(`SELECT id, task_id FROM subtasks WHERE user_id = ?1 AND id IN (${marks})`)
+        .bind(userId, ...part)
+        .all<{ id: string; task_id: string }>();
       for (const r of rows.results) restoreSubs.set(r.id, r.task_id);
     }
     const stmts = planned
@@ -614,17 +804,30 @@ exportRoutes.post('/restore', async (c) => {
         return c.env.DB.prepare(
           `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
-           ON CONFLICT (id) DO NOTHING`
-        ).bind(s.id, userId, s.task_id, started, ended, s.source,
-          String(s.note ?? '').slice(0, LIMITS.noteMax), now, sub);
+           ON CONFLICT (id) DO NOTHING`,
+        ).bind(
+          s.id,
+          userId,
+          s.task_id,
+          started,
+          ended,
+          s.source,
+          String(s.note ?? '').slice(0, LIMITS.noteMax),
+          now,
+          sub,
+        );
       });
-    if (stmts.length) { await c.env.DB.batch(stmts); restored += stmts.length; }
+    if (stmts.length) {
+      await c.env.DB.batch(stmts);
+      restored += stmts.length;
+    }
   }
 
   // other devices learn about the undo — clients react with a full refetch
   // (audit: restore used to fan out nothing, silently diverging other devices)
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'restore.completed', actor: c.get('deviceId'), data: { restored } }] as EventDraft[]);
+  const evs = await appendEvents(c.env, userId, [
+    { type: 'restore.completed', actor: c.get('deviceId'), data: { restored } },
+  ] as EventDraft[]);
   notifyHub(c.env, userId, evs, c.executionCtx);
 
   return c.json({ ok: true, restored, events: evs });

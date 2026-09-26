@@ -27,15 +27,15 @@ the [admin guide](admin-guide.md)).
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `npm run dev:worker` | wrangler dev on :8787 — serves both API and SPA |
-| `npm run dev:web` | Vite dev server on :5173, proxies `/api` (incl. WebSockets) to :8787 |
-| `npm test` | unit tests (Vitest, node env — no DB or network needed) |
-| `npm run typecheck` | typechecks the worker and web projects |
-| `npm run build` | build the SPA → `dist/client` |
-| `npm run db:migrate:local` / `:remote` | apply D1 migrations |
-| `npm run deploy` | build + `wrangler deploy` |
+| Command                                | What it does                                                         |
+| -------------------------------------- | -------------------------------------------------------------------- |
+| `npm run dev:worker`                   | wrangler dev on :8787 — serves both API and SPA                      |
+| `npm run dev:web`                      | Vite dev server on :5173, proxies `/api` (incl. WebSockets) to :8787 |
+| `npm test`                             | unit tests (Vitest, node env — no DB or network needed)              |
+| `npm run typecheck`                    | typechecks the worker and web projects                               |
+| `npm run build`                        | build the SPA → `dist/client`                                        |
+| `npm run db:migrate:local` / `:remote` | apply D1 migrations                                                  |
+| `npm run deploy`                       | build + `wrangler deploy`                                            |
 
 Full local check before committing: `npm run typecheck && npm test && npm run
 build`. There is no lint/format tooling configured.
@@ -53,13 +53,13 @@ build`. There is no lint/format tooling configured.
 Copy `.dev.vars.example` → `.dev.vars` (gitignored, never commit). Everything
 is optional in dev; the app degrades gracefully:
 
-| Var | Effect |
-|---|---|
-| `PBKDF2_ITERATIONS=1000` | fast hashing for local logins (prod uses 600000) |
-| `EMAIL_DEV_MODE=1` | prints verification/reset links to the Worker console — API responses never carry live token links |
-| `FROM_EMAIL` | sender address for dev mail output |
-| `TURNSTILE_SECRET_KEY` / `TURNSTILE_SITE_KEY` | widget off when absent |
-| `RESEND_API_KEY` | absent → password-reset mail unavailable |
+| Var                                                              | Effect                                                                                                                                                |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PBKDF2_ITERATIONS=1000`                                         | fast hashing for local logins (prod uses 600000)                                                                                                      |
+| `EMAIL_DEV_MODE=1`                                               | prints verification/reset links to the Worker console — API responses never carry live token links                                                    |
+| `FROM_EMAIL`                                                     | sender address for dev mail output                                                                                                                    |
+| `TURNSTILE_SECRET_KEY` / `TURNSTILE_SITE_KEY`                    | widget off when absent                                                                                                                                |
+| `RESEND_API_KEY`                                                 | absent → password-reset mail unavailable                                                                                                              |
 | `RL_LOGIN_IP` / `RL_LOGIN_EMAIL` / `RL_ADMIN_IP` / `RL_TOKEN_IP` | rate-limit overrides for e2e hammering — set the first three high; leave `RL_TOKEN_IP` alone when running `regression-check.mjs` (it expects the 429) |
 
 ## Migrations

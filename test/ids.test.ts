@@ -48,7 +48,7 @@ describe('ulid()', () => {
   it('isUlid rejects malformed ids (uppercase alphabet only)', () => {
     expect(isUlid('01ARZ3NDEKTSV4RRFFQ69G5FAV')).toBe(true);
     expect(isUlid('01arz3ndektsv4rrffq69g5fav')).toBe(false); // lowercase
-    expect(isUlid('01ARZ3NDEKTSV4RRFFQ69G5FA')).toBe(false);  // 25 chars
+    expect(isUlid('01ARZ3NDEKTSV4RRFFQ69G5FA')).toBe(false); // 25 chars
     expect(isUlid('01ARZ3NDEKTSV4RRFFQ69G5FAU')).toBe(false); // 'U' not in alphabet
     expect(isUlid('undefined')).toBe(false);
   });

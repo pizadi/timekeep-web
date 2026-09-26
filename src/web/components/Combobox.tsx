@@ -9,18 +9,28 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 export interface ComboboxOption {
   value: string;
   label: string;
-  color?: string;  // optional leading chip color
-  hint?: string;   // optional right-aligned muted text
+  color?: string; // optional leading chip color
+  hint?: string; // optional right-aligned muted text
 }
 export interface ComboboxGroup {
-  label?: string;  // header rendered above the group's first option
+  label?: string; // header rendered above the group's first option
   options: ComboboxOption[];
 }
 
-interface FlatItem { groupLabel?: string; option: ComboboxOption; index: number }
+interface FlatItem {
+  groupLabel?: string;
+  option: ComboboxOption;
+  index: number;
+}
 
 export default function Combobox({
-  text, onTextChange, onPick, groups, placeholder, ariaLabel, onBlur
+  text,
+  onTextChange,
+  onPick,
+  groups,
+  placeholder,
+  ariaLabel,
+  onBlur,
 }: {
   text: string;
   onTextChange: (v: string) => void;
@@ -62,7 +72,10 @@ export default function Combobox({
   };
 
   useLayoutEffect(() => {
-    if (!open) { setRect(null); return; }
+    if (!open) {
+      setRect(null);
+      return;
+    }
     place();
     // capture: also catches scrolls of inner containers (the settings modal)
     window.addEventListener('resize', place);
@@ -74,7 +87,9 @@ export default function Combobox({
   }, [open]);
 
   // reset/normalize the highlight when the list content or visibility changes
-  useEffect(() => { setActive((a) => Math.min(a, Math.max(0, items.length - 1))); }, [items.length]);
+  useEffect(() => {
+    setActive((a) => Math.min(a, Math.max(0, items.length - 1)));
+  }, [items.length]);
   useEffect(() => {
     if (open && active >= 0) activeRef.current?.scrollIntoView({ block: 'nearest' });
   }, [active, open]);
@@ -97,11 +112,17 @@ export default function Combobox({
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (!open) { setOpen(true); return; }
+      if (!open) {
+        setOpen(true);
+        return;
+      }
       setActive((a) => (items.length ? (a + 1) % items.length : 0));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (!open) { setOpen(true); return; }
+      if (!open) {
+        setOpen(true);
+        return;
+      }
       setActive((a) => (items.length ? (a - 1 + items.length) % items.length : 0));
     } else if (e.key === 'Enter') {
       if (!open) return;
@@ -109,7 +130,11 @@ export default function Combobox({
       if (items.length) commit(items[Math.min(Math.max(active, 0), items.length - 1)]!);
       else setOpen(false);
     } else if (e.key === 'Escape') {
-      if (open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+      if (open) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+      }
     }
   }
 
@@ -121,15 +146,24 @@ export default function Combobox({
         role="combobox"
         aria-expanded={open}
         aria-controls={open ? `${listId}-list` : undefined}
-        aria-activedescendant={open && items.length ? `${listId}-opt-${Math.min(Math.max(active, 0), items.length - 1)}` : undefined}
+        aria-activedescendant={
+          open && items.length ? `${listId}-opt-${Math.min(Math.max(active, 0), items.length - 1)}` : undefined
+        }
         aria-autocomplete="list"
         aria-label={ariaLabel}
         autoComplete="off"
         value={text}
         placeholder={placeholder}
-        onChange={(e) => { onTextChange(e.target.value); setOpen(true); setActive(0); }}
+        onChange={(e) => {
+          onTextChange(e.target.value);
+          setOpen(true);
+          setActive(0);
+        }}
         onFocus={() => setOpen(true)}
-        onBlur={() => { setOpen(false); onBlur?.(); }}
+        onBlur={() => {
+          setOpen(false);
+          onBlur?.();
+        }}
         onKeyDown={onKeyDown}
       />
       {open && rect && (
@@ -144,9 +178,7 @@ export default function Combobox({
           style={{
             left: rect.left,
             width: Math.max(rect.width, 220),
-            ...(rect.above
-              ? { bottom: window.innerHeight - rect.top }
-              : { top: rect.top })
+            ...(rect.above ? { bottom: window.innerHeight - rect.top } : { top: rect.top }),
           }}
         >
           {items.map((it) => (
@@ -164,7 +196,11 @@ export default function Combobox({
               >
                 {it.option.color && <span className="chip" style={{ background: it.option.color }} />}
                 <span className="grow">{it.option.label}</span>
-                {it.option.hint && <span className="muted" style={{ fontSize: 12 }}>{it.option.hint}</span>}
+                {it.option.hint && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {it.option.hint}
+                  </span>
+                )}
               </div>
             </div>
           ))}

@@ -9,7 +9,11 @@ import type { WorkerType, Env } from './env';
 import { jsonError } from './env';
 import { sha256Hex, timingSafeEqual, randomToken } from './auth';
 import {
-  SESSION_COOKIE, CSRF_COOKIE, CSRF_HEADER, SESSION_TTL_MS, SESSION_ROTATE_BEFORE_MS
+  SESSION_COOKIE,
+  CSRF_COOKIE,
+  CSRF_HEADER,
+  SESSION_TTL_MS,
+  SESSION_ROTATE_BEFORE_MS,
 } from '../shared/constants';
 
 const CSP_BODY = (turnstileOn: boolean) =>
@@ -30,12 +34,14 @@ const CSP_BODY = (turnstileOn: boolean) =>
     "img-src 'self' data:",
     "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
     "font-src 'self'",
-    turnstileOn ? "frame-src https://challenges.cloudflare.com" : '',
+    turnstileOn ? 'frame-src https://challenges.cloudflare.com' : '',
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "form-action 'self'",
-    "object-src 'none'"
-  ].filter(Boolean).join('; ');
+    "object-src 'none'",
+  ]
+    .filter(Boolean)
+    .join('; ');
 
 /** Applies the full header set to any response — used for API *and* static-asset responses. */
 export function securityHeadersFor(env: Env, res: Response, url: URL): Response {
@@ -59,8 +65,11 @@ export const securityHeaders = createMiddleware<WorkerType>(async (c, next) => {
 type Ctx = Context<WorkerType>;
 
 interface SessionRow {
-  id: string; user_id: string; token_hash: string;
-  expires_at: number; last_seen_at: number;
+  id: string;
+  user_id: string;
+  token_hash: string;
+  expires_at: number;
+  last_seen_at: number;
 }
 
 async function loadSession(c: Ctx): Promise<{ session: SessionRow } | null> {
@@ -69,8 +78,10 @@ async function loadSession(c: Ctx): Promise<{ session: SessionRow } | null> {
   const hash = await sha256Hex(token);
   const row = await c.env.DB.prepare(
     `SELECT s.id, s.user_id, s.token_hash, s.expires_at, s.last_seen_at
-     FROM auth_sessions s WHERE s.token_hash = ?1`
-  ).bind(hash).first<SessionRow>();
+     FROM auth_sessions s WHERE s.token_hash = ?1`,
+  )
+    .bind(hash)
+    .first<SessionRow>();
   if (!row) return null;
   const now = Date.now();
   if (row.expires_at < now) {
@@ -92,10 +103,17 @@ async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<void> {
     await c.env.DB.batch([
       c.env.DB.prepare(
         `INSERT INTO auth_sessions (id, user_id, token_hash, user_agent, ip, created_at, last_seen_at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`
-      ).bind(newId, session.user_id, hash,
-        c.req.header('user-agent') ?? '', clientIp(c) ?? '', now, now + SESSION_TTL_MS),
-      c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1').bind(session.id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`,
+      ).bind(
+        newId,
+        session.user_id,
+        hash,
+        c.req.header('user-agent') ?? '',
+        clientIp(c) ?? '',
+        now,
+        now + SESSION_TTL_MS,
+      ),
+      c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1').bind(session.id),
     ]);
     setSessionCookie(c, token, now + SESSION_TTL_MS);
     c.set('authSessionId', newId);
@@ -105,8 +123,11 @@ async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<void> {
 export function setSessionCookie(c: Ctx, token: string, expiresAtMs: number): void {
   const https = new URL(c.req.url).protocol === 'https:';
   setCookie(c, SESSION_COOKIE, token, {
-    httpOnly: true, secure: https, sameSite: 'Lax', path: '/',
-    maxAge: Math.floor((expiresAtMs - Date.now()) / 1000)
+    httpOnly: true,
+    secure: https,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: Math.floor((expiresAtMs - Date.now()) / 1000),
   });
 }
 
@@ -144,14 +165,15 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
     // last-seen heartbeat only: expiry is a fixed 30-day window; renewal happens
     // via token rotation in the final 7 days (rotateIfNeeded), which issues a
     // fresh session with a full TTL.
-    await c.env.DB.prepare('UPDATE auth_sessions SET last_seen_at = ?1 WHERE id = ?2')
-      .bind(now, session.id).run();
+    await c.env.DB.prepare('UPDATE auth_sessions SET last_seen_at = ?1 WHERE id = ?2').bind(now, session.id).run();
   }
   const user = await c.env.DB.prepare(
     `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
             theme, role, active, must_change_password, email_verified_at, created_at
-     FROM users WHERE id = ?1`
-  ).bind(session.user_id).first<any>();
+     FROM users WHERE id = ?1`,
+  )
+    .bind(session.user_id)
+    .first<any>();
   if (!user) return jsonError(401, 'unauthenticated', 'sign in required');
   if (!user.active)
     return jsonError(403, 'account_disabled', 'this account has been deactivated — contact your administrator');
@@ -172,15 +194,12 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
 
 /** While must_change_password is set, only these endpoints respond. */
 function passwordChangeAllowed(method: string, path: string): boolean {
-  return path === '/api/me/password'
-    || path === '/api/auth/logout'
-    || (path === '/api/me' && method === 'GET');
+  return path === '/api/me/password' || path === '/api/auth/logout' || (path === '/api/me' && method === 'GET');
 }
 
 /** Admin-only surface: user management. Use after requireAuth (c.set('user') must exist). */
 export const requireAdmin = createMiddleware<WorkerType>(async (c, next) => {
-  if (c.get('user').role !== 'admin')
-    return jsonError(403, 'forbidden', 'admin access required');
+  if (c.get('user').role !== 'admin') return jsonError(403, 'forbidden', 'admin access required');
   await next();
 });
 
@@ -218,7 +237,10 @@ export const csrfGuard = createMiddleware<WorkerType>(async (c, next) => {
 });
 
 export function allowedOrigins(env: Env, requestOrigin: string): string[] {
-  const extra = (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const extra = (env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   return [requestOrigin, ...extra];
 }
 
@@ -233,7 +255,11 @@ export function issueCsrfCookie(c: Ctx): string {
 
 // ---------- rate limiting (KV sliding-window-ish counters, NFR-3) ----------
 
-export interface RateRule { name: string; limit: number; windowMs: number }
+export interface RateRule {
+  name: string;
+  limit: number;
+  windowMs: number;
+}
 
 /** Spec limits (NFR-3). Each limit is env-overridable (RL_*) for local dev/tests only. */
 export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
@@ -254,7 +280,7 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
     writeUser: { name: 'write_user', limit: n(env.RL_WRITE_USER, 300), windowMs: 60_000 },
     // friend requests + username lookups (blocks request spam and cheap
     // username enumeration — the only user-existence oracle in the app)
-    socialUser: { name: 'social_user', limit: n(env.RL_SOCIAL_USER, 30), windowMs: 3600_000 }
+    socialUser: { name: 'social_user', limit: n(env.RL_SOCIAL_USER, 30), windowMs: 3600_000 },
   };
 };
 
@@ -278,8 +304,10 @@ export async function rateLimitHit(env: Env, rule: RateRule, subject: string): P
     `INSERT INTO rate_counters (key, n, window_start, expires_at)
      VALUES (?1, 1, ?2, ?3)
      ON CONFLICT (key) DO UPDATE SET n = n + 1, expires_at = ?3
-     RETURNING n`
-  ).bind(key, win, expiresAt).first<{ n: number }>();
+     RETURNING n`,
+  )
+    .bind(key, win, expiresAt)
+    .first<{ n: number }>();
   const cur = Number(row?.n ?? 1);
   if (cur > rule.limit) return Math.ceil((rule.windowMs - (now % rule.windowMs)) / 1000);
   return null;
@@ -288,7 +316,7 @@ export async function rateLimitHit(env: Env, rule: RateRule, subject: string): P
 export function tooMany(retryAfterS: number) {
   return new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'too many requests — retry later' } }), {
     status: 429,
-    headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, retryAfterS)) }
+    headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, retryAfterS)) },
   });
 }
 
@@ -302,16 +330,20 @@ async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
   const userId = c.get('user').id;
   try {
     const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
-    const res = await stub.fetch(new Request('https://do/ratelimit', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-internal': '1' },
-      body: JSON.stringify({ key: rule.name, limit: rule.limit, windowMs: rule.windowMs })
-    }));
+    const res = await stub.fetch(
+      new Request('https://do/ratelimit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-internal': '1' },
+        body: JSON.stringify({ key: rule.name, limit: rule.limit, windowMs: rule.windowMs }),
+      }),
+    );
     if (res.ok) {
-      const out = await res.json() as { limited: boolean; retry_after_s: number };
+      const out = (await res.json()) as { limited: boolean; retry_after_s: number };
       return out.limited ? tooMany(out.retry_after_s) : null;
     }
-  } catch { /* DO unavailable → D1 fallback below */ }
+  } catch {
+    /* DO unavailable → D1 fallback below */
+  }
   const rl = await rateLimitHit(c.env, rule, userId);
   return rl ? tooMany(rl) : null;
 }

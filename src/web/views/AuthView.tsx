@@ -39,8 +39,13 @@ export default function AuthView() {
         <h1>TimeKeep</h1>
         <p className="sub">Know where your hours go — private, fast, synced everywhere.</p>
 
-        <LoginForm turnstileToken={turnstileToken}
-          onDone={() => { store.setAuthed(true); go('/'); }} />
+        <LoginForm
+          turnstileToken={turnstileToken}
+          onDone={() => {
+            store.setAuthed(true);
+            go('/');
+          }}
+        />
 
         {siteKey && (
           <div className="ts-wrap" style={{ marginTop: 12 }}>
@@ -65,29 +70,56 @@ function LoginForm({ turnstileToken, onDone }: LoginFormProps) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setError('');
+    setBusy(true);
+    setError('');
     try {
       await api('/auth/login', {
         method: 'POST',
-        body: { identifier, password, turnstile: turnstileToken || undefined }
+        body: { identifier, password, turnstile: turnstileToken || undefined },
       });
       onDone();
     } catch (err: any) {
       setError(err instanceof ApiError ? err.message : 'Login failed');
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <form onSubmit={submit}>
-      <label className="field"><span>Username</span>
-        <input className="input" type="text" required value={identifier} autoFocus
+      <label className="field">
+        <span>Username</span>
+        <input
+          className="input"
+          type="text"
+          required
+          value={identifier}
+          autoFocus
           onChange={(e) => setIdentifier(e.target.value)}
-          autoComplete="username" autoCapitalize="none" spellCheck={false} /></label>
-      <label className="field"><span>Password</span>
-        <input className="input" type="password" required value={password}
-          onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>
-      {error && <div className="error-text" role="alert">{error}</div>}
-      <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+      </label>
+      <label className="field">
+        <span>Password</span>
+        <input
+          className="input"
+          type="password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
+        />
+      </label>
+      {error && (
+        <div className="error-text" role="alert">
+          {error}
+        </div>
+      )}
+      <button className="btn primary" style={{ width: '100%' }} disabled={busy}>
+        {busy ? 'Signing in…' : 'Sign in'}
+      </button>
     </form>
   );
 }

@@ -15,18 +15,18 @@ const wrangler = readFileSync('wrangler.jsonc', 'utf8');
 // the JSON string, then strip the literal's quotes.
 const m = wrangler.match(/"__APP_VERSION__"\s*:\s*"((?:[^"\\]|\\.)*)"/);
 if (!m) {
-	console.error('check-version: __APP_VERSION__ define not found in wrangler.jsonc');
-	process.exit(1);
+  console.error('check-version: __APP_VERSION__ define not found in wrangler.jsonc');
+  process.exit(1);
 }
 const defineValue = JSON.parse(`"${m[1]}"`).replace(/^"|"$/g, '');
 
 if (defineValue !== pkg.version) {
-	console.error(
-		`check-version: version drift — package.json is "${pkg.version}" but ` +
-			`wrangler.jsonc __APP_VERSION__ is "${defineValue}". Bump all three together: ` +
-			`package.json + the define block in wrangler.jsonc AND wrangler.local.jsonc.`
-	);
-	process.exit(1);
+  console.error(
+    `check-version: version drift — package.json is "${pkg.version}" but ` +
+      `wrangler.jsonc __APP_VERSION__ is "${defineValue}". Bump all three together: ` +
+      `package.json + the define block in wrangler.jsonc AND wrangler.local.jsonc.`,
+  );
+  process.exit(1);
 }
 
 console.log(`check-version: in sync (${pkg.version})`);

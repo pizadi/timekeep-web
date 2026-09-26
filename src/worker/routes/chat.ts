@@ -22,8 +22,13 @@ const PAGE_DEFAULT = 50;
 const PAGE_MAX = 200;
 
 interface MessageRow {
-  id: string; group_id: string; sender_id: string;
-  body: string; deleted_at: number | null; created_at: number; updated_at: number;
+  id: string;
+  group_id: string;
+  sender_id: string;
+  body: string;
+  deleted_at: number | null;
+  created_at: number;
+  updated_at: number;
 }
 
 function presenter(m: MessageRow, sender: { username: string; name: string }) {
@@ -34,13 +39,14 @@ function presenter(m: MessageRow, sender: { username: string; name: string }) {
     body: m.deleted_at ? '' : m.body,
     deleted_at: m.deleted_at,
     created_at: m.created_at,
-    updated_at: m.updated_at
+    updated_at: m.updated_at,
   };
 }
 
 async function senderName(env: Env, senderId: string): Promise<{ username: string; name: string }> {
   const u = await env.DB.prepare('SELECT username, name FROM users WHERE id = ?1')
-    .bind(senderId).first<{ username: string; name: string }>();
+    .bind(senderId)
+    .first<{ username: string; name: string }>();
   return u ?? { username: 'unknown', name: '' };
 }
 
@@ -56,8 +62,10 @@ chatRoutes.get('/groups/:id/messages', async (c) => {
   if (before && !ulidish.safeParse(before).success) return jsonError(422, 'validation', 'invalid cursor');
   const res = await c.env.DB.prepare(
     `SELECT * FROM group_messages WHERE group_id = ?1 ${before ? 'AND id < ?2' : ''}
-     ORDER BY id DESC LIMIT ${limit}`
-  ).bind(...(before ? [parsedId.data, before] : [parsedId.data])).all<MessageRow>();
+     ORDER BY id DESC LIMIT ${limit}`,
+  )
+    .bind(...(before ? [parsedId.data, before] : [parsedId.data]))
+    .all<MessageRow>();
   const rows = [...res.results].reverse(); // oldest → newest for rendering
   const senders = new Map<string, { username: string; name: string }>();
   const messages = [];
@@ -67,8 +75,8 @@ chatRoutes.get('/groups/:id/messages', async (c) => {
   }
   return c.json({
     messages,
-    has_more: res.results.length === limit,   // older pages exist when the page filled
-    server_now: Date.now()
+    has_more: res.results.length === limit, // older pages exist when the page filled
+    server_now: Date.now(),
   });
 });
 
@@ -87,30 +95,47 @@ chatRoutes.post('/groups/:id/messages', async (c) => {
   const now = Date.now();
   const id = ulid(now);
   const message: MessageRow = {
-    id, group_id: ctx.group.id, sender_id: me,
-    body: parsed.data.body, deleted_at: null, created_at: now, updated_at: now
+    id,
+    group_id: ctx.group.id,
+    sender_id: me,
+    body: parsed.data.body,
+    deleted_at: null,
+    created_at: now,
+    updated_at: now,
   };
   await c.env.DB.prepare(
     `INSERT INTO group_messages (id, group_id, sender_id, body, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?5)`
-  ).bind(id, ctx.group.id, me, message.body, now).run();
+     VALUES (?1, ?2, ?3, ?4, ?5, ?5)`,
+  )
+    .bind(id, ctx.group.id, me, message.body, now)
+    .run();
 
   const presented = presenter(message, { username: c.get('user').username, name: c.get('user').name });
-  await emitToGroupMembers(c.env, ctx.group.id,
+  await emitToGroupMembers(
+    c.env,
+    ctx.group.id,
     { type: 'group.message_created', actor: c.get('deviceId'), data: { group_id: ctx.group.id, message: presented } },
-    c.executionCtx);
+    c.executionCtx,
+  );
   return c.json({ message: presented, events: [] }, 201);
 });
 
 /** All current members see group chat events — including the sender's user
  *  bucket (their OTHER devices apply it; the acting device uses the response). */
 async function emitToGroupMembers(
-  env: Env, groupId: string,
-  draft: EventDraft, ctx?: { waitUntil(p: Promise<unknown>): void }
+  env: Env,
+  groupId: string,
+  draft: EventDraft,
+  ctx?: { waitUntil(p: Promise<unknown>): void },
 ): Promise<void> {
   const members = await env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
-    .bind(groupId).all<{ user_id: string }>();
-  await emitToUsers(env, members.results.map((m) => ({ userId: m.user_id, draft })), ctx);
+    .bind(groupId)
+    .all<{ user_id: string }>();
+  await emitToUsers(
+    env,
+    members.results.map((m) => ({ userId: m.user_id, draft })),
+    ctx,
+  );
 }
 
 // ---------- edit / delete ----------
@@ -125,18 +150,24 @@ chatRoutes.patch('/groups/:id/messages/:mid', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid message', parsed.error.flatten());
 
   const row = await c.env.DB.prepare(
-    'SELECT * FROM group_messages WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NULL'
-  ).bind(parsedMid.data, parsedId.data).first<MessageRow>();
+    'SELECT * FROM group_messages WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NULL',
+  )
+    .bind(parsedMid.data, parsedId.data)
+    .first<MessageRow>();
   if (!row) return jsonError(404, 'not_found', 'message not found');
   if (row.sender_id !== me) return jsonError(403, 'forbidden', 'only the sender can edit a message');
 
   const now = Date.now();
   await c.env.DB.prepare('UPDATE group_messages SET body = ?1, updated_at = ?2 WHERE id = ?3')
-    .bind(parsed.data.body, now, row.id).run();
+    .bind(parsed.data.body, now, row.id)
+    .run();
   const presented = presenter({ ...row, body: parsed.data.body, updated_at: now }, await senderName(c.env, me));
-  await emitToGroupMembers(c.env, parsedId.data,
+  await emitToGroupMembers(
+    c.env,
+    parsedId.data,
     { type: 'group.message_updated', actor: c.get('deviceId'), data: { group_id: parsedId.data, message: presented } },
-    c.executionCtx);
+    c.executionCtx,
+  );
   return c.json({ message: presented });
 });
 
@@ -148,8 +179,10 @@ chatRoutes.delete('/groups/:id/messages/:mid', async (c) => {
   await requireGroup(c.env, parsedId.data, me);
 
   const row = await c.env.DB.prepare(
-    'SELECT * FROM group_messages WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NULL'
-  ).bind(parsedMid.data, parsedId.data).first<MessageRow>();
+    'SELECT * FROM group_messages WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NULL',
+  )
+    .bind(parsedMid.data, parsedId.data)
+    .first<MessageRow>();
   if (!row) return jsonError(404, 'not_found', 'message not found');
   if (row.sender_id !== me) {
     // moderation: senders delete their own; others need the explicit permission
@@ -158,10 +191,14 @@ chatRoutes.delete('/groups/:id/messages/:mid', async (c) => {
 
   const now = Date.now();
   await c.env.DB.prepare('UPDATE group_messages SET deleted_at = ?1, body = ?2, updated_at = ?1 WHERE id = ?3')
-    .bind(now, '', row.id).run();
-  await emitToGroupMembers(c.env, parsedId.data,
+    .bind(now, '', row.id)
+    .run();
+  await emitToGroupMembers(
+    c.env,
+    parsedId.data,
     { type: 'group.message_deleted', actor: c.get('deviceId'), data: { group_id: parsedId.data, message_id: row.id } },
-    c.executionCtx);
+    c.executionCtx,
+  );
   return c.json({ ok: true });
 });
 
@@ -179,7 +216,9 @@ chatRoutes.post('/groups/:id/read', async (c) => {
 
   const at = parsed.data.at ?? Date.now();
   await c.env.DB.prepare(
-    'UPDATE group_members SET last_read_at = MAX(last_read_at, ?1) WHERE group_id = ?2 AND user_id = ?3'
-  ).bind(at, parsedId.data, me).run();
+    'UPDATE group_members SET last_read_at = MAX(last_read_at, ?1) WHERE group_id = ?2 AND user_id = ?3',
+  )
+    .bind(at, parsedId.data, me)
+    .run();
   return c.json({ ok: true });
 });

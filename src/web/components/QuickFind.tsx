@@ -9,18 +9,24 @@ export default function QuickFind({ onClose }: { onClose: () => void }) {
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const results = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const projHits = projects.filter((p) => !needle || p.name.toLowerCase().includes(needle))
+    const projHits = projects
+      .filter((p) => !needle || p.name.toLowerCase().includes(needle))
       .slice(0, 4)
       .map((p) => ({ kind: 'project' as const, id: p.id, name: p.name, color: p.color }));
-    const taskHits = tasks.filter((t) => !needle || t.name.toLowerCase().includes(needle))
+    const taskHits = tasks
+      .filter((t) => !needle || t.name.toLowerCase().includes(needle))
       .slice(0, 10)
       .map((t) => ({
-        kind: 'task' as const, id: t.id, name: t.name,
-        color: projects.find((p) => p.id === t.project_id)?.color ?? '#888'
+        kind: 'task' as const,
+        id: t.id,
+        name: t.name,
+        color: projects.find((p) => p.id === t.project_id)?.color ?? '#888',
       }));
     return [...projHits, ...taskHits];
   }, [q, projects, tasks]);
@@ -46,18 +52,31 @@ export default function QuickFind({ onClose }: { onClose: () => void }) {
           value={q}
           placeholder="Jump to project or task…"
           aria-label="Search projects and tasks"
-          onChange={(e) => { setQ(e.target.value); setActive(0); }}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setActive(0);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') onClose();
-            if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, results.length - 1)); }
-            if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setActive((a) => Math.min(a + 1, results.length - 1));
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setActive((a) => Math.max(a - 1, 0));
+            }
             if (e.key === 'Enter') commit(active);
           }}
         />
         {results.map((r, i) => (
-          <div key={`${r.kind}-${r.id}`} className={`item${i === active ? ' active' : ''}`}
+          <div
+            key={`${r.kind}-${r.id}`}
+            className={`item${i === active ? ' active' : ''}`}
             title={r.name}
-            onMouseEnter={() => setActive(i)} onClick={() => commit(i)}>
+            onMouseEnter={() => setActive(i)}
+            onClick={() => commit(i)}
+          >
             <span className="chip" style={{ background: r.color }} />
             <span className="grow">{r.name}</span>
             <span className="muted">{r.kind}</span>

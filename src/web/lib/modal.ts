@@ -16,10 +16,7 @@ import { useEffect, useRef } from 'react';
  * trigger button after a confirm meant the next Enter re-opened the dialog
  * (the "Enter doesn't close the prompt" trap).
  */
-export function useModalA11y(
-  onClose?: () => void,
-  shouldRestoreFocus: () => boolean = () => true
-) {
+export function useModalA11y(onClose?: () => void, shouldRestoreFocus: () => boolean = () => true) {
   const ref = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   const restoreRef = useRef(shouldRestoreFocus);
@@ -31,9 +28,10 @@ export function useModalA11y(
     const root = ref.current;
     if (!root) return;
     const prevFocus = document.activeElement as HTMLElement | null;
-    const focusables = () => Array.from(root.querySelectorAll<HTMLElement>(
-      'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
-    )).filter((el) => !el.hasAttribute('disabled') && el.offsetParent !== null);
+    const focusables = () =>
+      Array.from(
+        root.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.hasAttribute('disabled') && el.offsetParent !== null);
     focusables()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && onCloseRef.current) {
@@ -45,9 +43,15 @@ export function useModalA11y(
       if (e.key !== 'Tab') return;
       const list = focusables();
       if (list.length === 0) return;
-      const first = list[0]!, last = list[list.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      const first = list[0]!,
+        last = list[list.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKey, true);
     return () => {

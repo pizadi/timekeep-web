@@ -29,7 +29,7 @@ permissions:
 
 concurrency:
   group: production
-  cancel-in-progress: false   # queue deploys — never cancel one mid-run
+  cancel-in-progress: false # queue deploys — never cancel one mid-run
 
 jobs:
   deploy:

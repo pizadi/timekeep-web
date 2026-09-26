@@ -6,8 +6,15 @@ import type { WorkerType } from '../env';
 import { jsonError } from '../env';
 import { hashPassword, verifyPassword, randomToken, sha256Hex, getEmailSender, isCommonPassword } from '../auth';
 import {
-  requireAuth, setSessionCookie, clearSessionCookie, clientIp,
-  rateLimitHit, tooMany, rateRules, verifyTurnstile, issueCsrfCookie
+  requireAuth,
+  setSessionCookie,
+  clearSessionCookie,
+  clientIp,
+  rateLimitHit,
+  tooMany,
+  rateRules,
+  verifyTurnstile,
+  issueCsrfCookie,
 } from '../middleware';
 import { revokeHub } from '../events';
 
@@ -32,14 +39,18 @@ authRoutes.post('/auth/verify-email', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid token');
   const hash = await sha256Hex(parsed.data.token);
   const row = await c.env.DB.prepare(
-    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'verify'`
-  ).bind(hash).first<{ user_id: string; expires_at: number }>();
+    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'verify'`,
+  )
+    .bind(hash)
+    .first<{ user_id: string; expires_at: number }>();
   if (!row || row.expires_at < Date.now())
     return jsonError(422, 'invalid_token', 'this verification link is invalid or has expired');
   await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2')
-      .bind(Date.now(), row.user_id),
-    c.env.DB.prepare("DELETE FROM email_tokens WHERE token_hash = ?1").bind(hash)
+    c.env.DB.prepare('UPDATE users SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2').bind(
+      Date.now(),
+      row.user_id,
+    ),
+    c.env.DB.prepare('DELETE FROM email_tokens WHERE token_hash = ?1').bind(hash),
   ]);
   return c.json({ ok: true });
 });
@@ -59,13 +70,20 @@ authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
 
   const token = randomToken(32);
   await c.env.DB.prepare(
-    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'verify', ?3)`
-  ).bind(await sha256Hex(token), user.id, Date.now() + 48 * 3600_000).run();
+    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'verify', ?3)`,
+  )
+    .bind(await sha256Hex(token), user.id, Date.now() + 48 * 3600_000)
+    .run();
   const link = `${appUrl(c)}/verify?token=${token}`;
   try {
-    await getEmailSender(c.env).send(email, 'Verify your TimeKeep email',
-      `Verify your email address (valid 48 hours):\n${link}`);
-  } catch { /* logged by sender */ }
+    await getEmailSender(c.env).send(
+      email,
+      'Verify your TimeKeep email',
+      `Verify your email address (valid 48 hours):\n${link}`,
+    );
+  } catch {
+    /* logged by sender */
+  }
   return c.json({ ok: true });
 });
 
@@ -85,11 +103,17 @@ authRoutes.post('/auth/login', async (c) => {
 
   const user = await c.env.DB.prepare(
     `SELECT id, username, password_hash, role, active, must_change_password FROM users
-     WHERE username = ?1 OR email = ?1 COLLATE NOCASE`
-  ).bind(identifier).first<{
-    id: string; username: string; password_hash: string | null;
-    role: 'user' | 'admin'; active: 0 | 1; must_change_password: 0 | 1;
-  }>();
+     WHERE username = ?1 OR email = ?1 COLLATE NOCASE`,
+  )
+    .bind(identifier)
+    .first<{
+      id: string;
+      username: string;
+      password_hash: string | null;
+      role: 'user' | 'admin';
+      active: 0 | 1;
+      must_change_password: 0 | 1;
+    }>();
 
   let ok = false;
   if (user?.password_hash) {
@@ -111,23 +135,31 @@ authRoutes.post('/auth/login', async (c) => {
   const token = randomToken(32);
   await c.env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, token_hash, user_agent, ip, created_at, last_seen_at, expires_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`
-  ).bind(crypto.randomUUID(), user.id, await sha256Hex(token),
-    c.req.header('user-agent') ?? '', ip, now, now + SESSION_TTL_MS).run();
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      user.id,
+      await sha256Hex(token),
+      c.req.header('user-agent') ?? '',
+      ip,
+      now,
+      now + SESSION_TTL_MS,
+    )
+    .run();
   setSessionCookie(c, token, now + SESSION_TTL_MS);
   issueCsrfCookie(c);
   return c.json({
     ok: true,
     user_id: user.id,
     role: user.role,
-    must_change_password: !!user.must_change_password
+    must_change_password: !!user.must_change_password,
   });
 });
 
 // ---------- logout ----------
 authRoutes.post('/auth/logout', requireAuth, async (c) => {
-  await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1')
-    .bind(c.get('authSessionId')).run();
+  await c.env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?1').bind(c.get('authSessionId')).run();
   // audit S1 parity: this session's socket must die with its session row
   revokeHub(c.env, c.get('user').id, { only: c.get('authSessionId') });
   clearSessionCookie(c);
@@ -144,9 +176,9 @@ authRoutes.post('/auth/reset-request', async (c) => {
   if (!(await verifyTurnstile(c.env, parsed.data.turnstile, clientIp(c))))
     return jsonError(422, 'turnstile', 'captcha verification failed');
 
-  const user = await c.env.DB.prepare(
-    'SELECT id, email_verified_at, role, active FROM users WHERE email = ?1'
-  ).bind(email).first<{ id: string; email_verified_at: number | null; role: 'user' | 'admin'; active: 0 | 1 }>();
+  const user = await c.env.DB.prepare('SELECT id, email_verified_at, role, active FROM users WHERE email = ?1')
+    .bind(email)
+    .first<{ id: string; email_verified_at: number | null; role: 'user' | 'admin'; active: 0 | 1 }>();
 
   // Identical response AND comparable wall-clock time whether or not the account
   // exists (FR-A5 AC, audit #3): the send moved onto waitUntil so the real path
@@ -160,13 +192,21 @@ authRoutes.post('/auth/reset-request', async (c) => {
   }
   const token = randomToken(32);
   await c.env.DB.prepare(
-    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'reset', ?3)`
-  ).bind(await sha256Hex(token), user.id, Date.now() + 3600_000).run();
+    `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'reset', ?3)`,
+  )
+    .bind(await sha256Hex(token), user.id, Date.now() + 3600_000)
+    .run();
   const link = `${appUrl(c)}/reset?token=${token}`;
   c.executionCtx.waitUntil(
-    getEmailSender(c.env).send(email, 'Reset your TimeKeep password',
-      `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`)
-      .catch(() => { /* logged by sender */ })
+    getEmailSender(c.env)
+      .send(
+        email,
+        'Reset your TimeKeep password',
+        `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`,
+      )
+      .catch(() => {
+        /* logged by sender */
+      }),
   );
   // No reset link in the response even under EMAIL_DEV_MODE — the dev console
   // log is the dev surface; API responses must never carry live tokens.
@@ -184,8 +224,10 @@ authRoutes.post('/auth/reset-confirm', async (c) => {
 
   const hash = await sha256Hex(parsed.data.token);
   const row = await c.env.DB.prepare(
-    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'reset'`
-  ).bind(hash).first<{ user_id: string; expires_at: number }>();
+    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'reset'`,
+  )
+    .bind(hash)
+    .first<{ user_id: string; expires_at: number }>();
   if (!row || row.expires_at < Date.now())
     return jsonError(422, 'invalid_token', 'this reset link is invalid or has expired');
 
@@ -193,11 +235,16 @@ authRoutes.post('/auth/reset-confirm', async (c) => {
   const password_hash = await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS));
   // reset revokes ALL existing sessions (FR-A5)
   await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3')
-      .bind(password_hash, now, row.user_id),
-    c.env.DB.prepare("DELETE FROM email_tokens WHERE token_hash = ?1 OR user_id = ?2 AND purpose = 'reset'")
-      .bind(hash, row.user_id),
-    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(row.user_id)
+    c.env.DB.prepare('UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3').bind(
+      password_hash,
+      now,
+      row.user_id,
+    ),
+    c.env.DB.prepare("DELETE FROM email_tokens WHERE token_hash = ?1 OR user_id = ?2 AND purpose = 'reset'").bind(
+      hash,
+      row.user_id,
+    ),
+    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(row.user_id),
   ]);
   revokeHub(c.env, row.user_id);
   clearSessionCookie(c);

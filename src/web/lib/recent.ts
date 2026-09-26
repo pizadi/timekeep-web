@@ -15,10 +15,10 @@ export const RECENT_LIMIT = 6;
 /** Move `taskId` to the front with its newly tracked `subtaskId`, keeping the
  *  relative order of the other tasks. */
 export function mergeRecent(existing: RecentEntry[], taskId: string, subtaskId: string | null): RecentEntry[] {
-  return [
-    { task_id: taskId, subtask_id: subtaskId ?? null },
-    ...existing.filter((e) => e.task_id !== taskId)
-  ].slice(0, RECENT_LIMIT);
+  return [{ task_id: taskId, subtask_id: subtaskId ?? null }, ...existing.filter((e) => e.task_id !== taskId)].slice(
+    0,
+    RECENT_LIMIT,
+  );
 }
 
 /** Bootstrap payload → recency list. Reads the subtask-aware `recent` shape
@@ -29,7 +29,7 @@ export function recentFromBootstrap(b: any): RecentEntry[] {
       .filter((e: any) => e && typeof e.task_id === 'string')
       .map((e: any) => ({
         task_id: e.task_id as string,
-        subtask_id: typeof e.subtask_id === 'string' ? (e.subtask_id as string) : null
+        subtask_id: typeof e.subtask_id === 'string' ? (e.subtask_id as string) : null,
       }))
       .slice(0, RECENT_LIMIT);
   }

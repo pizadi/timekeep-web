@@ -15,7 +15,7 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'es2022',
     // keep the shell lean (NFR-1: < 200 KB gzip target for core JS)
-    chunkSizeWarningLimit: 700
+    chunkSizeWarningLimit: 700,
   },
   server: {
     port: 5173,
@@ -23,8 +23,8 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8787',
         changeOrigin: false,
-        ws: true
-      }
-    }
-  }
+        ws: true,
+      },
+    },
+  },
 });

@@ -38,13 +38,18 @@ export async function resolveProjectAccess(env: Env, userId: string, projectId: 
     project: p,
     isGroup: true,
     canEditTasks: ctx.perms.has('edit_tasks'),
-    canManage: ctx.perms.has('manage_projects')
+    canManage: ctx.perms.has('manage_projects'),
   };
 }
 
 export async function resolveTaskAccess(
-  env: Env, userId: string, taskId: string
-): Promise<{ task: Record<string, unknown> & { id: string; user_id: string; project_id: string }; access: ProjectAccess } | null> {
+  env: Env,
+  userId: string,
+  taskId: string,
+): Promise<{
+  task: Record<string, unknown> & { id: string; user_id: string; project_id: string };
+  access: ProjectAccess;
+} | null> {
   const t = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?1').bind(taskId).first<any>();
   if (!t) return null;
   const access = await resolveProjectAccess(env, userId, t.project_id);
@@ -68,6 +73,6 @@ export async function requireTaskAccess(env: Env, userId: string, taskId: string
 /** Throws unless the viewer may edit structure inside this project. */
 export async function requireEditTasks(env: Env, userId: string, projectId: string) {
   const a = await requireProjectAccess(env, userId, projectId);
-  if (!a.canEditTasks) throw new RuleError(403, 'forbidden', "missing permission: edit_tasks");
+  if (!a.canEditTasks) throw new RuleError(403, 'forbidden', 'missing permission: edit_tasks');
   return a;
 }

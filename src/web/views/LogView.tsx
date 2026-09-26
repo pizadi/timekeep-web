@@ -4,7 +4,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { store, useStore, pushToast, undoableDelete } from '../lib/store';
 import { api, ApiError } from '../lib/api';
-import { fmtDateTime, fmtClock, toLocalInput, fromLocalInput, parseLocalInput, fmtUtcOffset, localTimeWarning } from '../lib/time';
+import {
+  fmtDateTime,
+  fmtClock,
+  toLocalInput,
+  fromLocalInput,
+  parseLocalInput,
+  fmtUtcOffset,
+  localTimeWarning,
+} from '../lib/time';
 import { addDaysCivil, dayStartInstant } from '../../shared/time';
 import { LIMITS } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
@@ -13,10 +21,17 @@ import Dropdown, { ColorChip } from '../components/Dropdown';
 import { useBreakpoint } from '../lib/responsive';
 
 interface LogRow {
-  id: string; task_id: string; subtask_id?: string | null; subtask_name?: string | null;
-  started_at: number; ended_at: number | null;
-  source: 'timer' | 'manual' | 'pomodoro'; note: string;
-  task_name: string; project_name: string; project_color: string;
+  id: string;
+  task_id: string;
+  subtask_id?: string | null;
+  subtask_name?: string | null;
+  started_at: number;
+  ended_at: number | null;
+  source: 'timer' | 'manual' | 'pomodoro';
+  note: string;
+  task_name: string;
+  project_name: string;
+  project_color: string;
 }
 
 export default function LogView() {
@@ -68,7 +83,10 @@ export default function LogView() {
       if (seq !== loadSeq.current) return; // superseded
       // a delete on the last row of the last page would otherwise show an
       // empty viewport — step back one page instead
-      if (res.sessions.length === 0 && page > 1) { setPage(page - 1); return; }
+      if (res.sessions.length === 0 && page > 1) {
+        setPage(page - 1);
+        return;
+      }
       setRows(res.sessions);
       setTotal(res.total);
     } catch (e: any) {
@@ -78,8 +96,12 @@ export default function LogView() {
 
   // filter changes reset to page 1 (page itself is a dep of load, so a reset
   // + filter change batch into ONE refetch)
-  useEffect(() => { setPage(1); }, [projectId, taskId, q, from, to, reportsVersion]);
-  useEffect(() => { void load(); }, [projectId, taskId, q, from, to, page, reportsVersion, load]);
+  useEffect(() => {
+    setPage(1);
+  }, [projectId, taskId, q, from, to, reportsVersion]);
+  useEffect(() => {
+    void load();
+  }, [projectId, taskId, q, from, to, page, reportsVersion, load]);
 
   // heatmap drill-down (FR-R3): "click a day to inspect its sessions"
   useEffect(() => {
@@ -107,7 +129,7 @@ export default function LogView() {
         note: '',
         task_name: '',
         project_name: '',
-        project_color: ''
+        project_color: '',
       });
     };
     window.addEventListener('tk:edit-session', onEditSession);
@@ -120,7 +142,9 @@ export default function LogView() {
       setRows((prev) => prev.filter((r) => r.id !== row.id));
       store.bumpReports();
       undoableDelete('Session deleted — undo?', res.undo);
-    } catch (e: any) { pushToast('error', e.message); }
+    } catch (e: any) {
+      pushToast('error', e.message);
+    }
   }
 
   // audit: pagination replaced the old "Load more" accumulation (unbounded DOM) —
@@ -133,21 +157,36 @@ export default function LogView() {
       <div className="card filters-grid">
         <label className="field" style={{ marginBottom: 0 }}>
           <span>Project</span>
-          <Dropdown ariaLabel="Filter by project" value={projectId}
-            onChange={(v) => { setProjectId(v); setTaskId(''); }}
+          <Dropdown
+            ariaLabel="Filter by project"
+            value={projectId}
+            onChange={(v) => {
+              setProjectId(v);
+              setTaskId('');
+            }}
             options={[
               { value: '', label: 'All projects', icon: '☰' },
-              ...projects.map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> }))
-            ]} />
+              ...projects.map((p) => ({ value: p.id, label: p.name, icon: <ColorChip color={p.color} /> })),
+            ]}
+          />
         </label>
         <label className="field" style={{ marginBottom: 0 }}>
           <span>Task</span>
-          <Dropdown ariaLabel="Filter by task" value={taskId} onChange={(v) => setTaskId(v)}
+          <Dropdown
+            ariaLabel="Filter by task"
+            value={taskId}
+            onChange={(v) => setTaskId(v)}
             options={[
               { value: '', label: 'All tasks', icon: '☰' },
-              ...tasks.filter((t) => !projectId || t.project_id === projectId)
-                .map((t) => ({ value: t.id, label: t.name, icon: <ColorChip color={projects.find((p) => p.id === t.project_id)?.color ?? '#888'} /> }))
-            ]} />
+              ...tasks
+                .filter((t) => !projectId || t.project_id === projectId)
+                .map((t) => ({
+                  value: t.id,
+                  label: t.name,
+                  icon: <ColorChip color={projects.find((p) => p.id === t.project_id)?.color ?? '#888'} />,
+                })),
+            ]}
+          />
         </label>
         <label className="field" style={{ marginBottom: 0 }}>
           <span>From</span>
@@ -161,7 +200,9 @@ export default function LogView() {
           <span>Note search</span>
           <input className="input" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="contains…" />
         </label>
-        <button className="btn primary span-2" style={{ justifySelf: 'start' }} onClick={() => setEditing('new')}>＋ Manual session</button>
+        <button className="btn primary span-2" style={{ justifySelf: 'start' }} onClick={() => setEditing('new')}>
+          ＋ Manual session
+        </button>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -172,33 +213,64 @@ export default function LogView() {
               const isRunning = running?.id === r.id;
               const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
               return (
-                <div key={r.id} className="log-card" role="button" tabIndex={0}
+                <div
+                  key={r.id}
+                  className="log-card"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setEditing(r)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setEditing(r); }}>
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setEditing(r);
+                  }}
+                >
                   <div className="log-card-head">
                     <span className="chip" style={{ background: r.project_color }} aria-hidden />
-                    <span className="grow">{r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}</span>
+                    <span className="grow">
+                      {r.task_name}
+                      {r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
+                    </span>
                     {isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}m</b> : <b>{mins}m</b>}
                   </div>
                   <div className="log-card-meta">
                     <span>{r.project_name}</span>
                     <span aria-hidden>·</span>
-                    <span>{fmtDateTime(r.started_at, tz)} → {isRunning ? 'running…' : r.ended_at ? fmtClock(r.ended_at, tz) : '—'}</span>
+                    <span>
+                      {fmtDateTime(r.started_at, tz)} →{' '}
+                      {isRunning ? 'running…' : r.ended_at ? fmtClock(r.ended_at, tz) : '—'}
+                    </span>
                     <span className={`badge ${r.source}`}>{r.source}</span>
                   </div>
                   {r.note && <div className="log-card-note">{r.note}</div>}
                   <div className="log-card-actions">
-                    <button className="btn ghost small" aria-label={`Edit session on ${r.task_name}`}
-                      onClick={(e) => { e.stopPropagation(); setEditing(r); }}>✎ Edit</button>
-                    <button className="btn ghost small" aria-label={`Delete session on ${r.task_name}`}
+                    <button
+                      className="btn ghost small"
+                      aria-label={`Edit session on ${r.task_name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(r);
+                      }}
+                    >
+                      ✎ Edit
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      aria-label={`Delete session on ${r.task_name}`}
                       disabled={isRunning}
-                      onClick={(e) => { e.stopPropagation(); del(r); }}>🗑</button>
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        del(r);
+                      }}
+                    >
+                      🗑
+                    </button>
                   </div>
                 </div>
               );
             })}
             {rows.length === 0 && (
-              <div className="muted" style={{ textAlign: 'center', padding: 24 }}>No sessions match these filters.</div>
+              <div className="muted" style={{ textAlign: 'center', padding: 24 }}>
+                No sessions match these filters.
+              </div>
             )}
           </div>
         ) : (
@@ -206,8 +278,14 @@ export default function LogView() {
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>Project</th><th>Task</th><th>Start</th><th>End</th>
-                  <th className="num">Duration</th><th>Source</th><th>Note</th><th></th>
+                  <th>Project</th>
+                  <th>Task</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th className="num">Duration</th>
+                  <th>Source</th>
+                  <th>Note</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -215,48 +293,104 @@ export default function LogView() {
                   const isRunning = running?.id === r.id;
                   const mins = Math.round(((r.ended_at ?? Date.now()) - r.started_at) / 60000);
                   return (
-                    <tr key={r.id} tabIndex={0}
+                    <tr
+                      key={r.id}
+                      tabIndex={0}
                       onDoubleClick={() => setEditing(r)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') setEditing(r);
                         if (e.key === 'Delete' && !isRunning) del(r);
-                      }}>
-                      <td><span className="chip" style={{ background: r.project_color, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 }} />{r.project_name}</td>
+                      }}
+                    >
+                      <td>
+                        <span
+                          className="chip"
+                          style={{
+                            background: r.project_color,
+                            display: 'inline-block',
+                            verticalAlign: 'middle',
+                            marginRight: 6,
+                          }}
+                        />
+                        {r.project_name}
+                      </td>
                       <td title={r.subtask_name ? `${r.task_name} ▸ ${r.subtask_name}` : r.task_name}>
-                        {r.task_name}{r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
+                        {r.task_name}
+                        {r.subtask_name ? <span className="muted"> ▸ {r.subtask_name}</span> : ''}
                       </td>
                       <td>{fmtDateTime(r.started_at, tz)}</td>
-                      <td>{isRunning ? <span className="muted">running…</span> : r.ended_at ? fmtClock(r.ended_at, tz) : ''}</td>
-                      <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>
-                      <td><span className={`badge ${r.source}`}>{r.source}</span></td>
-                      <td className="muted" title={r.note || undefined} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.note}</td>
                       <td>
-                        <button className="btn ghost small" aria-label={`Edit session on ${r.task_name}`}
-                          onClick={() => setEditing(r)}>✎</button>
-                        <button className="btn ghost small" aria-label={`Delete session on ${r.task_name}`}
+                        {isRunning ? (
+                          <span className="muted">running…</span>
+                        ) : r.ended_at ? (
+                          fmtClock(r.ended_at, tz)
+                        ) : (
+                          ''
+                        )}
+                      </td>
+                      <td className="num">{isRunning ? <b style={{ color: 'var(--danger)' }}>+{mins}</b> : mins}m</td>
+                      <td>
+                        <span className={`badge ${r.source}`}>{r.source}</span>
+                      </td>
+                      <td
+                        className="muted"
+                        title={r.note || undefined}
+                        style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {r.note}
+                      </td>
+                      <td>
+                        <button
+                          className="btn ghost small"
+                          aria-label={`Edit session on ${r.task_name}`}
+                          onClick={() => setEditing(r)}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          className="btn ghost small"
+                          aria-label={`Delete session on ${r.task_name}`}
                           disabled={isRunning}
-                          onClick={() => del(r)}>🗑</button>
+                          onClick={() => del(r)}
+                        >
+                          🗑
+                        </button>
                       </td>
                     </tr>
                   );
                 })}
                 {rows.length === 0 && (
-                  <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 24 }}>
-                    No sessions match these filters.
-                  </td></tr>
+                  <tr>
+                    <td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 24 }}>
+                      No sessions match these filters.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
           </div>
         )}
         <div className="pagination">
-          <button className="btn small" disabled={page <= 1} onClick={() => setPage(1)} aria-label="First page">«</button>
-          <button className="btn small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
+          <button className="btn small" disabled={page <= 1} onClick={() => setPage(1)} aria-label="First page">
+            «
+          </button>
+          <button className="btn small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            ‹ Prev
+          </button>
           <span className="muted" style={{ fontSize: 12.5 }}>
             Page {page} of {totalPages} · {total} session{total === 1 ? '' : 's'}
           </span>
-          <button className="btn small" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
-          <button className="btn small" disabled={page >= totalPages} onClick={() => setPage(totalPages)} aria-label="Last page">»</button>
+          <button className="btn small" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+            Next ›
+          </button>
+          <button
+            className="btn small"
+            disabled={page >= totalPages}
+            onClick={() => setPage(totalPages)}
+            aria-label="Last page"
+          >
+            »
+          </button>
         </div>
       </div>
 
@@ -267,7 +401,11 @@ export default function LogView() {
           defaultTaskId={taskId || undefined}
           suggestEnd={editing === 'new' ? Date.now() : undefined}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load(); store.bumpReports(); }}
+          onSaved={() => {
+            setEditing(null);
+            void load();
+            store.bumpReports();
+          }}
         />
       )}
     </div>
@@ -281,7 +419,12 @@ function fmtDur(mins: number): string {
 
 /** Manual add/edit (FR-S4). Conflicts (same-task overlap) are listed inline. */
 function SessionEditor({
-  initial, tz, defaultTaskId, onClose, onSaved, suggestEnd
+  initial,
+  tz,
+  defaultTaskId,
+  onClose,
+  onSaved,
+  suggestEnd,
 }: {
   initial: Partial<LogRow> | null;
   tz: string;
@@ -297,15 +440,15 @@ function SessionEditor({
 
   const [taskId, setTaskId] = useState(initial?.task_id ?? defaultTaskId ?? selectedTaskId ?? tasks[0]?.id ?? '');
   const [taskText, setTaskText] = useState(
-    initial?.task_id ? (tasks.find((t) => t.id === initial.task_id)?.name ?? '') : ''
+    initial?.task_id ? (tasks.find((t) => t.id === initial.task_id)?.name ?? '') : '',
   );
   const [subtaskId, setSubtaskId] = useState<string | null>(initial?.subtask_id ?? null);
   const [start, setStart] = useState(toLocalInput(initial?.started_at ?? Date.now() - 3600_000, tz));
   // manual sessions are closed intervals: open-ended rows collide with the
   // running-session unique index
-  const [end, setEnd] = useState(initial?.ended_at
-    ? toLocalInput(initial.ended_at, tz)
-    : toLocalInput(suggestEnd ?? Date.now(), tz));
+  const [end, setEnd] = useState(
+    initial?.ended_at ? toLocalInput(initial.ended_at, tz) : toLocalInput(suggestEnd ?? Date.now(), tz),
+  );
   const [note, setNote] = useState(initial?.note ?? '');
   const [error, setError] = useState<{ message: string; conflicts?: any[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -314,9 +457,8 @@ function SessionEditor({
   // render-time tz echo (typing can momentarily leave the fields empty → null-safe)
   const startInstant = parseLocalInput(start, tz);
   const endInstant = parseLocalInput(end, tz);
-  const durationMin = startInstant !== null && endInstant !== null
-    ? Math.round((endInstant - startInstant) / 60000)
-    : 0;
+  const durationMin =
+    startInstant !== null && endInstant !== null ? Math.round((endInstant - startInstant) / 60000) : 0;
   const tzWarning = localTimeWarning(start, tz) ?? localTimeWarning(end, tz);
 
   const isEdit = !!initial?.id;
@@ -324,13 +466,18 @@ function SessionEditor({
   const filteredTasks = tasks; // picker is searchable below rather than pre-filtered
 
   // task picker groups: one per project (same coverage the old <datalist> had)
-  const taskGroups = useMemo(() => (
-    projects.map((p) => ({
-      label: p.name,
-      options: filteredTasks.filter((t) => t.project_id === p.id)
-        .map((t) => ({ value: t.id, label: t.name, color: p.color }))
-    })).filter((g) => g.options.length > 0)
-  ), [projects, filteredTasks]);
+  const taskGroups = useMemo(
+    () =>
+      projects
+        .map((p) => ({
+          label: p.name,
+          options: filteredTasks
+            .filter((t) => t.project_id === p.id)
+            .map((t) => ({ value: t.id, label: t.name, color: p.color })),
+        }))
+        .filter((g) => g.options.length > 0),
+    [projects, filteredTasks],
+  );
 
   /** Resolve typed text → task id: exact (case-insensitive), then unique contains. */
   const resolveTask = (text: string): string | null => {
@@ -364,7 +511,7 @@ function SessionEditor({
       subtask_id: taskId === finalTaskId ? (subtaskId ?? null) : null, // task changed → link resets
       started_at: fromLocalInput(start, tz),
       ended_at: fromLocalInput(end, tz),
-      note
+      note,
     };
     try {
       setBusy(true);
@@ -375,7 +522,9 @@ function SessionEditor({
       if (e instanceof ApiError && e.code === 'overlap') {
         setError({ message: e.message, conflicts: (e.details as any[]) ?? [] });
       } else setError({ message: e.message });
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -408,10 +557,16 @@ function SessionEditor({
             value={subtaskId ?? ''}
             onChange={(v) => setSubtaskId(v === '' ? null : v)}
             options={[
-              { value: '', label: `Whole task — ${tasks.find((t) => t.id === taskId)?.name ?? 'no subtask'}`, icon: '◂' },
-              ...subtasks.filter((sb) => sb.task_id === taskId)
-                .map((sb) => ({ value: sb.id, label: sb.name, icon: sb.done ? '☑' : '☐' }))
-            ]} />
+              {
+                value: '',
+                label: `Whole task — ${tasks.find((t) => t.id === taskId)?.name ?? 'no subtask'}`,
+                icon: '◂',
+              },
+              ...subtasks
+                .filter((sb) => sb.task_id === taskId)
+                .map((sb) => ({ value: sb.id, label: sb.name, icon: sb.done ? '☑' : '☐' })),
+            ]}
+          />
         </label>
         <div className="grid-2col">
           <label className="field">
@@ -422,18 +577,19 @@ function SessionEditor({
           </label>
           <label className="field">
             <span>End ({tz})</span>
-            <input className="input" type="datetime-local" value={end}
-              onChange={(e) => setEnd(e.target.value)} />
+            <input className="input" type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} />
           </label>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '-6px 0 10px' }}>
           {startInstant !== null && `Times are in ${tz} (${fmtUtcOffset(startInstant, tz)} at the start)`}
-          {startInstant !== null && endInstant !== null && (
-            durationMin < 0 ? ' · end is before the start' : ` · duration ${fmtDur(durationMin)}`
-          )}
+          {startInstant !== null &&
+            endInstant !== null &&
+            (durationMin < 0 ? ' · end is before the start' : ` · duration ${fmtDur(durationMin)}`)}
         </p>
         {tzWarning && (
-          <p className="muted" style={{ fontSize: 12, margin: '-4px 0 10px' }} role="status">⚠ {tzWarning}</p>
+          <p className="muted" style={{ fontSize: 12, margin: '-4px 0 10px' }} role="status">
+            ⚠ {tzWarning}
+          </p>
         )}
         <label className="field">
           <span>Note</span>
@@ -446,7 +602,9 @@ function SessionEditor({
             {error.conflicts?.length ? (
               <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
                 {error.conflicts.map((c) => (
-                  <li key={c.id}>{fmtDateTime(c.started_at, tz)} → {c.ended_at ? fmtClock(c.ended_at, tz) : 'running'}</li>
+                  <li key={c.id}>
+                    {fmtDateTime(c.started_at, tz)} → {c.ended_at ? fmtClock(c.ended_at, tz) : 'running'}
+                  </li>
                 ))}
               </ul>
             ) : null}
@@ -454,8 +612,12 @@ function SessionEditor({
         )}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : isEdit ? 'Save' : 'Add session'}</button>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy} onClick={save}>
+            {busy ? 'Saving…' : isEdit ? 'Save' : 'Add session'}
+          </button>
         </div>
       </div>
     </div>

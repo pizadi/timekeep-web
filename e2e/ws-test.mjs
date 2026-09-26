@@ -7,7 +7,7 @@ async function main() {
   const login = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier: 'dana', password: 'purple-marmalade-tuesday' })
+    body: JSON.stringify({ identifier: 'dana', password: 'purple-marmalade-tuesday' }),
   });
   const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
   console.log('login:', login.status, 'cookie set:', !!cookie);
@@ -31,7 +31,10 @@ async function main() {
         resolve();
       }
     };
-    ws.onerror = (e) => { clearTimeout(t); reject(new Error('ws error')); };
+    ws.onerror = (e) => {
+      clearTimeout(t);
+      reject(new Error('ws error'));
+    };
   });
 
   await new Promise((resolve, reject) => {
@@ -43,8 +46,9 @@ async function main() {
   // device A starts + stops a timer via REST
   await new Promise((r) => setTimeout(r, 500));
   await fetch(`${BASE}/api/timer/start`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie, 'x-device-id': 'deviceA' },
-    body: JSON.stringify({ task_id: task.id })
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie, 'x-device-id': 'deviceA' },
+    body: JSON.stringify({ task_id: task.id }),
   });
   await new Promise((r) => setTimeout(r, 700));
   await fetch(`${BASE}/api/timer/stop`, { method: 'POST', headers: { cookie, 'x-device-id': 'deviceA' } });
@@ -55,4 +59,7 @@ async function main() {
   console.log('PASS: hello received, cross-device timer events fanned out within latency budget');
 }
 
-main().catch((e) => { console.error('FAIL:', e.message); process.exit(1); });
+main().catch((e) => {
+  console.error('FAIL:', e.message);
+  process.exit(1);
+});

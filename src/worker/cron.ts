@@ -9,7 +9,16 @@ import { verifyPassword } from './auth';
 /** The password `migrations/0002_usernames_admin.sql` seeds for `admin`. */
 const SEEDED_ADMIN_PASSWORD = 'changemeasap';
 
-const DUMP_TABLES = ['users', 'projects', 'tasks', 'subtasks', 'task_dependencies', 'time_sessions', 'settings', 'layout'];
+const DUMP_TABLES = [
+  'users',
+  'projects',
+  'tasks',
+  'subtasks',
+  'task_dependencies',
+  'time_sessions',
+  'settings',
+  'layout',
+];
 const PAGE_SIZE = 5000;
 // R2 multipart parts must be ≥ 5 MiB except the final one.
 const PART_MIN_BYTES = 5 * 1024 * 1024;
@@ -21,7 +30,8 @@ const PART_MIN_BYTES = 5 * 1024 * 1024;
  * would drop them, truncating any table larger than one page).
  */
 export function tableScan(
-  table: string, cursor: { userId: string | null; id: string | null }
+  table: string,
+  cursor: { userId: string | null; id: string | null },
 ): { where: string; order: string; binds: (string | null)[] } {
   if (table === 'users') {
     return { where: 'id > ?1', order: 'id', binds: [cursor.id ?? ''] };
@@ -29,7 +39,7 @@ export function tableScan(
   return {
     where: '(user_id > ?1 OR (user_id = ?1 AND id > ?2))',
     order: 'user_id, id',
-    binds: [cursor.userId ?? '', cursor.id ?? '']
+    binds: [cursor.userId ?? '', cursor.id ?? ''],
   };
 }
 
@@ -44,15 +54,18 @@ export function tableScan(
  */
 export async function warnOnDefaultAdminPassword(env: Env): Promise<boolean> {
   const row = await env.DB.prepare(
-    "SELECT password_hash FROM users WHERE username = 'admin' AND role = 'admin' LIMIT 1"
+    "SELECT password_hash FROM users WHERE username = 'admin' AND role = 'admin' LIMIT 1",
   ).first<{ password_hash: string }>();
   if (!row?.password_hash) return false;
   if (!(await verifyPassword(SEEDED_ADMIN_PASSWORD, row.password_hash))) return false;
-  console.warn(JSON.stringify({
-    evt: 'SECURITY_admin_default_password',
-    at: Date.now(),
-    message: 'the admin account still uses the seeded default password — rotate it now (Settings → account, or the admin guide)'
-  }));
+  console.warn(
+    JSON.stringify({
+      evt: 'SECURITY_admin_default_password',
+      at: Date.now(),
+      message:
+        'the admin account still uses the seeded default password — rotate it now (Settings → account, or the admin guide)',
+    }),
+  );
   return true;
 }
 
@@ -60,11 +73,14 @@ export async function runDailyCron(env: Env): Promise<void> {
   const now = Date.now();
 
   // 0. operational signal: is the public default admin password still live?
-  await warnOnDefaultAdminPassword(env).catch(() => { /* never fail the cron for a check */ });
+  await warnOnDefaultAdminPassword(env).catch(() => {
+    /* never fail the cron for a check */
+  });
 
   // 1. prune sync_log older than 2 hours (delta window is ≥ 1 h, FR-N3)
   await env.DB.prepare('DELETE FROM sync_log WHERE created_at < ?1')
-    .bind(now - 2 * 3600_000).run();
+    .bind(now - 2 * 3600_000)
+    .run();
 
   // 2. GC: remove expired auth sessions, email tokens and rate-limit counters
   // so these tables don't grow monotonically.
@@ -89,7 +105,7 @@ export async function runDailyCron(env: Env): Promise<void> {
 async function dumpToR2(env: Env, now: number): Promise<void> {
   const day = new Date(now).toISOString().slice(0, 10);
   const mpu = await env.R2!.createMultipartUpload(`dumps/${day}/dump.jsonl`, {
-    customMetadata: { generated_at: String(now) }
+    customMetadata: { generated_at: String(now) },
   });
 
   try {
@@ -107,7 +123,8 @@ async function dumpToR2(env: Env, now: number): Promise<void> {
       for (;;) {
         const { where, order, binds } = tableScan(t, cursor);
         const res = await env.DB.prepare(`SELECT * FROM ${t} WHERE ${where} ORDER BY ${order} LIMIT ${PAGE_SIZE}`)
-          .bind(...binds).all(); // no .catch(() => null): a failed read aborts the dump loudly
+          .bind(...binds)
+          .all(); // no .catch(() => null): a failed read aborts the dump loudly
         if (res.results.length === 0) break;
         for (const r of res.results) {
           buf += (buf ? '\n' : '') + JSON.stringify({ t, row: r });
@@ -115,7 +132,10 @@ async function dumpToR2(env: Env, now: number): Promise<void> {
         buf += '\n';
         const last: any = res.results[res.results.length - 1];
         if (t === 'users') cursor.id = last.id;
-        else { cursor.userId = last.user_id; cursor.id = last.id ?? ''; }
+        else {
+          cursor.userId = last.user_id;
+          cursor.id = last.id ?? '';
+        }
         if (res.results.length < PAGE_SIZE) break;
         await maybeUploadPart();
       }

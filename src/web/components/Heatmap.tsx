@@ -8,7 +8,10 @@ import { useIsTouch } from '../lib/responsive';
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // indexed by getDay()
 
 export default function Heatmap({
-  days, year, timezone, weekStart = 1
+  days,
+  year,
+  timezone,
+  weekStart = 1,
 }: {
   days: { day: string; minutes: number }[];
   year: number;
@@ -36,9 +39,15 @@ export default function Heatmap({
     for (let d = new Date(start); d.getUTCFullYear() === year; d.setUTCDate(d.getUTCDate() + 1)) {
       const civil = d.toISOString().slice(0, 10);
       week.push(civil);
-      if (week.length === 7) { out.push(week); week = []; }
+      if (week.length === 7) {
+        out.push(week);
+        week = [];
+      }
     }
-    if (week.length) { while (week.length < 7) week.push(null); out.push(week); }
+    if (week.length) {
+      while (week.length < 7) week.push(null);
+      out.push(week);
+    }
     return out;
   }, [year, weekStart]);
 
@@ -54,40 +63,48 @@ export default function Heatmap({
         {/* one label per grid row — .heatmap flows one column per ISO week */}
         <div aria-hidden style={{ display: 'grid', gridTemplateRows: 'repeat(7, 13px)', gap: 3 }}>
           {DOW.map((_, i) => (
-            <div key={i} className="dow">{DOW[(weekStart + i) % 7]}</div>
+            <div key={i} className="dow">
+              {DOW[(weekStart + i) % 7]}
+            </div>
           ))}
         </div>
         <div className="heatmap" role="img" aria-label={`Tracked minutes per day for ${year}`}>
-          {weeks.map((week, wi) => (
-            week.map((civil, di) => civil === null
-              ? <div key={`${wi}-${di}`} className="cell" style={{ visibility: 'hidden' }} />
-              : <div
-                key={civil}
-                className="cell"
-                role="button"
-                tabIndex={0}
-                aria-label={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min; inspect sessions`}
-                title={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min`}
-                style={{ background: intensity(byDay.get(civil) ?? 0) }}
-                onMouseEnter={() => setHover(civil)}
-                onMouseLeave={() => setHover(null)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
+          {weeks.map((week, wi) =>
+            week.map((civil, di) =>
+              civil === null ? (
+                <div key={`${wi}-${di}`} className="cell" style={{ visibility: 'hidden' }} />
+              ) : (
+                <div
+                  key={civil}
+                  className="cell"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min; inspect sessions`}
+                  title={`${fmtDay(civil)} — ${byDay.get(civil) ?? 0} min`}
+                  style={{ background: intensity(byDay.get(civil) ?? 0) }}
+                  onMouseEnter={() => setHover(civil)}
+                  onMouseLeave={() => setHover(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      store.navigateToView('log'); // URL sync (audit: setView desynced the URL)
+                      window.dispatchEvent(new CustomEvent('tk:focus-day', { detail: civil }));
+                    }
+                  }}
+                  onClick={() => {
                     store.navigateToView('log'); // URL sync (audit: setView desynced the URL)
                     window.dispatchEvent(new CustomEvent('tk:focus-day', { detail: civil }));
-                  }
-                }}
-                onClick={() => {
-                  store.navigateToView('log'); // URL sync (audit: setView desynced the URL)
-                  window.dispatchEvent(new CustomEvent('tk:focus-day', { detail: civil }));
-                }}
-              />)
-          ))}
+                  }}
+                />
+              ),
+            ),
+          )}
         </div>
       </div>
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        {hover ? `${fmtDay(hover)} · ${byDay.get(hover) ?? 0} min (times shown in ${timezone})` : `${touch ? 'Tap' : 'Click'} a day to inspect its sessions`}
+        {hover
+          ? `${fmtDay(hover)} · ${byDay.get(hover) ?? 0} min (times shown in ${timezone})`
+          : `${touch ? 'Tap' : 'Click'} a day to inspect its sessions`}
       </div>
     </div>
   );

@@ -12,7 +12,12 @@ export function fmtClock(instant: number, tz: string): string {
 
 export function fmtDateTime(instant: number, tz: string): string {
   return new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz, year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    timeZone: tz,
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   }).format(instant);
 }
 
@@ -24,8 +29,13 @@ export function fmtDay(civil: string): string {
 /** Value for <input type="datetime-local"> in the user's timezone, defaulting to the last hour (FR-S4). */
 export function toLocalInput(instant: number, tz: string): string {
   const p = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
   }).formatToParts(new Date(instant));
   const g = (t: string) => p.find((x) => x.type === t)?.value ?? '00';
   return `${g('year')}-${g('month')}-${g('day')}T${g('hour')}:${g('minute')}`;
@@ -68,13 +78,20 @@ export function parseLocalInput(value: string, tz: string): number | null {
   try {
     const instant = fromLocalInput(value, tz);
     return Number.isFinite(instant) ? instant : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function guessOffset(instant: number, tz: string): number {
   const p = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit'
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   }).formatToParts(new Date(instant));
   const g = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0);
   return Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute')) - instant;
@@ -92,7 +109,9 @@ export function fmtUtcOffset(instant: number, tz: string): string {
 export function deviceTimezone(): string | null {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** Warning for a datetime-local value whose wall clock doesn't exist (DST
@@ -115,7 +134,8 @@ export function localTimeWarning(value: string, tz: string): string | null {
 /** Last N civil days (inclusive) in the user's timezone — range presets (FR-R1). */
 export function rangePreset(
   preset: 'today' | 'week' | 'month' | '30d' | { from: string; to: string },
-  tz: string, weekStartDow = 1
+  tz: string,
+  weekStartDow = 1,
 ): { from: string; to: string } {
   const now = nowMs();
   const today = civilOf(now, tz);
@@ -140,5 +160,7 @@ function weekStartCivil(today: string, weekStartDow: number): string {
 }
 
 export function civilOf(instant: number, tz: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(instant);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    instant,
+  );
 }

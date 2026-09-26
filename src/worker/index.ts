@@ -33,12 +33,14 @@ app.use('*', securityHeaders);
 // typeof guard keeps ad-hoc `wrangler deploy` calls (without the --define)
 // honest instead of crashing on a missing global.
 const APP_VERSION = typeof __APP_VERSION__ === 'undefined' ? 'dev' : __APP_VERSION__;
-app.get('/api/version', (c) => c.json({
-  name: 'timekeep-web',
-  version: APP_VERSION,
-  build: __BUILD_SHA__,
-  now: Date.now()
-}));
+app.get('/api/version', (c) =>
+  c.json({
+    name: 'timekeep-web',
+    version: APP_VERSION,
+    build: __BUILD_SHA__,
+    now: Date.now(),
+  }),
+);
 
 // WebSocket upgrade → user's UserHub. The Worker re-verifies the session cookie
 // AND applies the same gates as requireAuth (§5.6: "WebSocket upgrades re-verify
@@ -63,19 +65,22 @@ app.get('/api/ws', async (c) => {
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([A-Za-z0-9]+)`));
   if (!match) return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
   const hash = await sha256Hex(match[1]!);
-  const row = await c.env.DB.prepare(
-    'SELECT id, user_id, expires_at FROM auth_sessions WHERE token_hash = ?1'
-  ).bind(hash).first<{ id: string; user_id: string; expires_at: number }>();
+  const row = await c.env.DB.prepare('SELECT id, user_id, expires_at FROM auth_sessions WHERE token_hash = ?1')
+    .bind(hash)
+    .first<{ id: string; user_id: string; expires_at: number }>();
   if (!row || row.expires_at < Date.now())
     return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
   // same gates as requireAuth: a deactivated or forced-password-change account
   // must not be able to stream events over a socket (audit S2)
   const user = await c.env.DB.prepare('SELECT active, must_change_password FROM users WHERE id = ?1')
-    .bind(row.user_id).first<{ active: 0 | 1; must_change_password: 0 | 1 }>();
-  if (!user || !user.active)
-    return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
+    .bind(row.user_id)
+    .first<{ active: 0 | 1; must_change_password: 0 | 1 }>();
+  if (!user || !user.active) return c.json({ error: { code: 'unauthenticated', message: 'sign in required' } }, 401);
   if (user.must_change_password)
-    return c.json({ error: { code: 'password_change_required', message: 'change your password before continuing' } }, 403);
+    return c.json(
+      { error: { code: 'password_change_required', message: 'change your password before continuing' } },
+      403,
+    );
 
   const device = sanitizeDevice(new URL(c.req.url).searchParams.get('device'));
   const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(row.user_id));
@@ -83,39 +88,44 @@ app.get('/api/ws', async (c) => {
   // session's sockets (audit S1); x-internal marks the request as Worker-internal
   const headers = new Headers(c.req.raw.headers);
   headers.set('x-internal', '1');
-  return stub.fetch(new Request(`https://do/ws?device=${encodeURIComponent(device)}&sid=${encodeURIComponent(row.id)}`, {
-    headers
-  }));
+  return stub.fetch(
+    new Request(`https://do/ws?device=${encodeURIComponent(device)}&sid=${encodeURIComponent(row.id)}`, {
+      headers,
+    }),
+  );
 });
 
 // all API routes: CSRF guard on state-changing methods (NFR-3)
 app.use('/api/*', csrfGuard);
 
-app.route('/api', authRoutes);      // login/logout/reset (own rate limits + Turnstile)
-app.route('/api', meRoutes);        // requireAuth inside
-app.route('/api', adminRoutes);     // user management, requireAdmin inside
-app.route('/api', projectRoutes);   // requireAuth inside
+app.route('/api', authRoutes); // login/logout/reset (own rate limits + Turnstile)
+app.route('/api', meRoutes); // requireAuth inside
+app.route('/api', adminRoutes); // user management, requireAdmin inside
+app.route('/api', projectRoutes); // requireAuth inside
 app.route('/api', taskRoutes);
 app.route('/api', sessionRoutes);
 app.route('/api', timerRoutes);
 app.route('/api', reportRoutes);
 app.route('/api', exportRoutes);
-app.route('/api', friendRoutes);     // friends, friend-visible projects, presence
-app.route('/api', groupRoutes);      // groups, membership, invites/links
-app.route('/api', chatRoutes);       // group chat (member-gated, fan-out delivery)
-app.route('/api', miscRoutes);      // /bootstrap, /settings, /layout, /sync, /version
+app.route('/api', friendRoutes); // friends, friend-visible projects, presence
+app.route('/api', groupRoutes); // groups, membership, invites/links
+app.route('/api', chatRoutes); // group chat (member-gated, fan-out delivery)
+app.route('/api', miscRoutes); // /bootstrap, /settings, /layout, /sync, /version
 
 // error envelope {error:{code,message,details?}} (§5.3 conventions)
 app.onError((err, c) => {
   const anyErr = err as any;
   if (anyErr?.status && anyErr?.code) {
-    return c.json({
-      error: {
-        code: anyErr.code,
-        message: anyErr.message,
-        ...(anyErr.details !== undefined ? { details: anyErr.details } : {})
-      }
-    }, anyErr.status);
+    return c.json(
+      {
+        error: {
+          code: anyErr.code,
+          message: anyErr.message,
+          ...(anyErr.details !== undefined ? { details: anyErr.details } : {}),
+        },
+      },
+      anyErr.status,
+    );
   }
   console.error(JSON.stringify({ evt: 'unhandled_error', path: c.req.path, message: String(err?.message ?? err) }));
   return c.json({ error: { code: 'internal', message: 'internal server error' } }, 500);
@@ -137,5 +147,5 @@ export default {
 
   async scheduled(_event: ScheduledController, env: WorkerType['Bindings'], _ctx: ExecutionContext): Promise<void> {
     await runDailyCron(env);
-  }
+  },
 };

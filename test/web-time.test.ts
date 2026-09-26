@@ -4,12 +4,10 @@
 // Regression: the old fixed-iteration guess loop drifted ~4h per step for gap
 // times, saving a session hours away from what was typed.
 import { describe, it, expect } from 'vitest';
-import {
-  toLocalInput, fromLocalInput, parseLocalInput, fmtUtcOffset, localTimeWarning
-} from '../src/web/lib/time';
+import { toLocalInput, fromLocalInput, parseLocalInput, fmtUtcOffset, localTimeWarning } from '../src/web/lib/time';
 
-const TEHRAN = 'Asia/Tehran';        // +03:30, no DST since 2022
-const KATHMANDU = 'Asia/Kathmandu';  // +05:45
+const TEHRAN = 'Asia/Tehran'; // +03:30, no DST since 2022
+const KATHMANDU = 'Asia/Kathmandu'; // +05:45
 const NEW_YORK = 'America/New_York'; // classic US transitions
 
 describe('toLocalInput / fromLocalInput round-trips', () => {

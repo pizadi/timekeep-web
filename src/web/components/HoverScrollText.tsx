@@ -6,7 +6,11 @@ import type { ReactNode } from 'react';
  * fine-pointer device. Touch devices keep the existing two-line clamp, and
  * reduced-motion users can still scroll the label manually.
  */
-export default function HoverScrollText({ children, className = '', title }: {
+export default function HoverScrollText({
+  children,
+  className = '',
+  title,
+}: {
   children: ReactNode;
   className?: string;
   title?: string;

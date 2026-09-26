@@ -61,14 +61,14 @@ setup, configuration reference, upgrades and rollback:
 
 ## Documentation
 
-| Doc | Contents |
-|---|---|
-| [docs/development.md](docs/development.md) | local dev, migrations, versioning & release process |
-| [docs/architecture.md](docs/architecture.md) | how the system works, in depth |
-| [docs/testing.md](docs/testing.md) | unit tests + the e2e suite (incl. CI) |
-| [docs/deployment.md](docs/deployment.md) | Cloudflare setup, config & secrets, upgrades, rollback |
-| [docs/admin-guide.md](docs/admin-guide.md) | running an instance: users, groups, backups |
-| [docs/requirement-coverage.md](docs/requirement-coverage.md) | spec coverage & known trade-offs |
+| Doc                                                          | Contents                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| [docs/development.md](docs/development.md)                   | local dev, migrations, versioning & release process    |
+| [docs/architecture.md](docs/architecture.md)                 | how the system works, in depth                         |
+| [docs/testing.md](docs/testing.md)                           | unit tests + the e2e suite (incl. CI)                  |
+| [docs/deployment.md](docs/deployment.md)                     | Cloudflare setup, config & secrets, upgrades, rollback |
+| [docs/admin-guide.md](docs/admin-guide.md)                   | running an instance: users, groups, backups            |
+| [docs/requirement-coverage.md](docs/requirement-coverage.md) | spec coverage & known trade-offs                       |
 
 ## License
 

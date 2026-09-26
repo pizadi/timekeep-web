@@ -26,15 +26,16 @@ const sources = walk(WEB_DIR)
 describe('no HTML-injection sinks (CSP precondition)', () => {
   it('finds no dangerouslySetInnerHTML / innerHTML / outerHTML in the SPA', () => {
     const offenders = sources.filter((s) =>
-      /dangerouslySetInnerHTML|\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write/.test(s.text)
+      /dangerouslySetInnerHTML|\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write/.test(s.text),
     );
     expect(offenders.map((s) => s.file)).toEqual([]);
   });
 
   it('still renders text through JSX children (not string HTML)', () => {
-    // a positive control: the chat body renders {m.body} as a child
+    // a positive control: the chat body renders {m.body} as a child. Whitespace
+    // between the tag and the expression is Prettier's business, so match loosely.
     const chat = sources.find((s) => s.file.endsWith('ChatDock.tsx'))!;
-    expect(chat.text).toMatch(/className="msg-body"[^]*?>\{m\.body\}<\/span>/);
+    expect(chat.text).toMatch(/className="msg-body"[\s\S]*?\{m\.body\}[\s\S]*?<\/span>/);
   });
 });
 
@@ -42,7 +43,7 @@ describe('CSP header', () => {
   const csp = readFileSync('src/worker/middleware.ts', 'utf8');
 
   it("declares style-src-elem 'self' (blocks an injected <style> block)", () => {
-    expect(csp).toContain("\"style-src-elem 'self'\"");
+    expect(csp).toContain('"style-src-elem \'self\'"');
   });
 
   it("keeps 'unsafe-inline' for style attributes only, with the trade-off documented", () => {
@@ -52,8 +53,14 @@ describe('CSP header', () => {
   });
 
   it('keeps the other strict directives', () => {
-    for (const directive of ["default-src 'self'", "object-src 'none'", "base-uri 'none'",
-      "frame-ancestors 'none'", "form-action 'self'", "script-src 'self'"]) {
+    for (const directive of [
+      "default-src 'self'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "script-src 'self'",
+    ]) {
       expect(csp).toContain(directive);
     }
   });

@@ -44,7 +44,10 @@ export interface SessionTimeCheck {
  *  - started_at ≤ now + 5 min (both endpoints)
  */
 export function checkSessionTimes(
-  startedAt: number, endedAt: number | null, accountCreatedAt: number, now: number
+  startedAt: number,
+  endedAt: number | null,
+  accountCreatedAt: number,
+  now: number,
 ): SessionTimeCheck {
   if (!Number.isFinite(startedAt) || (endedAt !== null && !Number.isFinite(endedAt)))
     return { ok: false, problem: 'invalid timestamps' };
@@ -52,7 +55,8 @@ export function checkSessionTimes(
   if (startedAt < accountCreatedAt) return { ok: false, problem: 'start is before the account existed' };
   const maxFuture = now + SESSION_RULES.futureToleranceMs;
   if (startedAt > maxFuture) return { ok: false, problem: 'start is more than 5 minutes in the future' };
-  if (endedAt !== null && endedAt > maxFuture) return { ok: false, problem: 'end is more than 5 minutes in the future' };
+  if (endedAt !== null && endedAt > maxFuture)
+    return { ok: false, problem: 'end is more than 5 minutes in the future' };
   return { ok: true };
 }
 
@@ -63,7 +67,11 @@ export function checkSessionTimes(
  * Adding A depends_on B is illegal when A is reachable from B via depends_on edges.
  * Returns the path [target, …, source] (the existing chain that would be closed).
  */
-export function findCyclePath(edges: { task_id: string; depends_on_id: string }[], source: string, target: string): string[] | null {
+export function findCyclePath(
+  edges: { task_id: string; depends_on_id: string }[],
+  source: string,
+  target: string,
+): string[] | null {
   // BFS from target following depends_on edges; if we reach source → cycle.
   const adj = new Map<string, string[]>();
   for (const e of edges) {
@@ -79,11 +87,17 @@ export function findCyclePath(edges: { task_id: string; depends_on_id: string }[
       // reconstruct path target → … → source
       const path: string[] = [];
       let node: string | undefined = source;
-      while (node && node !== '') { path.unshift(node); node = prev.get(node); }
+      while (node && node !== '') {
+        path.unshift(node);
+        node = prev.get(node);
+      }
       return path; // [target, …, source]
     }
     for (const next of adj.get(cur) ?? []) {
-      if (!prev.has(next)) { prev.set(next, cur); queue.push(next); }
+      if (!prev.has(next)) {
+        prev.set(next, cur);
+        queue.push(next);
+      }
     }
   }
   return null;

@@ -41,17 +41,35 @@ sessionRoutes.get('/sessions', async (c) => {
   const note = c.req.query('q');
   // page-based pagination: 1-based page + clamped page size
   const page = Math.max(1, Math.floor(Number(c.req.query('page') ?? 1)) || 1);
-  const pageSize = Math.min(LIST_LIMIT, Math.max(1, Math.floor(Number(c.req.query('page_size') ?? LIST_LIMIT)) || LIST_LIMIT));
+  const pageSize = Math.min(
+    LIST_LIMIT,
+    Math.max(1, Math.floor(Number(c.req.query('page_size') ?? LIST_LIMIT)) || LIST_LIMIT),
+  );
 
   const where: string[] = ['s.user_id = ?1'];
   const binds: unknown[] = [userId];
   let n = 1;
-  if (taskId) { where.push(`s.task_id = ?${++n}`); binds.push(taskId); }
-  if (projectId) { where.push(`t.project_id = ?${++n}`); binds.push(projectId); }
+  if (taskId) {
+    where.push(`s.task_id = ?${++n}`);
+    binds.push(taskId);
+  }
+  if (projectId) {
+    where.push(`t.project_id = ?${++n}`);
+    binds.push(projectId);
+  }
   // running rows (ended_at IS NULL) have no end — the "from" floor never excludes them
-  if (from !== null) { where.push(`(s.ended_at IS NULL OR s.ended_at >= ?${++n})`); binds.push(from); }
-  if (to !== null) { where.push(`s.started_at < ?${++n}`); binds.push(to); }
-  if (note) { where.push(`s.note LIKE ?${++n} ESCAPE '\\'`); binds.push(escapeLike(note)); }
+  if (from !== null) {
+    where.push(`(s.ended_at IS NULL OR s.ended_at >= ?${++n})`);
+    binds.push(from);
+  }
+  if (to !== null) {
+    where.push(`s.started_at < ?${++n}`);
+    binds.push(to);
+  }
+  if (note) {
+    where.push(`s.note LIKE ?${++n} ESCAPE '\\'`);
+    binds.push(escapeLike(note));
+  }
 
   const whereSql = where.join(' AND ');
   const totalRow = await c.env.DB.prepare(
@@ -59,8 +77,10 @@ sessionRoutes.get('/sessions', async (c) => {
      FROM time_sessions s
      JOIN tasks t ON t.id = s.task_id
      JOIN projects p ON p.id = t.project_id
-     WHERE ${whereSql}`
-  ).bind(...binds).first<{ n: number }>();
+     WHERE ${whereSql}`,
+  )
+    .bind(...binds)
+    .first<{ n: number }>();
   const total = Number(totalRow?.n ?? 0);
 
   const rows = await c.env.DB.prepare(
@@ -72,14 +92,16 @@ sessionRoutes.get('/sessions', async (c) => {
      JOIN projects p ON p.id = t.project_id
      WHERE ${whereSql}
      ORDER BY s.started_at DESC, s.id DESC
-     LIMIT ?${++n} OFFSET ?${++n}`
-  ).bind(...binds, pageSize, (page - 1) * pageSize).all<any>();
+     LIMIT ?${++n} OFFSET ?${++n}`,
+  )
+    .bind(...binds, pageSize, (page - 1) * pageSize)
+    .all<any>();
 
   return c.json({
     sessions: rows.results,
     total,
     page,
-    page_size: pageSize
+    page_size: pageSize,
   });
 });
 
@@ -93,14 +115,17 @@ sessionRoutes.post('/sessions', async (c) => {
   const task = await c.env.DB.prepare(
     `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t
      JOIN projects p ON p.id = t.project_id
-     WHERE t.id = ?1 AND (t.user_id = ?2 OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
-  ).bind(task_id, userId).first<any>();
+     WHERE t.id = ?1 AND (t.user_id = ?2 OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
+  )
+    .bind(task_id, userId)
+    .first<any>();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   if (task.archived) return jsonError(422, 'archived', 'this project is archived — new sessions are blocked on it');
   if (subtask_id) {
     // the subtask must belong to the session's task (task scope already checked)
     const sub = await c.env.DB.prepare('SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2')
-      .bind(subtask_id, task_id).first();
+      .bind(subtask_id, task_id)
+      .first();
     if (!sub) return jsonError(422, 'invalid_subtask', 'the subtask does not belong to this task');
   }
 
@@ -115,19 +140,23 @@ sessionRoutes.post('/sessions', async (c) => {
   if (conflicts.length > 0) throw conflictError(conflicts); // formatted by app.onError
 
   const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM time_sessions WHERE user_id = ?1')
-    .bind(userId).first<{ n: number }>();
+    .bind(userId)
+    .first<{ n: number }>();
   if (Number(count?.n ?? 0) >= LIMITS.sessionsPerUser)
     return jsonError(422, 'limit', 'limit reached: at most 200000 sessions per account');
 
   const id = ulid(now);
   await c.env.DB.prepare(
     `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8)`
-  ).bind(id, userId, task_id, started_at, ended_at, note, now, subtask_id ?? null).run();
+     VALUES (?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8)`,
+  )
+    .bind(id, userId, task_id, started_at, ended_at, note, now, subtask_id ?? null)
+    .run();
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(id).first();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'session.created', actor: c.get('deviceId'), data: { session } }] as EventDraft[]);
+  const evs = await appendEvents(c.env, userId, [
+    { type: 'session.created', actor: c.get('deviceId'), data: { session } },
+  ] as EventDraft[]);
   notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs }, 201);
 });
@@ -136,7 +165,8 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const userId = c.get('user').id;
   const user = c.get('user');
   const existing = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
+    .bind(c.req.param('id'), userId)
+    .first<any>();
   if (!existing) return jsonError(404, 'not_found', 'session not found');
   await assertNotRunning(c.env, userId, existing.id); // FR-S6: stop or switch first
 
@@ -152,12 +182,15 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
 
   const task = await c.env.DB.prepare(
     `SELECT t.id FROM tasks t WHERE t.id = ?1
-       AND (t.user_id = ?2 OR t.project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2)))`
-  ).bind(taskId, userId).first();
+       AND (t.user_id = ?2 OR t.project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2)))`,
+  )
+    .bind(taskId, userId)
+    .first();
   if (!task) return jsonError(404, 'not_found', 'task not found');
   if (subtaskId) {
     const sub = await c.env.DB.prepare('SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2')
-      .bind(subtaskId, taskId).first();
+      .bind(subtaskId, taskId)
+      .first();
     if (!sub) return jsonError(422, 'invalid_subtask', 'the subtask does not belong to this task');
   }
   const now = Date.now();
@@ -171,12 +204,15 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
 
   await c.env.DB.prepare(
     `UPDATE time_sessions SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
-     WHERE id = ?7 AND user_id = ?8`
-  ).bind(taskId, subtaskId, started, ended, note, now, existing.id, userId).run();
+     WHERE id = ?7 AND user_id = ?8`,
+  )
+    .bind(taskId, subtaskId, started, ended, note, now, existing.id, userId)
+    .run();
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(existing.id).first();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'session.updated', actor: c.get('deviceId'), data: { session } }] as EventDraft[]);
+  const evs = await appendEvents(c.env, userId, [
+    { type: 'session.updated', actor: c.get('deviceId'), data: { session } },
+  ] as EventDraft[]);
   notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs });
 });
@@ -184,13 +220,14 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
 sessionRoutes.delete('/sessions/:id', async (c) => {
   const userId = c.get('user').id;
   const existing = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1 AND user_id = ?2')
-    .bind(c.req.param('id'), userId).first<any>();
+    .bind(c.req.param('id'), userId)
+    .first<any>();
   if (!existing) return jsonError(404, 'not_found', 'session not found');
   await assertNotRunning(c.env, userId, existing.id);
-  await c.env.DB.prepare('DELETE FROM time_sessions WHERE id = ?1 AND user_id = ?2')
-    .bind(existing.id, userId).run();
-  const evs = await appendEvents(c.env, userId,
-    [{ type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } }] as EventDraft[]);
+  await c.env.DB.prepare('DELETE FROM time_sessions WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId).run();
+  const evs = await appendEvents(c.env, userId, [
+    { type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } },
+  ] as EventDraft[]);
   notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ deleted: true, undo: { sessions: [existing] }, events: evs });
 });

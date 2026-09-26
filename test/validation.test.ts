@@ -1,12 +1,14 @@
 // Pure validators (§5.5): DAG cycles, password policy, pomodoro config ranges,
 // session time rules, and the import/restore row schemas (audit S3).
 import { describe, it, expect } from 'vitest';
+import { findCyclePath, passwordProblem, pomoProblem, checkSessionTimes } from '../src/shared/validation';
 import {
-  findCyclePath, passwordProblem, pomoProblem, checkSessionTimes
-} from '../src/shared/validation';
-import {
-  sessionCreateSchema, sessionPatchSchema, restoreSchema,
-  importTaskRow, importProjectRow, importSessionRow
+  sessionCreateSchema,
+  sessionPatchSchema,
+  restoreSchema,
+  importTaskRow,
+  importProjectRow,
+  importSessionRow,
 } from '../src/worker/validators';
 import { LIMITS } from '../src/shared/constants';
 
@@ -16,7 +18,7 @@ const ULID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 describe('DAG cycle prevention (FR-M4)', () => {
   const edges = [
     { task_id: 'B', depends_on_id: 'A' }, // B depends on A
-    { task_id: 'C', depends_on_id: 'B' }  // C depends on B
+    { task_id: 'C', depends_on_id: 'B' }, // C depends on B
   ];
   it('rejects an edge that closes a cycle and names the chain', () => {
     // edges: B depends_on A, C depends_on B. Adding "A depends_on C" closes A→C→B→A.
@@ -109,7 +111,13 @@ describe('import/restore row schemas (audit S3)', () => {
 describe('restore payload caps', () => {
   it('accepts an undo payload of well-formed rows at the schema caps', () => {
     const sessions = Array.from({ length: 5001 }, (_, i) => ({
-      id: ULID, task_id: ULID, started_at: i, ended_at: i + 1, note: '', source: 'manual', created_at: i
+      id: ULID,
+      task_id: ULID,
+      started_at: i,
+      ended_at: i + 1,
+      note: '',
+      source: 'manual',
+      created_at: i,
     }));
     const r = restoreSchema.safeParse({ sessions });
     expect(r.success).toBe(true);
@@ -117,7 +125,7 @@ describe('restore payload caps', () => {
   it('rejects payloads over the total-row guard', () => {
     const row = { id: ULID, task_id: ULID, name: 'x', done: 0, position: 0, created_at: 0 };
     const r = restoreSchema.safeParse({
-      subtasks: Array.from({ length: LIMITS.restoreMaxRows }, () => row)
+      subtasks: Array.from({ length: LIMITS.restoreMaxRows }, () => row),
     });
     expect(r.success).toBe(false);
   });

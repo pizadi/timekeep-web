@@ -12,14 +12,14 @@
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8788/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = 'a-very-long-admin-password-123';
-const SEEDED_PASSWORD = 'changemeasap';   // what a fresh migration seeds
+const SEEDED_PASSWORD = 'changemeasap'; // what a fresh migration seeds
 // 5, not the 300 default: the local dev proxy answers a write in ~1.2 s, so a
 // 300-write burst would take minutes AND straddle the 60 s window (neither
 // window exceeding the limit). At 5 the 6th write trips it within ~7 s — fast
 // and timing-proof. The default itself is a config value; this proves the
 // mechanism. run-e2e.sh starts the instance with --var RL_WRITE_USER:5.
 const LIMIT = Number(process.env.RL_WRITE_USER ?? 5);
-const BURST = LIMIT + 15;                 // headroom for skipped local flakes
+const BURST = LIMIT + 15; // headroom for skipped local flakes
 
 const USER = `wl${Date.now().toString(36)}`;
 const PASS = 'a-very-long-password-123';
@@ -39,21 +39,26 @@ async function call(jar, device, method, path, data) {
       'x-device-id': device,
       'x-csrf-token': jar.csrf ?? '',
       ...(jar.cookies?.length ? { cookie: jar.cookies.join('; ') } : {}),
-      ...(data === undefined ? {} : { 'content-type': 'application/json' })
+      ...(data === undefined ? {} : { 'content-type': 'application/json' }),
     },
     body: data === undefined ? undefined : JSON.stringify(data),
-    redirect: 'manual'
+    redirect: 'manual',
   });
   for (const c of res.headers.getSetCookie?.() ?? []) {
     const pair = c.split(';')[0];
     const eq = pair.indexOf('=');
-    const name = pair.slice(0, eq), value = pair.slice(eq + 1);
+    const name = pair.slice(0, eq),
+      value = pair.slice(eq + 1);
     if (name === 'tk_csrf') jar.csrf = value;
     jar.cookies = (jar.cookies ?? []).filter((p) => !p.startsWith(`${name}=`));
     jar.cookies.push(`${name}=${value}`);
   }
   let body = null;
-  try { body = await res.json(); } catch { /* 204 / empty body */ }
+  try {
+    body = await res.json();
+  } catch {
+    /* 204 / empty body */
+  }
   return { status: res.status, body, headers: res.headers };
 }
 
@@ -63,7 +68,10 @@ const ui = { cookies: [] };
 console.log('== admin: sign in, clear the forced-rotate gate, create a throwaway user ==');
 let adminIn = await call(adm, 'wl-adm', 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
 check('admin login (seeded password)', adminIn.status === 200, `status ${adminIn.status}`);
-const rotated = await call(adm, 'wl-adm', 'POST', '/me/password', { current_password: SEEDED_PASSWORD, password: ADMIN_PASSWORD });
+const rotated = await call(adm, 'wl-adm', 'POST', '/me/password', {
+  current_password: SEEDED_PASSWORD,
+  password: ADMIN_PASSWORD,
+});
 check('admin password rotated (unlocks the gate)', rotated.status === 200, `status ${rotated.status}`);
 const created = await call(adm, 'wl-adm', 'POST', '/admin/users', { username: USER, password: PASS });
 check('admin creates user', created.status === 201, `status ${created.status} ${JSON.stringify(created.body)}`);
@@ -81,7 +89,10 @@ console.log(`== fire ${BURST} writes (RL_WRITE_USER is ${LIMIT}/min) ==`);
 // `wrangler dev`'s local proxy intermittently answers rapid sequential writes
 // with a bodiless 5xx ("Network connection lost" — AGENTS.md). Local artifact,
 // not the limiter: skip those instead of failing the run.
-let limited = 0, made = 0, flake = 0, hard = 0;
+let limited = 0,
+  made = 0,
+  flake = 0,
+  hard = 0;
 for (let i = 0; i < BURST; i++) {
   const r = await call(ui, 'wl-ui', 'POST', `/projects/${pid}/tasks`, { name: `t${i}` });
   if (r.status === 429) limited++;
@@ -99,12 +110,20 @@ check('no unexpected client errors', hard === 0, `${hard} unexpected`);
 const after = await call(ui, 'wl-ui', 'POST', `/projects/${pid}/tasks`, { name: 'x' });
 check('still limited right after the burst', after.status === 429, `status ${after.status}`);
 check('the standard rate_limited envelope', after.body?.error?.code === 'rate_limited', JSON.stringify(after.body));
-check('a retry-after header is present', !!after.headers.get('retry-after'), `retry-after=${after.headers.get('retry-after')}`);
+check(
+  'a retry-after header is present',
+  !!after.headers.get('retry-after'),
+  `retry-after=${after.headers.get('retry-after')}`,
+);
 
 console.log('== reads are NOT throttled (the SPA polls constantly) ==');
 const reads = [];
 for (let i = 0; i < 5; i++) reads.push(await call(ui, 'wl-ui', 'GET', '/projects'));
-check('GETs still succeed while writes are limited', reads.every((r) => r.status === 200), `statuses ${reads.map((r) => r.status).join(',')}`);
+check(
+  'GETs still succeed while writes are limited',
+  reads.every((r) => r.status === 200),
+  `statuses ${reads.map((r) => r.status).join(',')}`,
+);
 
 console.log('== a different user is unaffected (per-user buckets) ==');
 const other = { cookies: [] };
@@ -113,7 +132,11 @@ await call(adm, 'wl-adm', 'POST', '/admin/users', { username: otherName, passwor
 await call(other, 'wl-2', 'POST', '/auth/login', { identifier: otherName, password: PASS });
 await call(other, 'wl-2', 'POST', '/me/password', { current_password: PASS, password: `${PASS}-work` });
 const otherWrite = await call(other, 'wl-2', 'POST', '/projects', { name: 'other' });
-check("another user's write is fine", otherWrite.status === 201 || otherWrite.status === 200, `status ${otherWrite.status}`);
+check(
+  "another user's write is fine",
+  otherWrite.status === 201 || otherWrite.status === 200,
+  `status ${otherWrite.status}`,
+);
 
 console.log(fail ? '\nwrite-limit test FAILED' : '\nwrite-limit test passed');
 process.exit(fail);

@@ -13,8 +13,7 @@ function fireKey(el: Element, key: string) {
 }
 
 function typeInto(input: Element, text: string) {
-  const setter = Object.getOwnPropertyDescriptor(
-    (window as any).HTMLInputElement.prototype, 'value')!.set!;
+  const setter = Object.getOwnPropertyDescriptor((window as any).HTMLInputElement.prototype, 'value')!.set!;
   setter.call(input, text);
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }

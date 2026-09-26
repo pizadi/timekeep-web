@@ -3,7 +3,7 @@
   "version": "0.5.2",
   "private": true,
   "license": "MIT",
-  "description": "TimeKeep Web — time tracking & task management on Cloudflare Workers + D1 + Durable Objects",
+  "description": "TimeKeep Web \u2014 time tracking & task management on Cloudflare Workers + D1 + Durable Objects",
   "type": "module",
   "scripts": {
     "dev:web": "vite",
@@ -13,7 +13,9 @@
     "test": "vitest run",
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply timekeep --local",
-    "db:migrate:remote": "wrangler d1 migrations apply timekeep --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply timekeep --remote",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "chart.js": "^4.4.9",
@@ -28,6 +30,7 @@
     "@types/react-dom": "^18.3.6",
     "@vitejs/plugin-react": "^4.4.1",
     "jsdom": "^30.1.0",
+    "prettier": "^3.9.9",
     "typescript": "^5.8.3",
     "vite": "^5.4.19",
     "vitest": "^2.1.9",

@@ -21,7 +21,10 @@ export interface PresenceState {
  * presence fetch — never surfaces as an error to the tracker.
  */
 export async function broadcastFriendPresence(
-  env: Env, userId: string, actor: string, running: PresenceState | null
+  env: Env,
+  userId: string,
+  actor: string,
+  running: PresenceState | null,
 ): Promise<void> {
   try {
     // 1. what changed — visibility of the affected project gates everything
@@ -31,8 +34,10 @@ export async function broadcastFriendPresence(
       const row = await env.DB.prepare(
         `SELECT p.id, p.name, p.visibility, t.id AS task_id, t.name AS task_name
          FROM tasks t JOIN projects p ON p.id = t.project_id
-         WHERE t.id = ?1 AND t.user_id = ?2`
-      ).bind(running.task_id, userId).first<{ id: string; name: string; visibility: string; task_id: string; task_name: string }>();
+         WHERE t.id = ?1 AND t.user_id = ?2`,
+      )
+        .bind(running.task_id, userId)
+        .first<{ id: string; name: string; visibility: string; task_id: string; task_name: string }>();
       if (!row || row.visibility !== 'friends') return;
       project = { id: row.id, name: row.name };
       task = { id: row.task_id, name: row.task_name };
@@ -42,33 +47,41 @@ export async function broadcastFriendPresence(
     const friends = await env.DB.prepare(
       `SELECT u.id, u.username, u.name FROM friendships f
        JOIN users u ON u.id = f.friend_id
-       WHERE f.user_id = ?1 AND u.active = 1`
-    ).bind(userId).all<{ id: string; username: string; name: string }>();
+       WHERE f.user_id = ?1 AND u.active = 1`,
+    )
+      .bind(userId)
+      .all<{ id: string; username: string; name: string }>();
     if (friends.results.length === 0) return;
 
-    await emitToUsers(env, friends.results.map((f) => ({
-      userId: f.id,
-      draft: {
-        type: 'friend.timer' as const,
-        actor,
-        data: {
-          user: f,
-          project,                     // null on stop — client clears the dot
-          task,
-          running: !!running,
-          started_at: running?.started_at ?? null
-        }
-      }
-    })));
+    await emitToUsers(
+      env,
+      friends.results.map((f) => ({
+        userId: f.id,
+        draft: {
+          type: 'friend.timer' as const,
+          actor,
+          data: {
+            user: f,
+            project, // null on stop — client clears the dot
+            task,
+            running: !!running,
+            started_at: running?.started_at ?? null,
+          },
+        },
+      })),
+    );
   } catch (e) {
-    console.error(JSON.stringify({ evt: 'friend_presence_failed', user_id: userId, message: String((e as Error)?.message ?? e) }));
+    console.error(
+      JSON.stringify({ evt: 'friend_presence_failed', user_id: userId, message: String((e as Error)?.message ?? e) }),
+    );
   }
 }
 
 /** Live presence for one friend as seen by a viewer — null when not tracking
  *  or when the running task's project is not friends-visible. */
 export async function friendVisiblePresence(
-  env: Env, friendId: string
+  env: Env,
+  friendId: string,
 ): Promise<{ project_id: string; task_id: string; task_name: string; started_at: number } | null> {
   try {
     const stub = env.USER_HUB.get(env.USER_HUB.idFromName(friendId));
@@ -80,8 +93,10 @@ export async function friendVisiblePresence(
     const row = await env.DB.prepare(
       `SELECT p.id AS project_id, p.visibility, t.id AS task_id, t.name AS task_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.id = ?1 AND t.user_id = ?2`
-    ).bind(s.task_id, friendId).first<{ project_id: string; visibility: string; task_id: string; task_name: string }>();
+       WHERE t.id = ?1 AND t.user_id = ?2`,
+    )
+      .bind(s.task_id, friendId)
+      .first<{ project_id: string; visibility: string; task_id: string; task_name: string }>();
     if (!row || row.visibility !== 'friends') return null;
     return { project_id: row.project_id, task_id: row.task_id, task_name: row.task_name, started_at: s.started_at };
   } catch {

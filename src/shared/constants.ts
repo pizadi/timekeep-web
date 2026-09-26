@@ -19,7 +19,7 @@ export const LIMITS = {
   // Total-row cap for /restore (undo). Sized to cover the largest possible
   // legitimate delete payload: 200 projects + 5000 tasks + 500k subtasks
   // (100/task) + 500k dependencies + 200k sessions.
-  restoreMaxRows: 1_250_000
+  restoreMaxRows: 1_250_000,
 } as const;
 
 /**
@@ -29,12 +29,12 @@ export const LIMITS = {
  * the owner can grant any subset to anyone (feature 5: fine-grained admins).
  */
 export const GROUP_PERMS = [
-  'invite_members',      // username invites + invite links
-  'remove_members',      // kick (not the owner, not yourself — use leave)
-  'edit_group',          // rename / recolor
-  'manage_projects',     // create/archive/delete group projects (phase 4)
-  'moderate_messages',   // delete others' chat messages (phase 3)
-  'edit_tasks'           // create/edit/complete tasks in group projects (phase 4)
+  'invite_members', // username invites + invite links
+  'remove_members', // kick (not the owner, not yourself — use leave)
+  'edit_group', // rename / recolor
+  'manage_projects', // create/archive/delete group projects (phase 4)
+  'moderate_messages', // delete others' chat messages (phase 3)
+  'edit_tasks', // create/edit/complete tasks in group projects (phase 4)
 ] as const;
 export type GroupPerm = (typeof GROUP_PERMS)[number];
 
@@ -44,7 +44,9 @@ export function parseGroupPerms(raw: string): GroupPerm[] {
   try {
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr.filter((p) => GROUP_PERMS.includes(p)) : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 /** Password policy minimum (mirrored client-side — do not hardcode). */
@@ -54,9 +56,9 @@ export const MIN_PASSWORD = 10;
 export const REPORT_MAX_RANGE_DAYS = 1500;
 
 export const POMODORO_DEFAULTS = {
-  focusMin: 25,   // 5–90 (FR-F5)
-  breakMin: 5,    // 1–30
-  autoStart: false
+  focusMin: 25, // 5–90 (FR-F5)
+  breakMin: 5, // 1–30
+  autoStart: false,
 } as const;
 
 export const POMODORO_LIMITS = { focusMinMin: 5, focusMinMax: 90, breakMinMin: 1, breakMinMax: 30 } as const;
@@ -65,20 +67,30 @@ export const SESSION_RULES = {
   /** start may not be more than 5 minutes in the future (§5.5.4) */
   futureToleranceMs: 5 * 60_000,
   /** recovery "Discard" default grace (FR-S3) */
-  graceMin: 15
+  graceMin: 15,
 } as const;
 
 export const SESSION_COOKIE = 'tk_session';
 export const CSRF_COOKIE = 'tk_csrf';
 export const CSRF_HEADER = 'x-csrf-token';
 export const DEVICE_HEADER = 'x-device-id';
-export const SESSION_TTL_MS = 30 * 24 * 3600_000;      // 30 days (FR-A6)
+export const SESSION_TTL_MS = 30 * 24 * 3600_000; // 30 days (FR-A6)
 export const SESSION_ROTATE_BEFORE_MS = 7 * 24 * 3600_000; // rotate when < 7 days left
 
 /** 12 accessible accent colors (FR-P2) — checked for ≥3:1 on both themes for non-text use. */
 export const PALETTE = [
-  '#4f8cff', '#22c55e', '#f97316', '#a855f7', '#06b6d4', '#ef4444',
-  '#eab308', '#ec4899', '#84cc16', '#14b8a6', '#8b5cf6', '#f43f5e'
+  '#4f8cff',
+  '#22c55e',
+  '#f97316',
+  '#a855f7',
+  '#06b6d4',
+  '#ef4444',
+  '#eab308',
+  '#ec4899',
+  '#84cc16',
+  '#14b8a6',
+  '#8b5cf6',
+  '#f43f5e',
 ] as const;
 
 export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -86,12 +98,25 @@ export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 /** WebSocket event catalog (spec §5.4) — plus 'timer.nudge' (>12h failsafe, never auto-stops). */
 export const EVENT_TYPES = [
   'hello',
-  'timer.started', 'timer.stopped', 'timer.switched', 'timer.nudge',
-  'session.created', 'session.updated', 'session.deleted',
-  'task.created', 'task.updated', 'task.deleted',
-  'subtask.created', 'subtask.updated', 'subtask.deleted', 'subtask.toggled',
-  'project.created', 'project.updated', 'project.deleted',
-  'dependency.created', 'dependency.deleted',
+  'timer.started',
+  'timer.stopped',
+  'timer.switched',
+  'timer.nudge',
+  'session.created',
+  'session.updated',
+  'session.deleted',
+  'task.created',
+  'task.updated',
+  'task.deleted',
+  'subtask.created',
+  'subtask.updated',
+  'subtask.deleted',
+  'subtask.toggled',
+  'project.created',
+  'project.updated',
+  'project.deleted',
+  'dependency.created',
+  'dependency.deleted',
   'pomodoro.phase',
   'settings.updated',
   'layout.updated',
@@ -99,20 +124,30 @@ export const EVENT_TYPES = [
   'restore.completed',
   // social layer — cross-user events; a mutation appends one event to EACH
   // recipient's sync_log (per-user ids) and fans out via each recipient's hub
-  'friend.requested', 'friend.accepted', 'friend.removed',
-  'friend.timer',  // presence: a friend started/stopped tracking on a friends-visible project
-  'group.created', 'group.updated', 'group.deleted',
-  'group.member_joined', 'group.member_left', 'group.member_removed', 'group.member_updated',
-  'group.invite_created', 'group.invite_removed',
-  'group.message_created', 'group.message_updated', 'group.message_deleted'
+  'friend.requested',
+  'friend.accepted',
+  'friend.removed',
+  'friend.timer', // presence: a friend started/stopped tracking on a friends-visible project
+  'group.created',
+  'group.updated',
+  'group.deleted',
+  'group.member_joined',
+  'group.member_left',
+  'group.member_removed',
+  'group.member_updated',
+  'group.invite_created',
+  'group.invite_removed',
+  'group.message_created',
+  'group.message_updated',
+  'group.message_deleted',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
 export interface WsEvent<T = unknown> {
-  id: number;              // sync_log id (cursor for ?since=)
+  id: number; // sync_log id (cursor for ?since=)
   type: EventType;
-  actor: string;           // device id of the originating tab (clients ignore own echoes)
-  at: number;              // epoch ms
+  actor: string; // device id of the originating tab (clients ignore own echoes)
+  at: number; // epoch ms
   data: T;
 }
 

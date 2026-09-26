@@ -17,7 +17,6 @@ export const adminRoutes = new Hono<WorkerType>();
 // /api path mounted after this one (Hono merges sub-app middleware globally)
 adminRoutes.use('/admin/*', requireAuth, requireAdmin);
 
-
 // Admin mutations pay a full PBKDF2 (600k iterations in prod) — IP-keyed
 // and env-overridable.
 async function limitAdmin(c: any): Promise<Response | null> {
@@ -28,10 +27,10 @@ async function limitAdmin(c: any): Promise<Response | null> {
 adminRoutes.get('/admin/users', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT id, username, email, name, role, active, must_change_password, email_verified_at, created_at
-     FROM users ORDER BY created_at`
+     FROM users ORDER BY created_at`,
   ).all<any>();
   return c.json({
-    users: rows.results.map((u) => ({ ...u, must_change_password: !!u.must_change_password }))
+    users: rows.results.map((u) => ({ ...u, must_change_password: !!u.must_change_password })),
   });
 });
 
@@ -54,17 +53,20 @@ adminRoutes.post('/admin/users', async (c) => {
     await c.env.DB.prepare(
       `INSERT INTO users (id, email, username, password_hash, name, timezone, week_start, theme,
                           role, active, must_change_password, email_verified_at, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, 'UTC', 1, 'system', 'user', 1, 1, ?6, ?6, ?6)`
-    ).bind(id, email ?? username, username,
-      await hashPassword(password, Number(c.env.PBKDF2_ITERATIONS)), name, now).run();
+       VALUES (?1, ?2, ?3, ?4, ?5, 'UTC', 1, 'system', 'user', 1, 1, ?6, ?6, ?6)`,
+    )
+      .bind(id, email ?? username, username, await hashPassword(password, Number(c.env.PBKDF2_ITERATIONS)), name, now)
+      .run();
   } catch (e: any) {
-    if (isUniqueConstraintError(e))
-      return jsonError(409, 'conflict', 'that username or email is already taken');
+    if (isUniqueConstraintError(e)) return jsonError(409, 'conflict', 'that username or email is already taken');
     throw e;
   }
-  return c.json({
-    user: { id, username, email: email ?? username, name, role: 'user', active: 1, must_change_password: true }
-  }, 201);
+  return c.json(
+    {
+      user: { id, username, email: email ?? username, name, role: 'user', active: 1, must_change_password: true },
+    },
+    201,
+  );
 });
 
 adminRoutes.patch('/admin/users/:id', async (c) => {
@@ -74,7 +76,9 @@ adminRoutes.patch('/admin/users/:id', async (c) => {
   const parsed = adminPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
 
-  const target = await c.env.DB.prepare('SELECT id, role FROM users WHERE id = ?1').bind(id).first<{ id: string; role: 'user' | 'admin' }>();
+  const target = await c.env.DB.prepare('SELECT id, role FROM users WHERE id = ?1')
+    .bind(id)
+    .first<{ id: string; role: 'user' | 'admin' }>();
   if (!target) return jsonError(404, 'not_found', 'no such user');
 
   if (parsed.data.active === 0) {
@@ -82,7 +86,7 @@ adminRoutes.patch('/admin/users/:id', async (c) => {
     // deactivation kills every live session + socket; data is never touched
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE users SET active = 0, updated_at = ?1 WHERE id = ?2').bind(Date.now(), id),
-      c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id)
+      c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id),
     ]);
     revokeHub(c.env, id);
   } else {
@@ -97,8 +101,7 @@ adminRoutes.post('/admin/users/:id/password', async (c) => {
   const id = c.req.param('id');
   const parsed = adminResetSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
-  if (id === c.get('user').id)
-    return jsonError(422, 'validation', 'use change-password for your own account');
+  if (id === c.get('user').id) return jsonError(422, 'validation', 'use change-password for your own account');
 
   const pwProblem = passwordProblem(parsed.data.password, isCommonPassword);
   if (pwProblem) return jsonError(422, 'validation', pwProblem);
@@ -109,9 +112,9 @@ adminRoutes.post('/admin/users/:id/password', async (c) => {
   // temp password + forced change + full sign-out
   await c.env.DB.batch([
     c.env.DB.prepare(
-      'UPDATE users SET password_hash = ?1, must_change_password = 1, updated_at = ?2 WHERE id = ?3'
+      'UPDATE users SET password_hash = ?1, must_change_password = 1, updated_at = ?2 WHERE id = ?3',
     ).bind(await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS)), Date.now(), id),
-    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id)
+    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(id),
   ]);
   revokeHub(c.env, id);
   return c.json({ ok: true });

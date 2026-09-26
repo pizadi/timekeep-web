@@ -16,10 +16,10 @@ type PomoPhase = 'idle' | 'focus' | 'decide' | 'break' | 'ready';
 
 interface PomoState {
   phase: PomoPhase;
-  taskId: string | null;        // task the cycle was started on
-  accumulatedFocusMs: number;   // tracked-only focus time (FR-F1)
-  lastResumeMs: number | null;  // instant the currently-running focus segment began
-  breakEndsAt: number | null;   // wall-clock break deadline (FR-F3)
+  taskId: string | null; // task the cycle was started on
+  accumulatedFocusMs: number; // tracked-only focus time (FR-F1)
+  lastResumeMs: number | null; // instant the currently-running focus segment began
+  breakEndsAt: number | null; // wall-clock break deadline (FR-F3)
 }
 
 interface RunningSession {
@@ -36,7 +36,13 @@ export class UserHub extends DurableObject {
   declare env: Env;
   private loaded = false;
   private running: RunningSession | null = null;
-  private pomo: PomoState = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+  private pomo: PomoState = {
+    phase: 'idle',
+    taskId: null,
+    accumulatedFocusMs: 0,
+    lastResumeMs: null,
+    breakEndsAt: null,
+  };
   private settings = { pomoEnabled: false, focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
   private lastEventId = 0;
   private rl = new Map<string, number>(); // rate-limit counters (window key → hits)
@@ -61,22 +67,26 @@ export class UserHub extends DurableObject {
 
   private kvSet(key: string, v: string): void {
     this.ctx.storage.sql.exec(
-      'INSERT INTO kv (k, v) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET v = excluded.v', key, v
+      'INSERT INTO kv (k, v) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET v = excluded.v',
+      key,
+      v,
     );
   }
 
   private async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
-    this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`
-    );
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
     // settings (durations live server-side, FR-F5/F-C1), keyed by the real user id
     const row = await this.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1')
-      .bind(this.userId()).first<{ data: string }>().catch(() => null);
+      .bind(this.userId())
+      .first<{ data: string }>()
+      .catch(() => null);
     try {
       const s = JSON.parse(row?.data ?? '{}') ?? {};
       this.applySettings(s);
-    } catch { /* defaults */ }
+    } catch {
+      /* defaults */
+    }
 
     // running session from the D1 recovery mirror (FR-S3)
     this.running = await this.loadRunningFromD1();
@@ -84,7 +94,11 @@ export class UserHub extends DurableObject {
     // pomodoro state from DO storage
     const raw = this.kvGet('pomo');
     if (raw) {
-      try { this.pomo = { ...this.pomo, ...JSON.parse(raw) }; } catch { /* keep defaults */ }
+      try {
+        this.pomo = { ...this.pomo, ...JSON.parse(raw) };
+      } catch {
+        /* keep defaults */
+      }
     }
     // Focus accumulation across eviction: `accumulatedFocusMs` (completed
     // segments) and `lastResumeMs` (start of the in-flight segment) are both
@@ -97,7 +111,9 @@ export class UserHub extends DurableObject {
     }
 
     const maxId = await this.env.DB.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM sync_log WHERE user_id = ?1')
-      .bind(this.userId()).first<{ m: number }>().catch(() => null);
+      .bind(this.userId())
+      .first<{ m: number }>()
+      .catch(() => null);
     this.lastEventId = Number(maxId?.m ?? 0);
 
     this.loaded = true;
@@ -115,14 +131,16 @@ export class UserHub extends DurableObject {
 
   /** Merge persisted settings JSON into the live durations (clamped). */
   private applySettings(raw: unknown): void {
-    const s = (raw ?? {}) as { pomodoro?: { enabled?: boolean; focus_min?: number; break_min?: number; auto_start?: boolean } };
+    const s = (raw ?? {}) as {
+      pomodoro?: { enabled?: boolean; focus_min?: number; break_min?: number; auto_start?: boolean };
+    };
     const f = Number(s.pomodoro?.focus_min ?? this.settings.focusMs / 60_000);
     const b = Number(s.pomodoro?.break_min ?? this.settings.breakMs / 60_000);
     this.settings = {
       pomoEnabled: !!s.pomodoro?.enabled,
       focusMs: clamp(f, 5, 90) * 60_000,
       breakMs: clamp(b, 1, 30) * 60_000,
-      autoStart: !!s.pomodoro?.auto_start
+      autoStart: !!s.pomodoro?.auto_start,
     };
   }
 
@@ -130,10 +148,25 @@ export class UserHub extends DurableObject {
     const at = await this.env.DB.prepare(
       `SELECT at.session_id, at.task_id, at.started_at, at.subtask_id, s.source
        FROM active_timers at JOIN time_sessions s ON s.id = at.session_id
-       WHERE at.user_id = ?1`
-    ).bind(this.userId()).first<{ session_id: string; task_id: string; started_at: number; subtask_id: string | null; source: 'timer' | 'pomodoro' | null }>().catch(() => null);
+       WHERE at.user_id = ?1`,
+    )
+      .bind(this.userId())
+      .first<{
+        session_id: string;
+        task_id: string;
+        started_at: number;
+        subtask_id: string | null;
+        source: 'timer' | 'pomodoro' | null;
+      }>()
+      .catch(() => null);
     if (!at) return null;
-    return { id: at.session_id, task_id: at.task_id, subtask_id: at.subtask_id ?? null, started_at: Number(at.started_at), source: at.source ?? 'timer' };
+    return {
+      id: at.session_id,
+      task_id: at.task_id,
+      subtask_id: at.subtask_id ?? null,
+      started_at: Number(at.started_at),
+      source: at.source ?? 'timer',
+    };
   }
 
   // ---------- fetch router ----------
@@ -144,8 +177,7 @@ export class UserHub extends DurableObject {
 
     // Only this Worker may drive the DO (audit S5: the x-internal header used to
     // be sent and never checked — cargo cult). /ws passes it through from index.ts.
-    if (request.headers.get('x-internal') !== '1')
-      return this.err(403, 'forbidden', 'internal only');
+    if (request.headers.get('x-internal') !== '1') return this.err(403, 'forbidden', 'internal only');
 
     if (url.pathname === '/ws' && request.headers.get('upgrade') === 'websocket') {
       return this.handleUpgrade(request);
@@ -164,7 +196,11 @@ export class UserHub extends DurableObject {
         ? this.ctx.getWebSockets(only)
         : [...this.ctx.getWebSockets()].filter((ws) => !(keep && this.ctx.getWebSockets(keep).includes(ws)));
       for (const ws of victims) {
-        try { ws.close(4001, 'session revoked'); } catch { /* already closing */ }
+        try {
+          ws.close(4001, 'session revoked');
+        } catch {
+          /* already closing */
+        }
       }
       return Response.json({ ok: true });
     }
@@ -190,12 +226,24 @@ export class UserHub extends DurableObject {
           // and tell every device — then persist/reset pomo + alarms
           await this.persistPomo();
           await this.rearmAlarm();
-          await this.logAndBroadcast({ id: 0, type: 'timer.stopped', actor: 'server', at: Date.now(), data: { session: null } });
+          await this.logAndBroadcast({
+            id: 0,
+            type: 'timer.stopped',
+            actor: 'server',
+            at: Date.now(),
+            data: { session: null },
+          });
         }
         if (pomoCancelled) {
           await this.persistPomo();
           await this.rearmAlarm();
-          await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: Date.now(), data: { pomo: this.visiblePomo() } });
+          await this.logAndBroadcast({
+            id: 0,
+            type: 'pomodoro.phase',
+            actor: 'server',
+            at: Date.now(),
+            data: { pomo: this.visiblePomo() },
+          });
         }
         this.broadcastMany(body.events);
       }
@@ -207,13 +255,21 @@ export class UserHub extends DurableObject {
       // and puts no writes on a shared KV key. Counters are in-memory (reset on
       // eviction); the D1 rateLimitHit fallback in middleware is atomic anyway.
       const body = await request.json<{ key: string; limit: number; windowMs: number }>().catch(() => null);
-      if (!body || typeof body.key !== 'string' || !Number.isFinite(body.limit) || body.limit < 1
-        || !Number.isFinite(body.windowMs) || body.windowMs < 1000)
+      if (
+        !body ||
+        typeof body.key !== 'string' ||
+        !Number.isFinite(body.limit) ||
+        body.limit < 1 ||
+        !Number.isFinite(body.windowMs) ||
+        body.windowMs < 1000
+      )
         return this.err(422, 'validation', 'invalid body');
       return Response.json(this.rateLimit(body.key, body.limit, body.windowMs));
     }
     if (url.pathname === '/timer') {
-      const body = await request.json<{ op: 'start' | 'stop' | 'switch'; task_id?: string; subtask_id?: string | null; device: string }>().catch(() => null);
+      const body = await request
+        .json<{ op: 'start' | 'stop' | 'switch'; task_id?: string; subtask_id?: string | null; device: string }>()
+        .catch(() => null);
       if (!body) return this.err(422, 'validation', 'invalid body');
       if (body.op === 'start') return this.timerStart(body.task_id!, body.device, 'timer', body.subtask_id ?? null);
       if (body.op === 'stop') return this.timerStop(body.device);
@@ -221,7 +277,9 @@ export class UserHub extends DurableObject {
       return this.err(422, 'validation', 'unknown op');
     }
     if (url.pathname === '/pomo') {
-      const body = await request.json<{ op: 'start' | 'start_break' | 'skip'; task_id?: string; device: string }>().catch(() => null);
+      const body = await request
+        .json<{ op: 'start' | 'start_break' | 'skip'; task_id?: string; device: string }>()
+        .catch(() => null);
       if (!body) return this.err(422, 'validation', 'invalid body');
       if (body.op === 'start') return this.pomoStart(body.task_id, body.device);
       if (body.op === 'start_break') return this.pomoBreak(body.device);
@@ -242,12 +300,16 @@ export class UserHub extends DurableObject {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], sid ? [device, sid] : [device]);
     const hello: WsEvent = {
-      id: this.lastEventId, type: 'hello', actor: 'server', at: Date.now(),
+      id: this.lastEventId,
+      type: 'hello',
+      actor: 'server',
+      at: Date.now(),
       data: {
-        running: this.running, pomo: this.visiblePomo(),
+        running: this.running,
+        pomo: this.visiblePomo(),
         devices: this.ctx.getWebSockets().length,
-        server_now: Date.now()
-      }
+        server_now: Date.now(),
+      },
     };
     pair[1].send(JSON.stringify(hello));
     return new Response(null, { status: 101, webSocket: pair[0] });
@@ -272,24 +334,25 @@ export class UserHub extends DurableObject {
       pomo: this.visiblePomo(),
       last_event_id: this.lastEventId,
       devices: this.ctx.getWebSockets().length,
-      server_now: Date.now()
+      server_now: Date.now(),
     };
   }
 
   /** Client-facing pomo view: includes live focus accumulation (no ticking rows — NFR-2). */
   private visiblePomo() {
     const now = Date.now();
-    const focusLive = this.pomo.phase === 'focus' && this.running && this.pomo.lastResumeMs
-      ? this.pomo.accumulatedFocusMs + (now - this.pomo.lastResumeMs)
-      : this.pomo.accumulatedFocusMs;
+    const focusLive =
+      this.pomo.phase === 'focus' && this.running && this.pomo.lastResumeMs
+        ? this.pomo.accumulatedFocusMs + (now - this.pomo.lastResumeMs)
+        : this.pomo.accumulatedFocusMs;
     return {
       ...this.pomo,
       focus_ms_live: Math.max(0, focusLive),
       focus_goal_ms: this.settings.focusMs,
       break_ms_total: this.settings.breakMs,
-      break_ms_left: this.pomo.phase === 'break' && this.pomo.breakEndsAt
-        ? Math.max(0, this.pomo.breakEndsAt - now) : null,
-      server_now: now
+      break_ms_left:
+        this.pomo.phase === 'break' && this.pomo.breakEndsAt ? Math.max(0, this.pomo.breakEndsAt - now) : null,
+      server_now: now,
     };
   }
 
@@ -303,21 +366,28 @@ export class UserHub extends DurableObject {
    */
   private async validateSubtask(taskId: string, subtaskId: string | null): Promise<Response | null> {
     if (!subtaskId) return null;
-    const row = await this.env.DB.prepare(
-      'SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2'
-    ).bind(subtaskId, taskId).first();
+    const row = await this.env.DB.prepare('SELECT id FROM subtasks WHERE id = ?1 AND task_id = ?2')
+      .bind(subtaskId, taskId)
+      .first();
     return row ? null : this.err(422, 'invalid_subtask', 'the subtask does not belong to this task');
   }
 
-  private async timerStart(taskId: string, device: string, source: 'timer' | 'pomodoro', subtaskId: string | null = null): Promise<Response> {
+  private async timerStart(
+    taskId: string,
+    device: string,
+    source: 'timer' | 'pomodoro',
+    subtaskId: string | null = null,
+  ): Promise<Response> {
     if (this.running) {
       return this.err(409, 'already_running', 'a timer is already running — use switch', { running: this.running });
     }
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.id = ?1 AND (t.user_id = ?2
-         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
-    ).bind(taskId, this.userId()).first<any>();
+         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
+    )
+      .bind(taskId, this.userId())
+      .first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
     const badSub = await this.validateSubtask(taskId, subtaskId);
@@ -334,7 +404,13 @@ export class UserHub extends DurableObject {
     }
 
     const sessionId = ulid(now);
-    const session: RunningSession = { id: sessionId, task_id: taskId, subtask_id: subtaskId, started_at: now, source: engaged ? 'pomodoro' : source };
+    const session: RunningSession = {
+      id: sessionId,
+      task_id: taskId,
+      subtask_id: subtaskId,
+      started_at: now,
+      source: engaged ? 'pomodoro' : source,
+    };
     const ev = { type: 'timer.started', actor: device, data: { session, task_id: taskId } };
 
     // single ordered batch: session row + recovery mirror + sync_log (NFR-5: no partial writes)
@@ -343,17 +419,21 @@ export class UserHub extends DurableObject {
       results = await this.env.DB.batch([
         this.env.DB.prepare(
           `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`
+           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`,
         ).bind(sessionId, this.userId(), taskId, now, session.source, subtaskId),
         this.env.DB.prepare(
           `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state, subtask_id)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
            ON CONFLICT (user_id) DO UPDATE SET task_id = excluded.task_id,
              session_id = excluded.session_id, started_at = excluded.started_at, pomo_state = excluded.pomo_state,
-             subtask_id = excluded.subtask_id`
+             subtask_id = excluded.subtask_id`,
         ).bind(this.userId(), taskId, sessionId, now, JSON.stringify(this.pomo), subtaskId),
-        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-          .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
+        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
+          this.userId(),
+          ev.type,
+          JSON.stringify({ actor: ev.actor, data: ev.data }),
+          now,
+        ),
       ]);
     } catch (e) {
       // D1 batch failed — most plausibly the partial unique index
@@ -364,7 +444,13 @@ export class UserHub extends DurableObject {
       if (this.running) {
         return this.err(409, 'already_running', 'a timer is already running — use switch', { running: this.running });
       }
-      console.error(JSON.stringify({ evt: 'timer_start_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      console.error(
+        JSON.stringify({
+          evt: 'timer_start_failed',
+          user_id: this.userId(),
+          message: String((e as Error)?.message ?? e),
+        }),
+      );
       return this.err(503, 'timer_unavailable', 'could not start the timer — retry shortly');
     }
     this.running = session; // in-memory state only advances once D1 confirms
@@ -388,10 +474,20 @@ export class UserHub extends DurableObject {
       if (engaged) {
         // the cycle (re)started — tell every device, and include the fresh
         // pomodoro state in the response (the actor device ignores its own echoes)
-        await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: device, at: now, data: { pomo: this.visiblePomo() } });
+        await this.logAndBroadcast({
+          id: 0,
+          type: 'pomodoro.phase',
+          actor: device,
+          at: now,
+          data: { pomo: this.visiblePomo() },
+        });
       }
     }
-    return Response.json({ session: this.running, pomo: this.visiblePomo(), events: [{ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data }] });
+    return Response.json({
+      session: this.running,
+      pomo: this.visiblePomo(),
+      events: [{ id: eventId, type: 'timer.started', actor: device, at: now, data: ev.data }],
+    });
   }
 
   private async timerStop(device: string): Promise<Response> {
@@ -405,16 +501,27 @@ export class UserHub extends DurableObject {
     let results: D1Result<unknown>[];
     try {
       results = await this.env.DB.batch([
-        this.env.DB.prepare(
-          'UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2'
-        ).bind(now, session.id),
+        this.env.DB.prepare('UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2').bind(
+          now,
+          session.id,
+        ),
         this.env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?1').bind(this.userId()),
-        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-          .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
+        this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
+          this.userId(),
+          ev.type,
+          JSON.stringify({ actor: ev.actor, data: ev.data }),
+          now,
+        ),
       ]);
     } catch (e) {
       this.running = await this.loadRunningFromD1();
-      console.error(JSON.stringify({ evt: 'timer_stop_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      console.error(
+        JSON.stringify({
+          evt: 'timer_stop_failed',
+          user_id: this.userId(),
+          message: String((e as Error)?.message ?? e),
+        }),
+      );
       return this.err(503, 'timer_unavailable', 'could not stop the timer — retry shortly');
     }
     const eventId = Number(results[2]?.meta.last_row_id ?? 0);
@@ -431,7 +538,10 @@ export class UserHub extends DurableObject {
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data });
     await broadcastFriendPresence(this.env, this.userId(), device, null); // clear the live dot
-    return Response.json({ session, events: [{ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data }] });
+    return Response.json({
+      session,
+      events: [{ id: eventId, type: 'timer.stopped', actor: device, at: now, data: ev.data }],
+    });
   }
 
   /** Atomic stop-old + start-new — one call, one event, zero overlap/gap (FR-S1 AC).
@@ -445,8 +555,10 @@ export class UserHub extends DurableObject {
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.id = ?1 AND (t.user_id = ?2
-         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`
-    ).bind(taskId, this.userId()).first<any>();
+         OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
+    )
+      .bind(taskId, this.userId())
+      .first<any>();
     if (!task) return this.err(404, 'not_found', 'task not found');
     if (task.archived) return this.err(422, 'archived', 'this project is archived — new timers are blocked on it');
     const badSub = await this.validateSubtask(taskId, subtaskId);
@@ -466,25 +578,43 @@ export class UserHub extends DurableObject {
     const stopped = { ...this.running, ended_at: now };
     const newId = ulid(now + 1);
     const newSource: 'timer' | 'pomodoro' = engaged ? 'pomodoro' : 'timer';
-    const started: RunningSession = { id: newId, task_id: taskId, subtask_id: subtaskId, started_at: now + 1, source: newSource };
+    const started: RunningSession = {
+      id: newId,
+      task_id: taskId,
+      subtask_id: subtaskId,
+      started_at: now + 1,
+      source: newSource,
+    };
     const ev = { type: 'timer.switched', actor: device, data: { stopped, started } };
 
     const results = await this.env.DB.batch([
-      this.env.DB.prepare('UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2')
-        .bind(now, stopped.id),
+      this.env.DB.prepare('UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2').bind(
+        now,
+        stopped.id,
+      ),
       this.env.DB.prepare(
         `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`,
       ).bind(newId, this.userId(), taskId, now + 1, newSource, subtaskId),
       this.env.DB.prepare(
-        `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5, subtask_id = ?6 WHERE user_id = ?1`
+        `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5, subtask_id = ?6 WHERE user_id = ?1`,
       ).bind(this.userId(), taskId, newId, now + 1, JSON.stringify(this.pomo), subtaskId),
-      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-        .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), now)
+      this.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
+        this.userId(),
+        ev.type,
+        JSON.stringify({ actor: ev.actor, data: ev.data }),
+        now,
+      ),
     ]).catch(async (e) => {
       // mirror-resync on failure, same posture as timerStart/timerStop
       this.running = await this.loadRunningFromD1();
-      console.error(JSON.stringify({ evt: 'timer_switch_failed', user_id: this.userId(), message: String((e as Error)?.message ?? e) }));
+      console.error(
+        JSON.stringify({
+          evt: 'timer_switch_failed',
+          user_id: this.userId(),
+          message: String((e as Error)?.message ?? e),
+        }),
+      );
       return null;
     });
     if (!results) return this.err(503, 'timer_unavailable', 'could not switch the timer — retry shortly');
@@ -496,7 +626,12 @@ export class UserHub extends DurableObject {
     await this.rearmAlarm();
     this.broadcast({ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data });
     await broadcastFriendPresence(this.env, this.userId(), device, started);
-    return Response.json({ stopped, started, pomo: this.visiblePomo(), events: [{ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data }] });
+    return Response.json({
+      stopped,
+      started,
+      pomo: this.visiblePomo(),
+      events: [{ id: eventId, type: 'timer.switched', actor: device, at: now, data: ev.data }],
+    });
   }
 
   // ---------- pomodoro state machine (FR-F1–F5) ----------
@@ -507,7 +642,13 @@ export class UserHub extends DurableObject {
       this.pomo = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
     }
     if (this.pomo.phase === 'idle' || this.pomo.phase === 'ready' || this.pomo.phase === 'decide') {
-      this.pomo = { phase: 'focus', taskId: taskId ?? this.running?.task_id ?? null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+      this.pomo = {
+        phase: 'focus',
+        taskId: taskId ?? this.running?.task_id ?? null,
+        accumulatedFocusMs: 0,
+        lastResumeMs: null,
+        breakEndsAt: null,
+      };
     }
     await this.persistPomo();
     // start the timer if none runs (FR-F1) — one explicit action
@@ -557,8 +698,10 @@ export class UserHub extends DurableObject {
     const now = Date.now();
     const ev: WsEvent = { id: 0, type: 'pomodoro.phase', actor: device, at: now, data: { pomo: this.visiblePomo() } };
     const result = await this.env.DB.prepare(
-      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)'
-    ).bind(this.userId(), ev.type, JSON.stringify({ actor: device, data: ev.data }), now).run();
+      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)',
+    )
+      .bind(this.userId(), ev.type, JSON.stringify({ actor: device, data: ev.data }), now)
+      .run();
     ev.id = Number(result.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, ev.id);
     this.broadcast(ev);
@@ -568,9 +711,10 @@ export class UserHub extends DurableObject {
   private async persistPomo(): Promise<void> {
     this.kvSet('pomo', JSON.stringify(this.pomo));
     if (this.running) {
-      await this.env.DB.prepare(
-        'UPDATE active_timers SET pomo_state = ?1 WHERE user_id = ?2'
-      ).bind(JSON.stringify(this.pomo), this.userId()).run().catch(() => {});
+      await this.env.DB.prepare('UPDATE active_timers SET pomo_state = ?1 WHERE user_id = ?2')
+        .bind(JSON.stringify(this.pomo), this.userId())
+        .run()
+        .catch(() => {});
     }
   }
 
@@ -588,7 +732,7 @@ export class UserHub extends DurableObject {
       // 12h nudge: after the first fire this repeats hourly (nudgeNextAt), never
       // re-arming a deadline that is already in the past — that would make the
       // alarm refire immediately in a loop (audit)
-      const nudgeAt = this.nudgeNextAt ?? (this.running.started_at + TWELVE_H);
+      const nudgeAt = this.nudgeNextAt ?? this.running.started_at + TWELVE_H;
       if (nudgeAt > now) deadlines.push(nudgeAt);
     }
     if (deadlines.length === 0) return;
@@ -605,9 +749,15 @@ export class UserHub extends DurableObject {
 
     // 12h running failsafe — nudge only, never auto-stop (§5.7); repeats hourly
     // while the timer stays past the threshold (audit: no per-tick loop)
-    if (this.running && now >= (this.nudgeNextAt ?? (this.running.started_at + TWELVE_H))) {
+    if (this.running && now >= (this.nudgeNextAt ?? this.running.started_at + TWELVE_H)) {
       this.nudgeNextAt = now + 3600_000;
-      await this.logAndBroadcast({ id: 0, type: 'timer.nudge', actor: 'server', at: now, data: { running_since: this.running.started_at } });
+      await this.logAndBroadcast({
+        id: 0,
+        type: 'timer.nudge',
+        actor: 'server',
+        at: now,
+        data: { running_since: this.running.started_at },
+      });
     }
 
     // focus goal reached → decide (a prompt, not a timed phase; never stops the timer, FR-F2)
@@ -617,7 +767,13 @@ export class UserHub extends DurableObject {
         this.pomo.phase = 'decide';
         this.pomo.accumulatedFocusMs = Math.max(this.pomo.accumulatedFocusMs, this.settings.focusMs);
         await this.persistPomo();
-        await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: now, data: { pomo: this.visiblePomo() } });
+        await this.logAndBroadcast({
+          id: 0,
+          type: 'pomodoro.phase',
+          actor: 'server',
+          at: now,
+          data: { pomo: this.visiblePomo() },
+        });
       }
     }
 
@@ -626,7 +782,13 @@ export class UserHub extends DurableObject {
       this.pomo.phase = 'ready';
       this.pomo.breakEndsAt = null;
       await this.persistPomo();
-      await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: now, data: { pomo: this.visiblePomo() } });
+      await this.logAndBroadcast({
+        id: 0,
+        type: 'pomodoro.phase',
+        actor: 'server',
+        at: now,
+        data: { pomo: this.visiblePomo() },
+      });
       if (this.settings.autoStart && this.pomo.taskId) {
         const target = this.pomo.taskId;
         this.pomo = { phase: 'focus', taskId: target, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
@@ -635,14 +797,32 @@ export class UserHub extends DurableObject {
           if (r.status !== 200) {
             // auto-start failed — roll the phase back to 'ready' so the state
             // machine doesn't claim focus with no timer behind it (audit)
-            this.pomo = { phase: 'ready', taskId: target, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+            this.pomo = {
+              phase: 'ready',
+              taskId: target,
+              accumulatedFocusMs: 0,
+              lastResumeMs: null,
+              breakEndsAt: null,
+            };
             await this.persistPomo();
-            await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: Date.now(), data: { pomo: this.visiblePomo() } });
+            await this.logAndBroadcast({
+              id: 0,
+              type: 'pomodoro.phase',
+              actor: 'server',
+              at: Date.now(),
+              data: { pomo: this.visiblePomo() },
+            });
             await this.rearmAlarm();
             return;
           }
         }
-        await this.logAndBroadcast({ id: 0, type: 'pomodoro.phase', actor: 'server', at: now, data: { pomo: this.visiblePomo() } });
+        await this.logAndBroadcast({
+          id: 0,
+          type: 'pomodoro.phase',
+          actor: 'server',
+          at: now,
+          data: { pomo: this.visiblePomo() },
+        });
       }
     }
 
@@ -651,8 +831,10 @@ export class UserHub extends DurableObject {
 
   private async logAndBroadcast(ev: WsEvent): Promise<void> {
     const result = await this.env.DB.prepare(
-      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)'
-    ).bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), ev.at).run();
+      'INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)',
+    )
+      .bind(this.userId(), ev.type, JSON.stringify({ actor: ev.actor, data: ev.data }), ev.at)
+      .run();
     ev.id = Number(result.meta.last_row_id ?? 0);
     this.lastEventId = Math.max(this.lastEventId, ev.id);
     this.broadcast(ev);
@@ -704,7 +886,11 @@ export class UserHub extends DurableObject {
   private broadcast(ev: WsEvent): void {
     const msg = JSON.stringify(ev);
     for (const ws of this.ctx.getWebSockets()) {
-      try { ws.send(msg); } catch { /* hibernation will reap dead sockets */ }
+      try {
+        ws.send(msg);
+      } catch {
+        /* hibernation will reap dead sockets */
+      }
     }
   }
 

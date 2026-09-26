@@ -54,15 +54,15 @@ while it still works, so check the logs after deploying.
 
 All of these are optional — the app degrades gracefully:
 
-| Name | Kind | Effect |
-|---|---|---|
-| `RESEND_API_KEY` | secret | verification/password-reset mail via Resend. Absent → mail simply unavailable (the admin can still reset passwords from the panel) |
-| `TURNSTILE_SECRET_KEY` | secret | bot defense on auth endpoints. Absent → off |
-| `TURNSTILE_SITE_KEY` | var (public) | enables the widget in the UI + CSP additions |
-| `FROM_EMAIL` | var | mail sender address |
-| `PBKDF2_ITERATIONS` | var | KDF rounds; keep `600000` in prod, lower only for local dev |
-| `ALLOWED_ORIGINS` | var | comma-separated origins allowed for state-changing requests (defaults to the request origin; set it when serving from a custom domain) |
-| `EMAIL_DEV_MODE` | var | dev only — logs mail links to the console instead of sending |
+| Name                   | Kind         | Effect                                                                                                                                 |
+| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`       | secret       | verification/password-reset mail via Resend. Absent → mail simply unavailable (the admin can still reset passwords from the panel)     |
+| `TURNSTILE_SECRET_KEY` | secret       | bot defense on auth endpoints. Absent → off                                                                                            |
+| `TURNSTILE_SITE_KEY`   | var (public) | enables the widget in the UI + CSP additions                                                                                           |
+| `FROM_EMAIL`           | var          | mail sender address                                                                                                                    |
+| `PBKDF2_ITERATIONS`    | var          | KDF rounds; keep `600000` in prod, lower only for local dev                                                                            |
+| `ALLOWED_ORIGINS`      | var          | comma-separated origins allowed for state-changing requests (defaults to the request origin; set it when serving from a custom domain) |
+| `EMAIL_DEV_MODE`       | var          | dev only — logs mail links to the console instead of sending                                                                           |
 
 ## Plan requirements
 
@@ -77,13 +77,13 @@ default (6 × 100k chained rounds) runs comfortably on free — check
 
 Limits that actually apply on free (raise only if an instance outgrows them):
 
-| Resource | Free allowance |
-|---|---|
-| Workers requests | 100,000/day, 10 ms CPU per request |
-| D1 rows read / written | 5M/day, 100k/day |
-| D1 storage | 500 MB per database, 5 GB per account |
-| D1 Time Travel (point-in-time recovery) | 7 days |
-| Durable Objects, KV, cron, R2 dumps | available on free (standard free allowances) |
+| Resource                                | Free allowance                               |
+| --------------------------------------- | -------------------------------------------- |
+| Workers requests                        | 100,000/day, 10 ms CPU per request           |
+| D1 rows read / written                  | 5M/day, 100k/day                             |
+| D1 storage                              | 500 MB per database, 5 GB per account        |
+| D1 Time Travel (point-in-time recovery) | 7 days                                       |
+| Durable Objects, KV, cron, R2 dumps     | available on free (standard free allowances) |
 
 An upgrade to Workers Paid removes the daily caps — that's its only role here.
 
@@ -114,8 +114,8 @@ A scheduled handler runs at **03:17 UTC** daily (`cron.ts`):
 One-time setup:
 
 1. **API token** — Cloudflare dashboard → My Profile → API Tokens → Create
-   (custom), scoped to the account with: *Workers Scripts: Edit*, *D1: Edit*,
-   *Workers KV Storage: Edit* (plus *R2: Edit* only if the R2 dump bucket is
+   (custom), scoped to the account with: _Workers Scripts: Edit_, _D1: Edit_,
+   _Workers KV Storage: Edit_ (plus _R2: Edit_ only if the R2 dump bucket is
    used).
 2. **Repo secrets** (Settings → Secrets and variables → Actions → Secrets):
    `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.

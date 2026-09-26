@@ -12,7 +12,7 @@ describe('mergeRecent', () => {
     expect(next).toEqual([T('b', 'b2'), T('a', 'a1')]);
   });
 
-  it('keeps the previous subtask of untouched tasks, replaces the tracked task\'s', () => {
+  it("keeps the previous subtask of untouched tasks, replaces the tracked task's", () => {
     const next = mergeRecent([T('a', 'a1'), T('b', 'b1')], 'a', null);
     expect(next).toEqual([T('a', null), T('b', 'b1')]);
   });
@@ -37,8 +37,14 @@ describe('mergeRecent', () => {
 
 describe('recentFromBootstrap', () => {
   it('reads the subtask-aware shape', () => {
-    expect(recentFromBootstrap({ recent: [{ task_id: 'a', subtask_id: 'a1' }, { task_id: 'b', subtask_id: null }] }))
-      .toEqual([T('a', 'a1'), T('b')]);
+    expect(
+      recentFromBootstrap({
+        recent: [
+          { task_id: 'a', subtask_id: 'a1' },
+          { task_id: 'b', subtask_id: null },
+        ],
+      }),
+    ).toEqual([T('a', 'a1'), T('b')]);
   });
 
   it('falls back to the legacy task-id-only array', () => {
@@ -46,8 +52,9 @@ describe('recentFromBootstrap', () => {
   });
 
   it('drops malformed rows and non-string subtasks instead of crashing', () => {
-    expect(recentFromBootstrap({ recent: [null, { subtask_id: 'x' }, { task_id: 'a', subtask_id: 5 }, { task_id: 'b' }] }))
-      .toEqual([T('a'), T('b')]);
+    expect(
+      recentFromBootstrap({ recent: [null, { subtask_id: 'x' }, { task_id: 'a', subtask_id: 5 }, { task_id: 'b' }] }),
+    ).toEqual([T('a'), T('b')]);
   });
 
   it('returns [] for absent/empty payloads', () => {

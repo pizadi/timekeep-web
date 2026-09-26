@@ -13,7 +13,11 @@ export default function VerifyEmailView() {
   useEffect(() => {
     if (ran.current) return; // StrictMode double-mount safety
     ran.current = true;
-    if (!token) { setState('error'); setMessage('This verification link is incomplete.'); return; }
+    if (!token) {
+      setState('error');
+      setMessage('This verification link is incomplete.');
+      return;
+    }
     api('/auth/verify-email', { method: 'POST', body: { token } })
       .then(() => setState('ok'))
       .catch((err: unknown) => {
@@ -30,13 +34,19 @@ export default function VerifyEmailView() {
         {state === 'ok' && (
           <>
             <p className="sub">Email verified — you're all set.</p>
-            <button className="btn primary" style={{ width: '100%' }} onClick={() => go('/login')}>Sign in</button>
+            <button className="btn primary" style={{ width: '100%' }} onClick={() => go('/login')}>
+              Sign in
+            </button>
           </>
         )}
         {state === 'error' && (
           <>
-            <div className="error-text" role="alert">{message}</div>
-            <button className="btn" style={{ width: '100%', marginTop: 10 }} onClick={() => go('/login')}>Back to sign in</button>
+            <div className="error-text" role="alert">
+              {message}
+            </div>
+            <button className="btn" style={{ width: '100%', marginTop: 10 }} onClick={() => go('/login')}>
+              Back to sign in
+            </button>
           </>
         )}
       </div>

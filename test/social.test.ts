@@ -3,8 +3,12 @@
 import { describe, it, expect } from 'vitest';
 import { parsePerms } from '../src/worker/group-auth';
 import {
-  groupMemberPatchSchema, messageCreateSchema, friendRequestSchema,
-  groupCreateSchema, groupLinkCreateSchema, readMarkSchema
+  groupMemberPatchSchema,
+  messageCreateSchema,
+  friendRequestSchema,
+  groupCreateSchema,
+  groupLinkCreateSchema,
+  readMarkSchema,
 } from '../src/worker/validators';
 import { GROUP_PERMS } from '../src/shared/constants';
 
@@ -26,8 +30,12 @@ describe('group permission parsing (worker/group-auth.parsePerms)', () => {
 
   it('the catalog is exactly the six documented flags', () => {
     expect([...GROUP_PERMS].sort()).toEqual([
-      'edit_group', 'edit_tasks', 'invite_members',
-      'manage_projects', 'moderate_messages', 'remove_members'
+      'edit_group',
+      'edit_tasks',
+      'invite_members',
+      'manage_projects',
+      'moderate_messages',
+      'remove_members',
     ]);
   });
 });

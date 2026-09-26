@@ -38,7 +38,7 @@ export function openPrompt(opts: PromptOptions): Promise<string | null> {
           ensureHost().render(null);
           resolve(v);
         }}
-      />
+      />,
     );
   });
 }
@@ -58,25 +58,47 @@ function PromptModal({ opts, onDone }: { opts: PromptOptions; onDone: (v: string
     cancelRef.current = val === null;
     onDone(val);
   };
-  const modalRef = useModalA11y(() => finish(null), () => cancelRef.current);
-  useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+  const modalRef = useModalA11y(
+    () => finish(null),
+    () => cancelRef.current,
+  );
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
   const ok = !opts.mustType || v === opts.mustType;
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={opts.title} onClick={() => finish(null)}>
       <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>{opts.title}</h3>
-        {opts.message && <p className="muted" style={{ marginTop: 0 }}>{opts.message}</p>}
-        <input ref={ref} className="input" value={v} placeholder={opts.placeholder ?? ''}
+        {opts.message && (
+          <p className="muted" style={{ marginTop: 0 }}>
+            {opts.message}
+          </p>
+        )}
+        <input
+          ref={ref}
+          className="input"
+          value={v}
+          placeholder={opts.placeholder ?? ''}
           onChange={(e) => setV(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && ok) finish(v);
             if (e.key === 'Escape') finish(null);
-          }} />
-        {!ok && <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>Type “{opts.mustType}” to confirm.</p>}
+          }}
+        />
+        {!ok && (
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>
+            Type “{opts.mustType}” to confirm.
+          </p>
+        )}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-          <button className="btn" onClick={() => finish(null)}>Cancel</button>
-          <button className={`btn ${opts.danger ? 'danger' : 'primary'}`} disabled={!ok}
-            onClick={() => finish(v)}>{opts.confirmText ?? 'OK'}</button>
+          <button className="btn" onClick={() => finish(null)}>
+            Cancel
+          </button>
+          <button className={`btn ${opts.danger ? 'danger' : 'primary'}`} disabled={!ok} onClick={() => finish(v)}>
+            {opts.confirmText ?? 'OK'}
+          </button>
         </div>
       </div>
     </div>

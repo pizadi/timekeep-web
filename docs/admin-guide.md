@@ -17,12 +17,12 @@ Operating a TimeKeep Web instance as the admin. Setup/deployment is in
 Everything lives in **Settings → Admin — users**. Accounts are admin-managed:
 there is no self-signup anywhere in the product.
 
-| Action | What happens |
-|---|---|
-| **Create user** | you set a username + temporary password; the user must change it at first login (`must_change_password` gate blocks everything except reading `/me`, changing the password, and signing out) |
-| **Reset password** | generates a new temporary password and **revokes all the user's sessions** |
-| **Deactivate** ("remove user") | `active=0` + all sessions revoked; sign-in is blocked with `account_disabled`; **user data is never deleted** — reactivate to restore access |
-| **Delete account** | only the user can do this themselves (Settings → danger zone): a hard cascade delete plus a deletion log entry. The admin panel never deletes data |
+| Action                         | What happens                                                                                                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Create user**                | you set a username + temporary password; the user must change it at first login (`must_change_password` gate blocks everything except reading `/me`, changing the password, and signing out) |
+| **Reset password**             | generates a new temporary password and **revokes all the user's sessions**                                                                                                                   |
+| **Deactivate** ("remove user") | `active=0` + all sessions revoked; sign-in is blocked with `account_disabled`; **user data is never deleted** — reactivate to restore access                                                 |
+| **Delete account**             | only the user can do this themselves (Settings → danger zone): a hard cascade delete plus a deletion log entry. The admin panel never deletes data                                           |
 
 Usernames are the login identifier. Email is optional — it's only a target
 for verification/reset mail (without a `RESEND_API_KEY` no mail is sent; the

@@ -22,18 +22,18 @@ Route modules (`src/worker/routes/`): `auth`, `me`, `admin`, `projects`,
 
 ## Storage: D1, KV, and the UserHub Durable Object
 
-| Store | Used for |
-|---|---|
-| **D1** (SQLite) | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters |
-| **KV** | cold rate-limit counters (per-IP / per-email buckets), misc cache |
-| **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter |
+| Store                                        | Used for                                                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **D1** (SQLite)                              | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters |
+| **KV**                                       | cold rate-limit counters (per-IP / per-email buckets), misc cache                                                                                      |
+| **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter                                    |
 
 ## Single-timer invariant
 
 A user has at most one running timer, enforced twice:
 
 1. **Database** — a partial unique index on `time_sessions(user_id) WHERE
-   ended_at IS NULL`, so two rows can never both be open.
+ended_at IS NULL`, so two rows can never both be open.
 2. **UserHub DO** — the operational authority. Timer start/stop/switch go
    through the DO, which serializes them, so two devices can't race a start
    (the loser gets `409 already_running`).
@@ -77,7 +77,7 @@ notified via `ctx.waitUntil`).
   carrying the subtask of that task's most recent session (a window function,
   not a `GROUP BY`, which would drop the column). The client keeps the pair in
   `recentEntries` (`src/web/lib/recent.ts`, pure + unit-tested), so Resume,
-  the `R` shortcut and the "Jump back in" chips all restart the *subtask* that
+  the `R` shortcut and the "Jump back in" chips all restart the _subtask_ that
   was last tracked — falling back to the whole task if that subtask is gone.
 
 ## Time handling
@@ -118,7 +118,7 @@ notified via `ctx.waitUntil`).
   per-user `api_user` counter lives in the user's UserHub DO (atomic); KV is
   the fallback and the counter for cold per-IP/per-email limits.
   `limitWrites` (`write_user`, 300/min) covers the CRUD/task/session/timer/group
-  routes — previously they had *no* rate limit, only eventual entity-count caps,
+  routes — previously they had _no_ rate limit, only eventual entity-count caps,
   so a leaked session could hammer `/timer/start`+`stop` freely. It is chained
   after `requireAuth` in each mutating route file's `use(...)` (and per-route for
   `misc.ts`'s settings/layout writes), skips GET/HEAD/OPTIONS (reads already ride

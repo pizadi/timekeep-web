@@ -8,11 +8,15 @@ let deviceId: string = (() => {
   try {
     let d = localStorage.getItem('tk.device');
     if (!d) {
-      d = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, '0')).join('');
+      d = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
       localStorage.setItem('tk.device', d);
     }
     return d;
-  } catch { return 'unknown'; }
+  } catch {
+    return 'unknown';
+  }
 })();
 
 export const getDeviceId = () => deviceId;
@@ -27,14 +31,19 @@ function readCsrfCookie(): string | null {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string, public details?: unknown) {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public details?: unknown,
+  ) {
     super(message);
   }
 }
 
 export async function api<T = unknown>(
   path: string,
-  opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}
+  opts: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { [DEVICE_HEADER]: deviceId };
   const method = opts.method ?? 'GET';
@@ -47,7 +56,7 @@ export async function api<T = unknown>(
     headers,
     credentials: 'same-origin',
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    signal: opts.signal
+    signal: opts.signal,
   });
 
   // capture server clock offset from Date header (best-effort, rounded to 0)

@@ -3,13 +3,21 @@
 // (spring-forward), plus midnight clipping (FR-R1 AC).
 import { describe, it, expect } from 'vitest';
 import {
-  dayStartInstant, bucketByDay, civilDate, weekStartInstant, zoneOffsetMs, dayBounds, addDaysCivil
+  dayStartInstant,
+  bucketByDay,
+  civilDate,
+  weekStartInstant,
+  zoneOffsetMs,
+  dayBounds,
+  addDaysCivil,
 } from '../src/shared/time';
 
 const TEHRAN = 'Asia/Tehran';
 const NEW_YORK = 'America/New_York';
 
-function mins(ms: number) { return Math.round(ms / 60000); }
+function mins(ms: number) {
+  return Math.round(ms / 60000);
+}
 
 describe('timezone engine (NFR-6)', () => {
   it('computes local midnight instants for Tehran', () => {
@@ -45,7 +53,7 @@ describe('timezone engine (NFR-6)', () => {
     const next = dayStartInstant('2021-03-23', TEHRAN);
     const sessions = [
       { started_at: day - 30 * 60_000, ended_at: day + 15 * 60_000 }, // 30 min yesterday, 15 today
-      { started_at: next - 60_000, ended_at: next + 60_000 }          // 1 min each side
+      { started_at: next - 60_000, ended_at: next + 60_000 }, // 1 min each side
     ];
     const buckets = bucketByDay(sessions, '2021-03-21', '2021-03-23', TEHRAN, Date.now());
     expect(buckets).toHaveLength(3);
@@ -60,7 +68,13 @@ describe('timezone engine (NFR-6)', () => {
     const d1 = dayStartInstant('2026-10-01', NEW_YORK);
     const start = d1 + 23.5 * 3600_000;
     const end = start + 45 * 60_000;
-    const buckets = bucketByDay([{ started_at: start, ended_at: end }], '2026-10-01', '2026-10-02', NEW_YORK, end + 1000);
+    const buckets = bucketByDay(
+      [{ started_at: start, ended_at: end }],
+      '2026-10-01',
+      '2026-10-02',
+      NEW_YORK,
+      end + 1000,
+    );
     expect(mins(buckets[0]!.ms)).toBe(30);
     expect(mins(buckets[1]!.ms)).toBe(15);
   });
@@ -87,7 +101,10 @@ describe('timezone engine (NFR-6)', () => {
     const now = d1 + 2 * 3600_000;
     const buckets = bucketByDay(
       [{ started_at: d1 + 3600_000, ended_at: null }],
-      '2026-10-01', '2026-10-01', 'UTC', now
+      '2026-10-01',
+      '2026-10-01',
+      'UTC',
+      now,
     );
     expect(mins(buckets[0]!.ms)).toBe(60);
   });

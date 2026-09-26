@@ -22,8 +22,12 @@ export async function appendEvents(env: Env, userId: string, drafts: EventDraft[
   if (drafts.length === 0) return [];
   const now = Date.now();
   const stmts = drafts.map((d) =>
-    env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-      .bind(userId, d.type, JSON.stringify({ actor: d.actor, data: d.data }), now)
+    env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
+      userId,
+      d.type,
+      JSON.stringify({ actor: d.actor, data: d.data }),
+      now,
+    ),
   );
   const results = await env.DB.batch(stmts);
   return results.map((r, i) => ({
@@ -31,7 +35,7 @@ export async function appendEvents(env: Env, userId: string, drafts: EventDraft[
     type: drafts[i]!.type,
     actor: drafts[i]!.actor,
     at: now,
-    data: drafts[i]!.data
+    data: drafts[i]!.data,
   }));
 }
 
@@ -49,21 +53,28 @@ export async function appendEvents(env: Env, userId: string, drafts: EventDraft[
 export async function emitToUsers(
   env: Env,
   items: Array<{ userId: string; draft: EventDraft }>,
-  ctx?: { waitUntil(p: Promise<unknown>): void }
+  ctx?: { waitUntil(p: Promise<unknown>): void },
 ): Promise<Map<string, WsEvent[]>> {
   const byUser = new Map<string, WsEvent[]>();
   if (items.length === 0) return byUser;
   const now = Date.now();
   const stmts = items.map((it) =>
-    env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)')
-      .bind(it.userId, it.draft.type, JSON.stringify({ actor: it.draft.actor, data: it.draft.data }), now)
+    env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
+      it.userId,
+      it.draft.type,
+      JSON.stringify({ actor: it.draft.actor, data: it.draft.data }),
+      now,
+    ),
   );
   const results = await env.DB.batch(stmts);
   results.forEach((r, i) => {
     const it = items[i]!;
     const ev: WsEvent = {
-      id: Number(r.meta.last_row_id), type: it.draft.type,
-      actor: it.draft.actor, at: now, data: it.draft.data
+      id: Number(r.meta.last_row_id),
+      type: it.draft.type,
+      actor: it.draft.actor,
+      at: now,
+      data: it.draft.data,
     };
     const list = byUser.get(it.userId) ?? [];
     list.push(ev);
@@ -83,14 +94,18 @@ export async function emitToUsers(
  * (their device skips the echo via the actor guard; other devices apply it).
  */
 export async function emitEntityEvents(
-  env: Env, userId: string, projectId: string, drafts: EventDraft[],
+  env: Env,
+  userId: string,
+  projectId: string,
+  drafts: EventDraft[],
   ctx?: { waitUntil(p: Promise<unknown>): void },
-  knownGroupId?: string | null
+  knownGroupId?: string | null,
 ): Promise<WsEvent[]> {
   let groupId = knownGroupId;
   if (groupId === undefined) {
     const pr = await env.DB.prepare('SELECT group_id FROM projects WHERE id = ?1')
-      .bind(projectId).first<{ group_id: string | null }>();
+      .bind(projectId)
+      .first<{ group_id: string | null }>();
     groupId = pr?.group_id ?? null;
   }
   if (!groupId) {
@@ -99,7 +114,8 @@ export async function emitEntityEvents(
     return evs;
   }
   const members = await env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
-    .bind(groupId).all<{ user_id: string }>();
+    .bind(groupId)
+    .all<{ user_id: string }>();
   const items = members.results.flatMap((m) => drafts.map((d) => ({ userId: m.user_id, draft: d })));
   const byUser = await emitToUsers(env, items, ctx);
   return byUser.get(userId) ?? [];
@@ -112,15 +128,17 @@ export async function emitEntityEvents(
  * best-effort fire-and-forget.
  */
 export function notifyHub(
-  env: Env, userId: string, events: WsEvent[],
-  ctx?: { waitUntil(p: Promise<unknown>): void }
+  env: Env,
+  userId: string,
+  events: WsEvent[],
+  ctx?: { waitUntil(p: Promise<unknown>): void },
 ): void {
   if (events.length === 0) return;
   const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
   const req = new Request('https://do/notify', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-internal': '1' },
-    body: JSON.stringify({ events })
+    body: JSON.stringify({ events }),
   });
   const p = stub.fetch(req).catch(() => {});
   if (ctx) ctx.waitUntil(p);
@@ -132,10 +150,12 @@ export function notifyHub(
  *                  / revoke-others: the acting device's session survives);
  *  - `{ only }`  → close just the given auth-session id (single session revoke).
  * Sockets are tagged with their session id at upgrade time (index.ts /api/ws). */
-export function revokeHub(
-  env: Env, userId: string, opts?: { keep?: string; only?: string }
-): void {
+export function revokeHub(env: Env, userId: string, opts?: { keep?: string; only?: string }): void {
   const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
-  const q = opts?.keep ? `?keep=${encodeURIComponent(opts.keep)}` : opts?.only ? `?only=${encodeURIComponent(opts.only)}` : '';
+  const q = opts?.keep
+    ? `?keep=${encodeURIComponent(opts.keep)}`
+    : opts?.only
+      ? `?only=${encodeURIComponent(opts.only)}`
+      : '';
   stub.fetch(new Request(`https://do/revoke${q}`, { method: 'POST', headers: { 'x-internal': '1' } })).catch(() => {});
 }
