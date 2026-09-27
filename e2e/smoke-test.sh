@@ -215,9 +215,12 @@ curl -s -o /dev/null -w "%{http_code}\n" -b $JAR $BASE/me -H "x-device-id: $DEV"
 echo "-- temp password works, flag set, change it back:"
 curl -s -c $JAR -X POST $BASE/auth/login -H "content-type: application/json" \
   -d '{"identifier":"dana","password":"temporary-dana-pass-7"}' | grep -q '"must_change_password":true'
-T=$(grep tk_csrf $JAR | awk '{print $NF}')
-curl -s -b $JAR -c $JAR -o /dev/null -X POST $BASE/me/password -H "content-type: application/json" \
-  -H "x-csrf-token: $T" -d '{"current_password":"temporary-dana-pass-7","password":"purple-marmalade-tuesday"}'
+# `req`, not a bare curl: this call used to be unchecked, so when the local
+# dev proxy dropped it (the "Network connection lost" flake — AGENTS.md) dana
+# silently kept the TEMP password and the next script (ws-test.mjs), which logs
+# in as dana, failed far away from the cause.
+CH=$(req $JAR $DEV POST /me/password '{"current_password":"temporary-dana-pass-7","password":"purple-marmalade-tuesday"}')
+echo "$CH" | grep -q '"ok":true' || { echo "FAIL dana password change back: $CH"; exit 1; }
 
 echo "== rate limiting (login 10/15min per identifier) =="
 for i in $(seq 1 11); do

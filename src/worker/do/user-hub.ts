@@ -6,6 +6,12 @@
 //
 // Ticks are NEVER persisted per second (NFR-2): the DO recomputes elapsed time
 // from `started_at`; a 24h timer writes ~2 rows, not 86,400.
+//
+// The DO is also the WebSocket capacity authority (see WS_MAX_PER_* below): the
+// Worker authenticates the upgrade, but only the DO — one serialized instance
+// per user — can decide whether this account is already at its connection
+// ceiling, and it re-checks the session row so a revocation that lands between
+// the Worker's check and the upgrade still wins.
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../env';
 import { ulid } from '../../shared/ids';
@@ -31,6 +37,15 @@ interface RunningSession {
 }
 
 const TWELVE_H = 12 * 3600_000;
+
+// WebSocket capacity ceilings (INV-10). Enforced DO-side — the serialized
+// authority for this user's live connections — because a client-supplied device
+// id means nothing: an attacker holding one session can claim any number of
+// "devices". Per session is the tighter of the two in practice (a session is a
+// browser profile: a few tabs plus reconnect overlap), and per user is the
+// backstop for a user with several legitimately signed-in devices.
+const WS_MAX_PER_SESSION = 8;
+const WS_MAX_PER_USER = 32;
 
 export class UserHub extends DurableObject {
   declare env: Env;
@@ -180,7 +195,7 @@ export class UserHub extends DurableObject {
     if (request.headers.get('x-internal') !== '1') return this.err(403, 'forbidden', 'internal only');
 
     if (url.pathname === '/ws' && request.headers.get('upgrade') === 'websocket') {
-      return this.handleUpgrade(request);
+      return await this.handleUpgrade(request);
     }
     if (url.pathname === '/state') {
       return Response.json(this.stateSnapshot());
@@ -291,12 +306,45 @@ export class UserHub extends DurableObject {
 
   // ---------- websocket (FR-N1) ----------
 
-  private handleUpgrade(request: Request): Response {
+  /**
+   * Accept a socket — after checking the two things the Worker cannot.
+   *
+   * 1. AUTHORITY. The Worker verified the session cookie before forwarding the
+   *    upgrade, but the account can be revoked in the gap between that check
+   *    and this one. The DO is the single serialized authority for the user's
+   *    live state, so it re-reads the session row itself: a socket can never be
+   *    established for a session that no longer exists (INV-01, WS variant).
+   * 2. CAPACITY. Without a ceiling, one valid session (or a leaked one) can open
+   *    an unbounded number of sockets, and every one of them is a live
+   *    WebSocket in this DO plus a target of every broadcast. Caps are per user
+   *    and per session — a session is a browser profile, so a handful of
+   *    reconnects is legitimate and hundreds is not.
+   *
+   * Both are refused at the HTTP layer (a 4xx on the upgrade) rather than by
+   * accepting and immediately closing, so the client sees a real error.
+   */
+  private async handleUpgrade(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const device = url.searchParams.get('device') ?? 'unknown';
     // sid = auth session id (verified by the Worker before the upgrade). Tagging
     // the socket with it makes selective /revoke possible (audit S1).
     const sid = url.searchParams.get('sid') ?? '';
+    if (sid) {
+      const live = await this.env.DB.prepare('SELECT 1 AS ok FROM auth_sessions WHERE id = ?1')
+        .bind(sid)
+        .first()
+        .catch(() => null);
+      if (!live) return this.err(401, 'unauthenticated', 'session is no longer valid');
+    }
+    const userSockets = this.ctx.getWebSockets().length;
+    if (userSockets >= WS_MAX_PER_USER)
+      return this.err(429, 'too_many_sockets', `at most ${WS_MAX_PER_USER} live connections per account`);
+    // per-SESSION cap: the socket is tagged with the session id at accept time,
+    // so a single leaked session cannot spend the whole user budget
+    const perSession = sid ? this.ctx.getWebSockets(sid).length : 0;
+    if (sid && perSession >= WS_MAX_PER_SESSION)
+      return this.err(429, 'too_many_sockets', `at most ${WS_MAX_PER_SESSION} live connections per session`);
+
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], sid ? [device, sid] : [device]);
     const hello: WsEvent = {

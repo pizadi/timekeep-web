@@ -3,7 +3,7 @@
 // authn matrix, cross-account authz (IDOR), CSRF, forced-change gate, session
 // revocation, response whitelists, rate limits, WS upgrade, info disclosure.
 // Usage: node e2e/security-probes.mjs   (env: ADMIN_USERNAME, ADMIN_PASSWORD)
-const BASE = 'http://127.0.0.1:8787';
+const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787';
 const stamp = Date.now() % 1000000;
 
 const results = [];
