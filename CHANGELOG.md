@@ -83,6 +83,14 @@ REFERENCES tasks(id) ON DELETE CASCADE` meant one member deleting a shared task
 - e2e retry helpers now also retry the proxy's HTTP 500 drop page, not just
   connection-level curl errors — on a security probe, "the CSRF guard returned
   500" is exactly the line a human is tempted to wave away.
+- **Vite 5 → 8, Vitest 2 → 5, plugin-react 4 → 6: 0 vulnerabilities.** Vite 8
+  replaces esbuild with rolldown, so the dev-server advisory is retired by
+  construction rather than by a version floor. Two behaviour changes came with it
+  and are handled: the dev server now binds IPv6 loopback only (`server.host` is
+  pinned to 127.0.0.1, which serves both URL spellings), and `vite.config.ts`
+  moved off `__dirname` and a bare JSON import, which a future Vite major will
+  reject under its native config loader. `engines.node: >=22.12.0` records the
+  floor Vite 8 and Vitest 5 require.
 
 ## Tests
 
