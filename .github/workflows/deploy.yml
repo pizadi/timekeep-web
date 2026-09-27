@@ -77,11 +77,27 @@ jobs:
         env:
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
 
+      # audit #5: reset/verification emails carry a bearer token, so their
+      # origin is deployment configuration (APP_PUBLIC_URL), never the request's
+      # — a spoofable Host header would aim the token at another domain
+      # (src/shared/public-url.ts, INV-09). Non-blocking, like the Turnstile
+      # warning: the Worker still works, it just derives the origin per request.
+      - name: Warn if APP_PUBLIC_URL is unconfigured
+        run: |
+          if [ -z "$APP_PUBLIC_URL" ]; then
+            echo "::warning::APP_PUBLIC_URL is not set — password-reset/verification links fall back to the REQUEST origin, so a Host header this deployment accepts could aim the token at another domain. Set it as a repo variable (or environment variable) to the canonical https origin."
+          else
+            echo "APP_PUBLIC_URL present: secret links will use $APP_PUBLIC_URL"
+          fi
+        env:
+          APP_PUBLIC_URL: ${{ vars.CF_APP_PUBLIC_URL }}
+
       - name: Render deploy config (ids stay out of the repo)
         run: BUILD_SHA="${GITHUB_SHA::7}" node scripts/render-wrangler.mjs wrangler.ci.jsonc
         env:
           D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
           KV_NAMESPACE_ID: ${{ vars.CF_KV_NAMESPACE_ID }}
+          APP_PUBLIC_URL: ${{ vars.CF_APP_PUBLIC_URL }}
 
       - run: npm run build
 

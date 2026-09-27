@@ -7,6 +7,14 @@ export interface Env {
 
   // vars
   PBKDF2_ITERATIONS: string;
+  /**
+   * Canonical public origin for password-reset / email-verification links.
+   * These links carry a bearer token, so their origin must be deployment
+   * configuration, never derived from the request (see shared/public-url.ts).
+   * Unset → the request origin is used, which is only safe when the deployment
+   * does not accept attacker-chosen Host headers.
+   */
+  APP_PUBLIC_URL?: string;
   ALLOWED_ORIGINS: string;
   EMAIL_DEV_MODE: string;
   FROM_EMAIL: string;

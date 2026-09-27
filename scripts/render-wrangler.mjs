@@ -10,6 +10,13 @@
 // Env:
 //   D1_DATABASE_ID, KV_NAMESPACE_ID   required — fail with a clear message
 //                                     if missing
+//   APP_PUBLIC_URL                    optional — the canonical origin for
+//                                     password-reset / verification links. Left
+//                                     unset, the Worker falls back to the
+//                                     REQUEST origin, which means a spoofable
+//                                     Host header could aim a reset token at
+//                                     another domain (INV-09). The deploy
+//                                     workflow warns when it is empty.
 //   APP_VERSION                       default: package.json version
 //   BUILD_SHA                         default: "ci"
 //
@@ -60,10 +67,20 @@ for (const [key, value] of Object.entries(defines)) {
   replace(new RegExp(`"${key}"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"`), `"${key}": ${value}`, `${key} define`);
 }
 
+// APP_PUBLIC_URL is deployment configuration, not a repo value: the canonical
+// origin differs per environment, so it comes from a GitHub *variable* (or the
+// deploy environment) rather than the committed template. Empty is allowed —
+// the deploy workflow warns about exactly that case.
+const appPublicUrl = process.env.APP_PUBLIC_URL?.trim() ?? '';
+replace(/"APP_PUBLIC_URL"\s*:\s*"[^"]*"/, `"APP_PUBLIC_URL": "${appPublicUrl}"`, 'APP_PUBLIC_URL var');
+
 if (/"REPLACE_ME"/.test(cfg)) {
   console.error('render-wrangler: rendered config still contains a "REPLACE_ME" value — unhandled placeholder?');
   process.exit(1);
 }
 
 writeFileSync(outPath, cfg);
-console.log(`render-wrangler: ${outPath} written (version ${appVersion}, build ${buildSha})`);
+console.log(
+  `render-wrangler: ${outPath} written (version ${appVersion}, build ${buildSha}` +
+    `${appPublicUrl ? `, public url ${appPublicUrl}` : ', APP_PUBLIC_URL UNSET'})`,
+);

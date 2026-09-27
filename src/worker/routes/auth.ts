@@ -2,8 +2,9 @@
 // NFR-3. Self-signup is intentionally absent — accounts are created by the
 // admin (routes/admin.ts); the initial admin is seeded by migration 0002.
 import { Hono } from 'hono';
-import type { WorkerType } from '../env';
+import type { WorkerType, Env } from '../env';
 import { jsonError } from '../env';
+import { publicOrigin } from '../../shared/public-url';
 import { hashPassword, verifyPassword, randomToken, sha256Hex, getEmailSender, isCommonPassword } from '../auth';
 import {
   requireAuth,
@@ -24,7 +25,11 @@ import { SESSION_TTL_MS } from '../../shared/constants';
 
 export const authRoutes = new Hono<WorkerType>();
 
-const appUrl = (c: { req: { url: string } }) => new URL(c.req.url).origin;
+// Reset/verification links carry a bearer token, so their origin comes from
+// deployment configuration (APP_PUBLIC_URL), not from the request — a Host
+// header the deployment accepts must never be able to aim the token at
+// somebody else's domain (INV-09). See src/shared/public-url.ts.
+const appUrl = (c: { env: Env; req: { url: string } }) => publicOrigin(c.env, c.req.url);
 
 // Explicit 404 — self-signup does not exist (accounts are admin-created); the
 // explicit route keeps unmatched-path middleware from answering instead.

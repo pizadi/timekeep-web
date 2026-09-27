@@ -9,6 +9,11 @@ FROM_EMAIL=TimeKeep <dev@localhost>
 # TURNSTILE_SECRET_KEY=0x...
 # TURNSTILE_SITE_KEY=0x...
 # RESEND_API_KEY=re_...
+# Canonical origin for password-reset / verification links. Those links carry a
+# bearer token, so in production this MUST be set to the real public origin —
+# otherwise the Worker falls back to the request's origin, and a Host header
+# the deployment accepts could aim the token at another domain.
+# APP_PUBLIC_URL=https://timekeep.example.com
 # Optional local-only rate-limit overrides (tests hammer the login endpoint;
 # token endpoints default to 30/15min — remove RL_TOKEN_IP to test that limit):
 RL_LOGIN_IP=1000

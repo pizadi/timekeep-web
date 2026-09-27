@@ -76,6 +76,13 @@
 		// earlier "Paid required" note here was wrong). Lower this only for local
 		// dev.
 		"PBKDF2_ITERATIONS": "600000",
+		// Canonical public origin for password-reset / verification emails. These
+		// links carry a bearer token, so the origin is DEPLOYMENT CONFIG and must
+		// never be derived from the request (a spoofable Host header would aim the
+		// token at the attacker's domain — src/shared/public-url.ts, INV-09).
+		// Empty → the request origin is used; set it in production, and keep
+		// wrangler.local.jsonc in sync when you do.
+		"APP_PUBLIC_URL": "",
 		// Comma-separated origins allowed for state-changing requests (defaults to the request origin).
 		"ALLOWED_ORIGINS": "",
 		// Dev-only: log verification/reset links to the Worker console when no email
