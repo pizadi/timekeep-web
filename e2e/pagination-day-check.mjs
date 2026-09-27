@@ -1,9 +1,11 @@
 // Focused checks for the page-based log pagination, the /reports/day daily
 // summary and the subtask-level donut breakdown. Run smoke-test.sh first —
 // this script reuses its accounts (dana has sessions from that run).
+import { withProxyRetry } from './support/proxy-retry.mjs';
+
 const BASE = 'http://127.0.0.1:8787';
 
-async function raw(path, opts = {}, cookie) {
+const rawOnce = async (path, opts = {}, cookie) => {
   const res = await fetch(`${BASE}/api${path}`, {
     ...opts,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -17,6 +19,10 @@ async function raw(path, opts = {}, cookie) {
     body = text;
   }
   return { status: res.status, body, headers: res.headers };
+};
+
+async function raw(path, opts = {}, cookie) {
+  return withProxyRetry(`${opts.method ?? 'GET'} ${path}`, () => rawOnce(path, opts, cookie));
 }
 const cookieOf = (r) => (r.headers.get('set-cookie') ?? '').split(';')[0];
 const assert = (cond, msg) => {

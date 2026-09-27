@@ -1,4 +1,6 @@
 // Targeted regression probes for behaviors the other e2e scripts don't cover.
+import { withProxyRetry } from './support/proxy-retry.mjs';
+
 const BASE = 'http://127.0.0.1:8787';
 let failures = 0;
 function check(name, cond, extra = '') {
@@ -6,7 +8,7 @@ function check(name, cond, extra = '') {
   if (!cond) failures++;
 }
 
-async function raw(path, opts = {}, cookie) {
+const rawOnce = async (path, opts = {}, cookie) => {
   const res = await fetch(`${BASE}/api${path}`, {
     ...opts,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -20,6 +22,10 @@ async function raw(path, opts = {}, cookie) {
     body = text;
   }
   return { status: res.status, body, headers: res.headers };
+};
+
+async function raw(path, opts = {}, cookie) {
+  return withProxyRetry(`${opts.method ?? 'GET'} ${path}`, () => rawOnce(path, opts, cookie));
 }
 
 async function login(identifier, password) {

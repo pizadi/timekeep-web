@@ -1,9 +1,11 @@
 // FR-D1 AC: export account A → import into fresh account B (merge) →
 // sessions, dependencies, and subtask states identical (ids preserved).
 // FR-F: pomodoro start → focus phase; skip → idle.
+import { withProxyRetry } from './support/proxy-retry.mjs';
+
 const BASE = 'http://127.0.0.1:8787';
 
-async function raw(path, opts = {}, cookie) {
+const rawOnce = async (path, opts = {}, cookie) => {
   const res = await fetch(`${BASE}/api${path}`, {
     ...opts,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -17,6 +19,10 @@ async function raw(path, opts = {}, cookie) {
     body = text;
   }
   return { status: res.status, body, headers: res.headers };
+};
+
+async function raw(path, opts = {}, cookie) {
+  return withProxyRetry(`${opts.method ?? 'GET'} ${path}`, () => rawOnce(path, opts, cookie));
 }
 const cookieOf = (r) => (r.headers.get('set-cookie') ?? '').split(';')[0];
 

@@ -3,6 +3,8 @@
 // authn matrix, cross-account authz (IDOR), CSRF, forced-change gate, session
 // revocation, response whitelists, rate limits, WS upgrade, info disclosure.
 // Usage: node e2e/security-probes.mjs   (env: ADMIN_USERNAME, ADMIN_PASSWORD)
+import { withProxyRetry } from './support/proxy-retry.mjs';
+
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787';
 const stamp = Date.now() % 1000000;
 
@@ -32,7 +34,18 @@ function jar() {
   };
 }
 
-async function raw(session, path, { method = 'GET', body, origin, secFetchSite, csrf } = {}) {
+/**
+ * `wrangler dev`'s local proxy answers a dropped request with an HTTP 500 whose
+ * body is an "Error: Network connection lost." page (AGENTS.md). The probe suite
+ * asserts on status codes, so that local artifact would read as a product
+ * failure — and on a security probe, "the CSRF guard returned 500" is exactly
+ * the kind of line a human must not dismiss. Retry it, loudly.
+ */
+async function raw(session, path, opts = {}) {
+  return withProxyRetry(`${opts.method ?? 'GET'} ${path}`, () => rawOnce(session, path, opts));
+}
+
+async function rawOnce(session, path, { method = 'GET', body, origin, secFetchSite, csrf } = {}) {
   const headers = { 'x-device-id': 'audit' };
   const ch = session.header();
   if (ch) headers.cookie = ch;
