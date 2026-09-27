@@ -20,9 +20,25 @@ WHERE username IS NULL;
 -- fallback for rows that somehow have no usable local-part
 UPDATE users SET username = lower(substr(id, 1, 12)) WHERE username IS NULL OR username = '';
 
--- de-duplicate colliding local-parts deterministically (rare, dev data only)
-UPDATE users SET username = username || '-' || substr(id, 1, 6)
-WHERE id IN (SELECT id FROM users GROUP BY username HAVING COUNT(*) > 1);
+-- De-duplicate colliding local-parts (only reachable on a database that
+-- predates username: two rows can share a local part — 'a@x.com' and
+-- 'a@y.com' — even though 0001's UNIQUE COLLATE NOCASE on email forbids
+-- duplicate emails).
+--
+-- Select the colliding USERNAMES and rename every row that has one. The
+-- previous form — `WHERE id IN (SELECT id FROM users GROUP BY username HAVING
+-- COUNT(*) > 1)` — selected one ARBITRARY id per group (a bare column in a
+-- grouped subquery is not a per-group list), so it renamed one row and left
+-- the rest: with two rows per group the survivor happened to be unique and the
+-- migration passed by luck, and with three or more the unique index below
+-- failed, aborting the migration mid-file against real data.
+--
+-- The suffix is the FULL id, not a prefix: two ids can share a leading
+-- substring, and a truncated suffix reintroduces exactly the collision this
+-- statement exists to remove. Usernames stay within the 32-char app limit
+-- (26-char ULID + a few characters of base name).
+UPDATE users SET username = username || '-' || id
+WHERE username IN (SELECT username FROM users GROUP BY username HAVING COUNT(*) > 1);
 
 CREATE UNIQUE INDEX idx_users_username ON users(username) WHERE username IS NOT NULL;
 
