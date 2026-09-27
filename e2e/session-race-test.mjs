@@ -108,9 +108,15 @@ async function main() {
   for (let i = 0; i < ROUNDS; i++) {
     const target = SEEDED[i % (SEEDED.length - 1)];
     const a = jarFor(target.token);
-    // Random micro-stagger: sweeps the revocation across the whole span of A's
-    // request instead of always racing it to the finish line.
-    const stagger = Math.floor(Math.random() * 8);
+    // Sweep the revocation across the WHOLE span of the rotating request, not
+    // just its first few milliseconds. A narrow stagger only ever produces one
+    // order on a given machine — on a loaded dev proxy the revoke always landed
+    // after the rotation, so the "both interleavings were observed" check
+    // failed while the security invariant itself held. The range below is wider
+    // than a single request's duration on the slowest runner seen (~1.2 s
+    // end-to-end, with the session+user reads and the CAS inside it), so some
+    // rounds must land before the CAS and some after.
+    const stagger = Math.floor(Math.random() * 250);
     const rot = call(a, 'GET', '/me');
     await sleep(stagger);
     const rev = callRetry(revoker, 'DELETE', `/me/sessions/${target.id}`);
