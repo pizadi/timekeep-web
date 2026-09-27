@@ -9,10 +9,16 @@ name: CI
 on:
   push:
     branches: [main]
+    # Release tags need a full run of their own: .github/workflows/deploy.yml
+    # gates the production deploy on a successful CI run for the EXACT sha, and
+    # a tag push is a different ref than main, so it would never match (INV-07).
+    tags: ['v*', '!v*.dev*', '!v*-dev*']
   pull_request:
   workflow_dispatch:
 
 concurrency:
+  # Tags get their own group: the branch group would make the main-branch run
+  # cancel this one, and the deploy gate waits on the tag's run.
   group: ${{ github.workflow }}-${{ github.ref }}
   # keep main history intact; only superseded PR runs get cancelled
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -20,6 +26,9 @@ concurrency:
 permissions:
   contents: read
 
+# The aggregate status the deploy gate looks for: every job green on this sha.
+# The deploy workflow requires exactly this name, so renaming it here means
+# renaming it there too.
 jobs:
   verify:
     name: verify (lint · format · typecheck · test · build)

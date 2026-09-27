@@ -9,10 +9,17 @@
 # failing the run when the tagged commit's package.json isn't a clean x.y.z
 # matching the tag.
 #
+# A deploy is GATED on a successful full CI run (lint · format · typecheck ·
+# unit · e2e/security) for the exact sha being deployed — see the ci-gate job.
+# A tag push starts both workflows at once, so the gate waits for CI rather than
+# assuming it already passed.
+#
 # One-time setup (details in docs/deployment.md → "Deploying from GitHub"):
 #   Secrets:   CLOUDFLARE_API_TOKEN (scoped: Workers Scripts Edit, D1 Edit,
 #              Workers KV Storage Edit), CLOUDFLARE_ACCOUNT_ID
-#   Variables: CF_D1_DATABASE_ID, CF_KV_NAMESPACE_ID, CF_DEPLOY_URL
+#              (optionally TURNSTILE_SECRET_KEY / RESEND_API_KEY)
+#   Variables: CF_D1_DATABASE_ID, CF_KV_NAMESPACE_ID, CF_DEPLOY_URL,
+#              CF_APP_PUBLIC_URL (canonical origin for reset/verification links)
 #   Environment "production": add required reviewers for an approval gate.
 #
 # The deploy config is rendered from the committed wrangler.jsonc template at
@@ -26,14 +33,90 @@ on:
 
 permissions:
   contents: read
+  # the ci-gate job reads this repo's check runs
+  checks: read
 
 concurrency:
   group: production
   cancel-in-progress: false # queue deploys — never cancel one mid-run
 
 jobs:
+  # INV-07: no successful full validation → no production deploy.
+  #
+  # This used to be a bare `npm run typecheck && npm test` inside the deploy
+  # job, which is a WEAKER gate than the CI workflow: it skipped lint,
+  # format:check and — the important one — the whole e2e/security suite, so a
+  # release could ship with a failing E2E or security probe and still deploy.
+  # The invariant is about the exact sha, so the check is on the sha, not on
+  # "some CI run is green somewhere".
+  #
+  # A tag push starts CI and this workflow at the same moment, so the gate
+  # POLLS rather than looking once — a failure here means "CI has not finished
+  # for this sha (or failed)", and the message says which.
+  ci-gate:
+    name: ci-gate (full CI must be green for this sha)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      conclusion: ${{ steps.check.outputs.conclusion }}
+      url: ${{ steps.check.outputs.url }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          # the e2e job is the long pole (wrangler dev, ~10 min plus a retry)
+          WAIT_SECONDS: '1500'
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + WAIT_SECONDS ))
+          while :; do
+            # `check_runs` is keyed by sha and reports per-job conclusions,
+            # which is what we need: the workflow-level conclusion alone would
+            # accept a run whose jobs are still in progress.
+            json=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100")
+            conclusion=$(echo "$json" | jq -r '
+              [.check_runs[]
+                | select(.name | test("^(verify|version-sync|e2e)"))
+                | .status + ":" + (.conclusion // "null")] | join(" ")')
+            url=$(echo "$json" | jq -r '[.check_runs[] | select(.name == "verify") | .html_url][0] // ""')
+            echo "check runs: $conclusion"
+            if [ "$conclusion" = "completed:success completed:success completed:success" ]; then
+              echo "gate: full CI is green for $SHA"
+              echo "conclusion=success" >> "$GITHUB_OUTPUT"
+              [ -n "$url" ] && echo "url=$url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # nothing at all for this sha: CI was never run for it. A manual
+            # dispatch of this workflow from a ref that has no CI run is a
+            # supported path (hotfix), so say exactly what to do instead of
+            # burning the whole wait.
+            if [ -z "$conclusion" ]; then
+              echo "::error::no CI check runs found for $SHA — run the CI workflow for this exact commit first (Actions → CI → Run workflow, ref $GITHUB_REF_NAME), then deploy."
+              echo "conclusion=no-ci" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            # anything explicitly failed or cancelled will not recover
+            if echo "$conclusion" | grep -Eq "completed:(failure|cancelled|timed_out|action_required|neutral|stale)"; then
+              echo "::error::CI did not pass for $SHA ($conclusion) — see $url"
+              echo "conclusion=failure" >> "$GITHUB_OUTPUT"
+              [ -n "$url" ] && echo "url=$url" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::timed out waiting for CI on $SHA ($conclusion) — see $url"
+              echo "conclusion=timeout" >> "$GITHUB_OUTPUT"
+              [ -n "$url" ] && echo "url=$url" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            sleep 30
+          done
+
   deploy:
     name: deploy (migrate → deploy → verify)
+    needs: ci-gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -57,8 +140,14 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: CI gate (typecheck + tests)
+      # Fast local sanity only — the AUTHORITATIVE gate is the ci-gate job
+      # above, which requires the full CI suite (lint · format · typecheck ·
+      # unit · e2e/security) to have passed for this exact sha. This step is here
+      # so the deploy job is not building from a tree it has not compiled.
+      - name: Local sanity (the full gate ran in ci-gate)
         run: |
+          npm run lint
+          npm run format:check
           npm run typecheck
           npm test
 

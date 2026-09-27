@@ -104,12 +104,22 @@ A scheduled handler runs at **03:17 UTC** daily (`cron.ts`):
   any `vX.Y.Z` tag push. Dev versions never deploy from tags: the tag filter
   excludes `v*.dev*` and `scripts/check-release-tag.mjs` fails the run if the
   tagged commit's package.json isn't a clean `x.y.z` matching the tag.
+- **CI gate (INV-07):** nothing deploys until the FULL CI suite — lint,
+  format:check, typecheck, unit tests and the whole e2e/security suite — has
+  passed **for the exact sha being deployed**. A tag push starts CI and this
+  workflow at the same moment, so the gate polls (30 s, up to 25 min) and reports
+  the CI run's URL. A failing, cancelled or missing CI run blocks the deploy with
+  the reason.
 - **Approval gate:** the job runs in the `production` environment — add
   required reviewers under **Settings → Environments → production** and every
   deploy waits for (your) approval in the UI.
 - **Config rendering:** `scripts/render-wrangler.mjs` merges the committed
   `wrangler.jsonc` template with GitHub variables at run time — resource ids
   never live in the repo. The rendered `wrangler.ci.jsonc` is gitignored.
+
+> Manual deploy from a ref with no CI run for that sha is refused on purpose. Run
+> **Actions → CI → Run workflow** for the same ref first (or push the commit to
+> `main`, or push the release tag) and re-dispatch the deploy.
 
 One-time setup:
 
@@ -122,11 +132,18 @@ One-time setup:
 3. **Repo variables** (same page → Variables): `CF_D1_DATABASE_ID`,
    `CF_KV_NAMESPACE_ID`, and `CF_DEPLOY_URL` (e.g.
    `https://timekeep-web.parham-avia.workers.dev`) for the post-deploy check.
-4. **Environment** — Settings → Environments → create `production`, add the
+4. **Repo variable `CF_APP_PUBLIC_URL`** — the canonical `https://` origin for
+   password-reset and verification emails. Those links carry a bearer token, so
+   the origin is deployment configuration rather than something derived from the
+   request: unset, the Worker falls back to the request's origin and a Host
+   header the deployment accepts could aim the token at another domain. The
+   deploy run warns when it is empty.
+5. **Environment** — Settings → Environments → create `production`, add the
    required reviewer(s).
 
-Each run: CI gate (typecheck + tests) → render config → build → **remote D1
-migrations** (idempotent, additive-by-policy) → `wrangler deploy` → verify
+Each run: CI gate (full suite, this sha) → guard release tag → render config →
+build → **remote D1 migrations** (idempotent, additive-by-policy) →
+`wrangler deploy` → verify
 `GET /api/version` reports the `package.json` version and the deployed commit
 sha. App secrets (`RESEND_API_KEY`, Turnstile) live in the Worker and are
 never touched by deploys. Deploys to the same environment queue behind each
