@@ -24,7 +24,8 @@ projectRoutes.get('/projects', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
      FROM projects
-     WHERE user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)
+     WHERE deleted_at IS NULL
+       AND (user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
      ORDER BY position, created_at`,
   )
     .bind(me)
@@ -42,8 +43,20 @@ projectRoutes.post('/projects', async (c) => {
   const now = Date.now();
   const id = ulid(now);
   const color = parsed.data.color ?? PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  // `projects` keeps its inline UNIQUE(user_id, name) — swapping it for a
+  // partial one would mean rebuilding the table, which is unsafe in D1
+  // (0003/AGENTS.md) and would cascade-delete every task under it. So a
+  // TOMBSTONED project still holds its name, and re-creating a project with that
+  // name renames the tombstone out of the way instead (INV-06: the point is that
+  // history survives, not that a deleted name is reserved forever). The rename
+  // carries a date so the tombstone stays identifiable in the UI.
+  const clash = await c.env.DB.prepare(
+    `SELECT id FROM projects WHERE user_id = ?1 AND name = ?2 COLLATE NOCASE AND deleted_at IS NOT NULL`,
+  )
+    .bind(c.get('user').id, parsed.data.name)
+    .first<{ id: string }>();
   const posRow = await c.env.DB.prepare(
-    'SELECT COALESCE(MAX(position), -1) AS p FROM projects WHERE user_id = ?1 AND group_id IS NULL',
+    'SELECT COALESCE(MAX(position), -1) AS p FROM projects WHERE user_id = ?1 AND group_id IS NULL AND deleted_at IS NULL',
   )
     .bind(c.get('user').id)
     .first<{ p: number }>();
@@ -70,6 +83,18 @@ projectRoutes.post('/projects', async (c) => {
       c.get('user').id,
       drafts,
       [
+        // free the name held by a tombstone FIRST — same transaction, so the
+        // unique index can never be caught mid-way (an INSERT before the rename
+        // would trip the constraint and roll the whole batch back)
+        ...(clash
+          ? [
+              c.env.DB.prepare('UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3').bind(
+                `${parsed.data.name} (deleted ${new Date(now).toISOString().slice(0, 10)})`,
+                now,
+                clash.id,
+              ),
+            ]
+          : []),
         c.env.DB.prepare(
           `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)`,
@@ -186,24 +211,33 @@ projectRoutes.post('/projects/reorder', async (c) => {
 });
 
 /**
- * Delete returns the deleted subtree for the 5-second undo toast (FR-T4):
- * undo posts it to POST /api/restore which re-inserts the identical rows by id.
- * GROUP projects have NO undo — the deletion hits every member's data, so it
- * is permanent (typed confirmation in the UI) and the event payload carries
- * everyone's rows so all devices clean up.
+ * Delete TOMBSTONES the project and its tasks (INV-06) and returns the subtree
+ * for the 5-second undo toast (FR-T4): undo posts it to POST /api/restore,
+ * which clears `deleted_at` again.
+ *
+ * Nothing is cascade-deleted. That used to be the case, and for a GROUP project
+ * it meant one member deleting shared metadata destroyed every OTHER member's
+ * time_sessions through the `time_sessions.task_id` FK — historical records that
+ * are not the deleter's to destroy. Now the rows stay with `deleted_at` set:
+ * invisible to every live listing, fully present in history and reports.
+ *
+ * GROUP projects still carry NO undo: the tombstone hits every member's view, so
+ * it is one-way from the UI (typed confirmation) and the event payload carries
+ * everyone's rows so all their devices clean up.
  */
 projectRoutes.delete('/projects/:id', async (c) => {
   const access = await requireProjectAccess(c.env, c.get('user').id, c.req.param('id'));
   if (access.isGroup && !access.canManage) return jsonError(403, 'forbidden', 'missing permission: manage_projects');
   const project = access.project;
   const userId = c.get('user').id;
+  const now = Date.now();
 
   if (access.isGroup) {
     // group path: sweep EVERY member's rows into the event payload (all
-    // devices drop their local copies), then one bare delete — FK cascades
-    // remove tasks/subtasks/deps/sessions for everyone.
-    const [tasks, subtasks, deps, sessions] = await Promise.all([
-      c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1').bind(project.id).all(),
+    // devices drop their local copies), then tombstone the project and its
+    // tasks in the same transaction. The sessions stay where they are.
+    const [tasks, subtasks, deps] = await Promise.all([
+      c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1 AND deleted_at IS NULL').bind(project.id).all(),
       c.env.DB.prepare('SELECT sb.* FROM subtasks sb JOIN tasks t ON t.id = sb.task_id WHERE t.project_id = ?1')
         .bind(project.id)
         .all(),
@@ -212,13 +246,9 @@ projectRoutes.delete('/projects/:id', async (c) => {
       )
         .bind(project.id)
         .all(),
-      c.env.DB.prepare(`SELECT s.* FROM time_sessions s JOIN tasks t ON t.id = s.task_id WHERE t.project_id = ?1`)
-        .bind(project.id)
-        .all(),
     ]);
-    await c.env.DB.prepare('DELETE FROM projects WHERE id = ?1').bind(project.id).run();
     // NOTE: emit per-member directly — emitEntityEvents re-reads the project
-    // row, which is gone now; the group_id comes from the pre-delete access.
+    // row, and the group_id comes from the pre-delete access.
     const members = await c.env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
       .bind(project.group_id)
       .all<{ user_id: string }>();
@@ -226,26 +256,35 @@ projectRoutes.delete('/projects/:id', async (c) => {
       type: 'project.deleted',
       actor: c.get('deviceId'),
       data: {
-        project,
-        tasks: tasks.results,
+        project: { ...project, deleted_at: now },
+        tasks: tasks.results.map((t: any) => ({ ...t, deleted_at: now })),
         subtasks: subtasks.results,
         dependencies: deps.results,
-        sessions: sessions.results,
+        // deliberately empty: the sessions are history and stay put (INV-06)
+        sessions: [],
       },
     };
     await emitToUsers(
       c.env,
       members.results.map((m) => ({ userId: m.user_id, draft })),
       c.executionCtx,
+      [
+        c.env.DB.prepare('UPDATE projects SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2').bind(now, project.id),
+        c.env.DB.prepare(
+          'UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE project_id = ?2 AND deleted_at IS NULL',
+        ).bind(now, project.id),
+      ],
     );
     return c.json({ deleted: true, undo: null, events: [] });
   }
 
-  // personal path: one transactional batch — the reads (undo payload) and the
-  // delete observe a consistent snapshot, so rows created concurrently can't
-  // be cascade-deleted while still missing from the payload.
+  // personal path: one batch for the reads (undo payload) — they observe a
+  // consistent snapshot — and the tombstone rides in the fan-out's transaction.
   const [tasks, subtasks, deps, sessions, ,] = await c.env.DB.batch([
-    c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1 AND user_id = ?2').bind(project.id, userId),
+    c.env.DB.prepare('SELECT * FROM tasks WHERE project_id = ?1 AND user_id = ?2 AND deleted_at IS NULL').bind(
+      project.id,
+      userId,
+    ),
     c.env.DB.prepare(
       `SELECT sb.* FROM subtasks sb
        WHERE sb.user_id = ?1 AND sb.task_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`,
@@ -259,7 +298,6 @@ projectRoutes.delete('/projects/:id', async (c) => {
       `SELECT s.* FROM time_sessions s
        WHERE s.user_id = ?1 AND s.task_id IN (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`,
     ).bind(userId, project.id),
-    c.env.DB.prepare('DELETE FROM projects WHERE id = ?1 AND user_id = ?2').bind(project.id, userId), // cascades
   ]);
 
   const evs = await emitEntityEvents(
@@ -271,18 +309,30 @@ projectRoutes.delete('/projects/:id', async (c) => {
         type: 'project.deleted',
         actor: c.get('deviceId'),
         data: {
-          project,
-          tasks: tasks.results,
+          project: { ...project, deleted_at: now },
+          tasks: tasks.results.map((t: any) => ({ ...t, deleted_at: now })),
           subtasks: subtasks.results,
           dependencies: deps.results,
-          sessions: sessions.results,
+          sessions: [],
         },
       },
     ],
     c.executionCtx,
+    undefined,
+    [
+      c.env.DB.prepare(
+        'UPDATE projects SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND user_id = ?3 AND deleted_at IS NULL',
+      ).bind(now, project.id, userId),
+      c.env.DB.prepare(
+        `UPDATE tasks SET deleted_at = ?1, updated_at = ?1
+           WHERE project_id = ?2 AND user_id = ?3 AND deleted_at IS NULL`,
+      ).bind(now, project.id, userId),
+    ],
   );
   return c.json({
     deleted: true,
+    // the payload re-inserts the identical rows by id; with a tombstone they
+    // were never actually removed, so the restore just clears deleted_at
     undo: {
       project,
       tasks: tasks.results,

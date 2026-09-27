@@ -26,15 +26,17 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     c.env.DB.prepare(
       `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
        FROM projects
-       WHERE user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)
+       WHERE deleted_at IS NULL
+         AND (user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
        ORDER BY position, created_at`,
     )
       .bind(userId)
       .all(),
     c.env.DB.prepare(
       `SELECT * FROM tasks
-       WHERE user_id = ?1
-          OR project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
+       WHERE deleted_at IS NULL
+         AND (user_id = ?1
+          OR project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)))
        ORDER BY position, created_at`,
     )
       .bind(userId)
@@ -43,7 +45,8 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
       `SELECT * FROM subtasks
        WHERE user_id = ?1
           OR task_id IN (SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
-                         WHERE p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
+                         WHERE t.deleted_at IS NULL
+                           AND p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
        ORDER BY position, created_at`,
     )
       .bind(userId)
@@ -62,11 +65,13 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     // Resume restores the subtask you last tracked. A GROUP BY would drop the
     // subtask column, hence the window function.
     c.env.DB.prepare(
+      // a tombstoned task is not a place to resume (INV-06) — its time stays in
+      // the log and the reports, it just is not a "jump back in" destination
       `SELECT task_id, subtask_id FROM (
-         SELECT task_id, subtask_id, started_at,
-                ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY started_at DESC) AS rn
-         FROM time_sessions
-         WHERE user_id = ?1
+         SELECT s.task_id AS task_id, s.subtask_id AS subtask_id, s.started_at AS started_at,
+                ROW_NUMBER() OVER (PARTITION BY s.task_id ORDER BY s.started_at DESC) AS rn
+         FROM time_sessions s JOIN tasks t ON t.id = s.task_id
+         WHERE s.user_id = ?1 AND t.deleted_at IS NULL
        ) WHERE rn = 1
        ORDER BY started_at DESC
        LIMIT 6`,
@@ -210,14 +215,15 @@ miscRoutes.put('/layout/:projectId', requireAuth, limitWrites, async (c) => {
     data: { project_id: c.req.param('projectId'), count: parsed.data.positions.length },
   };
   if (stmts.length <= CHUNK) {
-    const evs = await commitWithEvents(c.env, userId, [draft], stmts, c.executionCtx);
-    return c.json({ ok: true, events: evs });
+    const { events } = await commitWithEvents(c.env, userId, [draft], stmts, c.executionCtx);
+    return c.json({ ok: true, events });
   }
   let evs: WsEvent[] = [];
   for (let i = 0; i < stmts.length; i += CHUNK) {
     const chunk = stmts.slice(i, i + CHUNK);
     const last = i + CHUNK >= stmts.length;
-    evs = await commitWithEvents(c.env, userId, last ? [draft] : [], chunk, last ? c.executionCtx : undefined);
+    const out = await commitWithEvents(c.env, userId, last ? [draft] : [], chunk, last ? c.executionCtx : undefined);
+    evs = out.events;
   }
   return c.json({ ok: true, events: evs });
 });

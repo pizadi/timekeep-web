@@ -11,9 +11,12 @@
 // boundary behaviour the guard must NOT get wrong: a partially-overlapping
 // interval is refused, an abutting one is accepted (the predicate is half-open),
 // and the overlap stays per-user.
+import { withProxyRetry } from './support/proxy-retry.mjs';
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
+/** What smoke-test.sh rotates the seeded admin password to (its own default). */
+const SUITE_ADMIN_PASSWORD = 'purple-marmalade-admin-42';
 const SEEDED_PASSWORD = 'changemeasap';
 const ROUNDS = Number(process.env.TK_ROUNDS ?? 12);
 const WIDTH = Number(process.env.TK_WIDTH ?? 6); // simultaneous creates per round
@@ -24,7 +27,7 @@ function check(name, ok, detail = '') {
   if (!ok) fail = 1;
 }
 
-async function call(jar, method, path, data) {
+const callOnce = async (jar, method, path, data) => {
   const res = await fetch(BASE + path, {
     method,
     headers: {
@@ -52,20 +55,16 @@ async function call(jar, method, path, data) {
     /* empty */
   }
   return { status: res.status, body };
-}
+};
 
 /**
- * `wrangler dev`'s local proxy intermittently answers a request with a bodiless
- * 5xx ("Network connection lost" — AGENTS.md). A local artifact, not a product
- * behavior; retry once so a flake doesn't read as a lost race.
+ * `wrangler dev`'s local proxy intermittently answers a dropped request with an
+ * HTTP 500 and no body (AGENTS.md). A local artifact, not a product behavior —
+ * and in a script whose subject IS concurrency, a dropped request would read as a
+ * lost race. Retry it.
  */
-async function callRetry(jar, method, path, data) {
-  const first = await call(jar, method, path, data);
-  if (first.status >= 500 && first.body === null) {
-    console.log(`  (local proxy flake: ${first.status} with no body — retrying)`);
-    return call(jar, method, path, data);
-  }
-  return first;
+async function call(jar, method, path, data) {
+  return withProxyRetry(`${method} ${path}`, () => callOnce(jar, method, path, data));
 }
 
 const PASS = 'a-very-long-race-password-123';
@@ -92,18 +91,23 @@ async function sessionsInWindow(jar, taskId, start, end) {
 
 async function main() {
   const admin = { cookies: [] };
-  let login = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
-  if (login.status !== 200 && ADMIN_PASSWORD) {
-    login = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
+  // The admin password is 'changemeasap' on a fresh database and whatever
+  // smoke-test.sh rotated it to afterwards — this script runs AFTER smoke-test
+  // in the suite, so trying only the seeded password failed with a bare 401
+  // that read like a product bug. Try every known one, in order.
+  let login = null;
+  for (const pw of [ADMIN_PASSWORD, SUITE_ADMIN_PASSWORD, SEEDED_PASSWORD].filter(Boolean)) {
+    login = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: pw });
+    if (login.status === 200) break;
   }
-  if (login.status !== 200) {
-    console.error(`race test: admin login failed (${login.status}) — run smoke-test.sh first`);
+  if (!login || login.status !== 200) {
+    console.error(`race test: admin login failed (${login?.status}) — run smoke-test.sh first`);
     process.exit(1);
   }
   // a freshly seeded admin is gated behind a forced password change, which
   // blocks /admin/users
   if (login.body?.must_change_password) {
-    const pw = ADMIN_PASSWORD || 'a-very-long-admin-password-123';
+    const pw = ADMIN_PASSWORD || SUITE_ADMIN_PASSWORD;
     const rotated = await call(admin, 'POST', '/me/password', { current_password: SEEDED_PASSWORD, password: pw });
     if (rotated.status !== 200) {
       console.error(`race test: could not rotate the seeded admin password (${rotated.status})`);
@@ -151,7 +155,7 @@ async function main() {
     const { start, end } = slot();
     // one jar + device id per racer, so nothing in the stack can dedupe them
     const attempts = Array.from({ length: WIDTH }, (_, i) =>
-      callRetry({ cookies: [...a.jar.cookies], csrf: a.jar.csrf, device: `race-${r}-${i}` }, 'POST', '/sessions', {
+      call({ cookies: [...a.jar.cookies], csrf: a.jar.csrf, device: `race-${r}-${i}` }, 'POST', '/sessions', {
         task_id: tid,
         started_at: start,
         ended_at: end,

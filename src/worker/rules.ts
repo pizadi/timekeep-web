@@ -286,9 +286,14 @@ export function wroteOne(result: D1Result | undefined): boolean {
  * Parameters: 1 id · 2 user_id · 3 task_id · 4 started_at · 5 ended_at
  *             6 note · 7 created_at/updated_at · 8 subtask_id
  *             9 now (a running session occupies until this instant) · 10 cap
+ *
+ * `task_name` snapshots the task's name at write time (INV-06): if the task is
+ * later tombstoned, or (for a legacy row) hard-deleted, the session still renders
+ * as the thing the user actually worked on.
  */
-export const INSERT_SESSION_GUARDED = `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-     SELECT ?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8
+export const INSERT_SESSION_GUARDED = `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
+     SELECT ?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8,
+            (SELECT name FROM tasks WHERE id = ?3)
      WHERE NOT EXISTS (
        SELECT 1 FROM time_sessions
        WHERE ${overlapSql({ TASK: 3, USER: 2, END: 5, NOW: 9, START: 4 })}
@@ -308,7 +313,8 @@ export const INSERT_SESSION_GUARDED = `INSERT INTO time_sessions (id, user_id, t
  *             6 updated_at · 7 id · 8 user_id · 9 now
  */
 export const UPDATE_SESSION_GUARDED = `UPDATE time_sessions
-     SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
+     SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6,
+         task_name = (SELECT name FROM tasks WHERE id = ?1)
      WHERE id = ?7 AND user_id = ?8
        AND NOT EXISTS (
          SELECT 1 FROM time_sessions

@@ -32,7 +32,9 @@ taskRoutes.get('/projects/:id/tasks', async (c) => {
   const projectId = c.req.param('id');
   const access = await requireProjectAccess(c.env, c.get('user').id, projectId);
   // group projects expose every member's tasks; personal projects are owner-only anyway
-  const tasks = await c.env.DB.prepare(`SELECT * FROM tasks WHERE project_id = ?1 ORDER BY position, created_at`)
+  const tasks = await c.env.DB.prepare(
+    `SELECT * FROM tasks WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY position, created_at`,
+  )
     .bind(projectId)
     .all();
   const subtasks = await c.env.DB.prepare(
@@ -143,17 +145,22 @@ taskRoutes.delete('/tasks/:id', async (c) => {
   const { task, access } = await requireTaskAccess(c.env, userId, c.req.param('id'));
   if (access.isGroup && !access.canEditTasks) return jsonError(403, 'forbidden', 'missing permission: edit_tasks');
 
-  // One transactional batch: the reads (event/undo payload) and the delete
-  // observe a consistent snapshot. For group tasks the reads are deliberately
-  // NOT user-scoped — the deletion hits every member, so every device needs
-  // the full payload to clean up (and group deletes carry no undo).
+  // TOMBSTONE, not a cascade (INV-06). Deleting a group task used to
+  // cascade-delete its time_sessions — including the ones belonging to OTHER
+  // members, whose historical records are not the deleter's to destroy. The row
+  // stays with deleted_at set (invisible to every live listing, present in
+  // history), so a running timer on it is left alone and reports keep working.
+  //
+  // One batch: the reads (event/undo payload) observe a consistent snapshot,
+  // and the tombstone rides in the same transaction as the fan-out event.
+  // For group tasks the reads are deliberately NOT user-scoped — the tombstone
+  // hits every member, so every device needs the full payload to clean up.
   const [subtasks, deps, sessions, ,] = await c.env.DB.batch([
     c.env.DB.prepare('SELECT * FROM subtasks WHERE task_id = ?1').bind(task.id),
     c.env.DB.prepare(`SELECT * FROM task_dependencies WHERE task_id = ?1 OR depends_on_id = ?1`).bind(task.id),
     c.env.DB.prepare('SELECT * FROM time_sessions WHERE task_id = ?1').bind(task.id),
-    c.env.DB.prepare('DELETE FROM tasks WHERE id = ?1').bind(task.id), // cascades to subtasks/deps/sessions
   ]);
-
+  const now = Date.now();
   const evs = await emitEntityEvents(
     c.env,
     userId,
@@ -162,11 +169,28 @@ taskRoutes.delete('/tasks/:id', async (c) => {
       {
         type: 'task.deleted',
         actor: c.get('deviceId'),
-        data: { task, subtasks: subtasks.results, dependencies: deps.results, sessions: sessions.results },
+        data: {
+          task: { ...task, deleted_at: now },
+          subtasks: subtasks.results,
+          dependencies: deps.results,
+          // the sessions stay: they are history, and the other members' are not
+          // ours to announce as deleted
+          sessions: [],
+        },
       },
     ],
     c.executionCtx,
+    access.isGroup ? (access.project?.group_id ?? undefined) : undefined,
+    [
+      c.env.DB.prepare('UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL').bind(
+        now,
+        task.id,
+      ),
+    ],
   );
+  // the personal path's undo payload keeps the sessions so "undo" can restore
+  // them intact — with a tombstone they are still there to begin with
+  void sessions;
   if (access.isGroup) return c.json({ deleted: true, undo: null, events: evs });
   return c.json({
     deleted: true,

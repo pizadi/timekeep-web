@@ -55,6 +55,12 @@ function eventsFrom(drafts: EventDraft[], results: D1Result[], at: number): WsEv
  *
  * If the batch throws, NOTHING is written — the handler's error response
  * matches the untouched database, which is the whole point.
+ *
+ * Returns the events AND the raw batch results. A GUARDED write (the session
+ * insert carrying the overlap/cap predicates) can legitimately match zero rows
+ * while its event still appends, so the caller must read the entity
+ * statement's `meta.changes` to know whether it won the race — the event count
+ * says nothing about that.
  */
 export async function commitWithEvents(
   env: Env,
@@ -62,13 +68,13 @@ export async function commitWithEvents(
   drafts: EventDraft[],
   entityStmts: D1PreparedStatement[] = [],
   ctx?: { waitUntil(p: Promise<unknown>): void },
-): Promise<WsEvent[]> {
-  if (drafts.length === 0 && entityStmts.length === 0) return [];
+): Promise<{ events: WsEvent[]; results: D1Result[] }> {
+  if (drafts.length === 0 && entityStmts.length === 0) return { events: [], results: [] };
   const now = Date.now();
   const results = await env.DB.batch([...entityStmts, ...syncLogStmts(env, userId, drafts, now)]);
   const events = eventsFrom(drafts, results.slice(entityStmts.length), now);
   notifyHub(env, userId, events, ctx);
-  return events;
+  return { events, results };
 }
 
 /**
@@ -99,6 +105,7 @@ export async function emitToUsers(
   env: Env,
   items: Array<{ userId: string; draft: EventDraft }>,
   ctx?: { waitUntil(p: Promise<unknown>): void },
+  entityStmts: D1PreparedStatement[] = [],
 ): Promise<Map<string, WsEvent[]>> {
   const byUser = new Map<string, WsEvent[]>();
   if (items.length === 0) return byUser;
@@ -111,8 +118,12 @@ export async function emitToUsers(
       now,
     ),
   );
-  const results = await env.DB.batch(stmts);
-  results.forEach((r, i) => {
+  // the caller's entity statements ride in the SAME batch (INV-11): a fan-out
+  // that announced a change made in a different transaction is the exact
+  // divergence this pipeline exists to prevent
+  const results = await env.DB.batch([...entityStmts, ...stmts]);
+  const eventResults = results.slice(entityStmts.length);
+  eventResults.forEach((r, i) => {
     const it = items[i]!;
     const ev: WsEvent = {
       id: Number(r.meta.last_row_id),
@@ -132,7 +143,11 @@ export async function emitToUsers(
 /**
  * Entity mutations fan out to the acting user's hub — and, when the entity
  * lives in a GROUP project, to every group member's hub (feature 6: shared
- * tasks stay in sync for the whole group). Call AFTER the entity write.
+ * tasks stay in sync for the whole group).
+ *
+ * `entityStmts` are the entity's OWN writes, and they go into the SAME batch as
+ * the fan-out events (INV-11) — pass them here rather than writing first. That
+ * is what makes a tombstone atomic with the event that announces it.
  * `knownGroupId` skips the project lookup when the caller already read the row
  * (the PATCH path reuses the access-resolution read — one less round trip).
  * Returns the acting user's event copies for the API response envelope
@@ -145,6 +160,7 @@ export async function emitEntityEvents(
   drafts: EventDraft[],
   ctx?: { waitUntil(p: Promise<unknown>): void },
   knownGroupId?: string | null,
+  entityStmts: D1PreparedStatement[] = [],
 ): Promise<WsEvent[]> {
   let groupId = knownGroupId;
   if (groupId === undefined) {
@@ -154,15 +170,14 @@ export async function emitEntityEvents(
     groupId = pr?.group_id ?? null;
   }
   if (!groupId) {
-    const evs = await appendEvents(env, userId, drafts);
-    notifyHub(env, userId, evs, ctx);
-    return evs;
+    const { events } = await commitWithEvents(env, userId, drafts, entityStmts, ctx);
+    return events;
   }
   const members = await env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
     .bind(groupId)
     .all<{ user_id: string }>();
   const items = members.results.flatMap((m) => drafts.map((d) => ({ userId: m.user_id, draft: d })));
-  const byUser = await emitToUsers(env, items, ctx);
+  const byUser = await emitToUsers(env, items, ctx, entityStmts);
   return byUser.get(userId) ?? [];
 }
 

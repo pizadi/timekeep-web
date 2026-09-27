@@ -9,6 +9,7 @@ import { jsonError } from '../env';
 import { requireAuth, limitHeavy } from '../middleware';
 import { dayBounds, weekStartInstant, civilDate, dayStartInstant, minutes } from '../../shared/time';
 import { REPORT_MAX_RANGE_DAYS } from '../../shared/constants';
+import { HISTORICAL_TASK_NAME } from '../access';
 
 export const reportRoutes = new Hono<WorkerType>();
 reportRoutes.use('/reports', requireAuth);
@@ -65,7 +66,7 @@ reportRoutes.get('/reports/summary', async (c) => {
      SELECT d.day AS day, t.project_id AS project_id,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?2), d.end_ms) - MAX(s.started_at, d.start_ms))) AS ms
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN tasks t ON t.id = s.task_id
      JOIN days d ON s.started_at < d.end_ms AND COALESCE(s.ended_at, ?2) > d.start_ms
      WHERE s.user_id = ?3 AND s.started_at < ?4 AND COALESCE(s.ended_at, ?2) > ?5
      GROUP BY d.day, t.project_id`,
@@ -78,7 +79,7 @@ reportRoutes.get('/reports/summary', async (c) => {
     `SELECT t.project_id AS project_id,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS ms
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN tasks t ON t.id = s.task_id
      WHERE s.user_id = ?4 AND s.started_at < ?2 AND COALESCE(s.ended_at, ?1) > ?3
      GROUP BY t.project_id`,
   )
@@ -89,11 +90,11 @@ reportRoutes.get('/reports/summary', async (c) => {
   // are their own slice; sessions without one stay a task-level slice (the
   // slices remain a disjoint partition of the range total — no double counting)
   const donutSubRows = await c.env.DB.prepare(
-    `SELECT t.project_id AS project_id, t.id AS task_id, t.name AS task_name,
+    `SELECT t.project_id AS project_id, t.id AS task_id, ${HISTORICAL_TASK_NAME} AS task_name,
             sb.id AS subtask_id, sb.name AS subtask_name,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS ms
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN tasks t ON t.id = s.task_id
      LEFT JOIN subtasks sb ON sb.id = s.subtask_id
      WHERE s.user_id = ?4 AND s.started_at < ?2 AND COALESCE(s.ended_at, ?1) > ?3
      GROUP BY t.id, sb.id
@@ -107,15 +108,15 @@ reportRoutes.get('/reports/summary', async (c) => {
   // (sessions without a subtask attribute to the task row itself, so task
   // totals are identical to the pre-subtask behavior)
   const tableRows = await c.env.DB.prepare(
-    `SELECT t.id AS task_id, t.name AS task_name, t.done, t.project_id AS project_id,
+    `SELECT t.id AS task_id, ${HISTORICAL_TASK_NAME} AS task_name, t.done, t.project_id AS project_id,
             p.name AS project_name, p.color AS project_color,
             sb.id AS subtask_id, sb.name AS subtask_name, sb.done AS subtask_done,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS today_ms,
             SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?4) - MAX(s.started_at, ?5))) AS week_ms,
             SUM(COALESCE(s.ended_at, ?1) - s.started_at) AS all_ms
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN projects p ON p.id = t.project_id
      LEFT JOIN subtasks sb ON sb.id = s.subtask_id
      WHERE s.user_id = ?6
      GROUP BY t.id, sb.id`,
@@ -211,7 +212,7 @@ reportRoutes.get('/reports/day', async (c) => {
        SELECT t.project_id AS project_id,
               SUM(MAX(0, MIN(COALESCE(s.ended_at, ?2), d.end_ms) - MAX(s.started_at, d.start_ms))) AS ms
        FROM time_sessions s
-       JOIN tasks t ON t.id = s.task_id
+       LEFT JOIN tasks t ON t.id = s.task_id
        JOIN days d ON s.started_at < d.end_ms AND COALESCE(s.ended_at, ?2) > d.start_ms
        WHERE s.user_id = ?3
        GROUP BY t.project_id`,
@@ -219,14 +220,14 @@ reportRoutes.get('/reports/day', async (c) => {
       .bind(daysJson, now, userId)
       .all<{ project_id: string; ms: number }>(),
     c.env.DB.prepare(
-      `SELECT t.id AS task_id, t.name AS task_name, t.done, t.project_id AS project_id,
+      `SELECT t.id AS task_id, ${HISTORICAL_TASK_NAME} AS task_name, t.done, t.project_id AS project_id,
               p.name AS project_name, p.color AS project_color,
               sb.id AS subtask_id, sb.name AS subtask_name, sb.done AS subtask_done,
               SUM(MAX(0, MIN(COALESCE(s.ended_at, ?1), ?2) - MAX(s.started_at, ?3))) AS ms,
               MAX(s.started_at) AS last_start
        FROM time_sessions s
-       JOIN tasks t ON t.id = s.task_id
-       JOIN projects p ON p.id = t.project_id
+       LEFT JOIN tasks t ON t.id = s.task_id
+       LEFT JOIN projects p ON p.id = t.project_id
        LEFT JOIN subtasks sb ON sb.id = s.subtask_id
        WHERE s.user_id = ?4 AND ${range}
        GROUP BY t.id, sb.id

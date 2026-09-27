@@ -10,10 +10,12 @@ import {
   findSameTaskOverlaps,
   INSERT_SESSION_GUARDED,
   UPDATE_SESSION_GUARDED,
+  wroteOne,
   conflictError,
   assertNotRunning,
 } from '../rules';
 import { commitWithEvents, EventDraft } from '../events';
+import { HISTORICAL_TASK_NAME } from '../access';
 import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';
 
@@ -81,8 +83,8 @@ sessionRoutes.get('/sessions', async (c) => {
   const totalRow = await c.env.DB.prepare(
     `SELECT COUNT(*) AS n
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN projects p ON p.id = t.project_id
      WHERE ${whereSql}`,
   )
     .bind(...binds)
@@ -90,12 +92,17 @@ sessionRoutes.get('/sessions', async (c) => {
   const total = Number(totalRow?.n ?? 0);
 
   const rows = await c.env.DB.prepare(
+    // History renders a tombstoned task under the name it had, not as nothing
+    // (INV-06) — this list is the user's own record, so it must survive the
+    // task's deletion. HISTORICAL_TASK_NAME picks the snapshot when the task
+    // is gone or tombstoned, and the live name otherwise.
     `SELECT s.id, s.task_id, s.started_at, s.ended_at, s.source, s.note, s.subtask_id,
-            t.name AS task_name, sb.name AS subtask_name, t.project_id, p.name AS project_name, p.color AS project_color
+            ${HISTORICAL_TASK_NAME} AS task_name, sb.name AS subtask_name, t.project_id,
+            p.name AS project_name, p.color AS project_color, t.deleted_at AS task_deleted_at
      FROM time_sessions s
-     JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN tasks t ON t.id = s.task_id
      LEFT JOIN subtasks sb ON sb.id = s.subtask_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN projects p ON p.id = t.project_id
      WHERE ${whereSql}
      ORDER BY s.started_at DESC, s.id DESC
      LIMIT ?${++n} OFFSET ?${++n}`,
@@ -121,7 +128,8 @@ sessionRoutes.post('/sessions', async (c) => {
   const task = await c.env.DB.prepare(
     `SELECT t.id, t.project_id, t.name, p.archived FROM tasks t
      JOIN projects p ON p.id = t.project_id
-     WHERE t.id = ?1 AND (t.user_id = ?2 OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
+     WHERE t.id = ?1 AND t.deleted_at IS NULL AND p.deleted_at IS NULL
+       AND (t.user_id = ?2 OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
   )
     .bind(task_id, userId)
     .first<any>();
@@ -164,7 +172,7 @@ sessionRoutes.post('/sessions', async (c) => {
     updated_at: now,
     subtask_id: subtask_id ?? null,
   };
-  const evs = await commitWithEvents(
+  const { events: evs, results } = await commitWithEvents(
     c.env,
     userId,
     [{ type: 'session.created', actor: c.get('deviceId'), data: { session } }] as EventDraft[],
@@ -184,7 +192,11 @@ sessionRoutes.post('/sessions', async (c) => {
     ],
     c.executionCtx,
   );
-  if (evs.length === 0) {
+  // The GUARDED statement decides the race, and it can match zero rows while the
+  // event still appends — so the entity statement's `meta.changes` is the signal,
+  // never the event count (which would report a lost race as a 201 for a row that
+  // was never written).
+  if (!wroteOne(results[0])) {
     // the guarded INSERT matched 0 rows: a concurrent request got there first.
     // Re-read to report the right error — the overlap wins if it now conflicts,
     // otherwise it is the account cap.
@@ -216,7 +228,7 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const subtaskId = u.subtask_id !== undefined ? (u.subtask_id ?? null) : (existing.subtask_id ?? null);
 
   const task = await c.env.DB.prepare(
-    `SELECT t.id FROM tasks t WHERE t.id = ?1
+    `SELECT t.id FROM tasks t WHERE t.id = ?1 AND t.deleted_at IS NULL
        AND (t.user_id = ?2 OR t.project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2)))`,
   )
     .bind(taskId, userId)
@@ -252,7 +264,10 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
     source: 'manual',
     updated_at: now,
   };
-  const evs = await commitWithEvents(
+  // Same signal as the create path: the guarded UPDATE's own `meta.changes`, not
+  // the event count — a batch that appended only the event would otherwise
+  // report a lost race as a 200 with a row that was never written.
+  const { events: evs, results } = await commitWithEvents(
     c.env,
     userId,
     [{ type: 'session.updated', actor: c.get('deviceId'), data: { session } }] as EventDraft[],
@@ -271,7 +286,7 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
     ],
     c.executionCtx,
   );
-  if (evs.length === 0) {
+  if (!wroteOne(results[0])) {
     // the guarded UPDATE matched 0 rows: either a concurrent request created
     // an overlap, or the row was deleted while we were validating it
     const still = await c.env.DB.prepare('SELECT 1 FROM time_sessions WHERE id = ?1 AND user_id = ?2')
@@ -293,12 +308,12 @@ sessionRoutes.delete('/sessions/:id', async (c) => {
   await assertNotRunning(c.env, userId, existing.id);
   // delete + event in ONE batch (INV-11): a deleted session with no
   // session.deleted event is a row other devices keep rendering forever.
-  const evs = await commitWithEvents(
+  const { events } = await commitWithEvents(
     c.env,
     userId,
     [{ type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } }] as EventDraft[],
     [c.env.DB.prepare('DELETE FROM time_sessions WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId)],
     c.executionCtx,
   );
-  return c.json({ deleted: true, undo: { sessions: [existing] }, events: evs });
+  return c.json({ deleted: true, undo: { sessions: [existing] }, events });
 });

@@ -326,7 +326,8 @@ exportRoutes.post('/import', async (c) => {
           `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
            ON CONFLICT (id) DO UPDATE SET name = excluded.name, color = excluded.color,
-             archived = excluded.archived, position = excluded.position, updated_at = excluded.updated_at
+             archived = excluded.archived, position = excluded.position, updated_at = excluded.updated_at,
+             deleted_at = NULL
            WHERE projects.user_id = excluded.user_id`,
         ).bind(
           id,
@@ -386,7 +387,8 @@ exportRoutes.post('/import', async (c) => {
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
            ON CONFLICT (id) DO UPDATE SET project_id = excluded.project_id, parent_id = excluded.parent_id,
              name = excluded.name, notes = excluded.notes, done = excluded.done,
-             position = excluded.position, updated_at = excluded.updated_at
+             position = excluded.position, updated_at = excluded.updated_at,
+             deleted_at = NULL
            WHERE tasks.user_id = excluded.user_id`,
         ).bind(
           id,
@@ -520,10 +522,12 @@ exportRoutes.post('/import', async (c) => {
         else summary.sessions.created++;
         const sub = s.subtask_id && importSubs.get(s.subtask_id) === idOf(s.task_id) ? s.subtask_id : null;
         return c.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
+          // task_name keeps the historical name in step with the task (INV-06)
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, (SELECT name FROM tasks WHERE id = ?3))
            ON CONFLICT (id) DO UPDATE SET task_id = excluded.task_id, started_at = excluded.started_at,
-             ended_at = excluded.ended_at, note = excluded.note, updated_at = excluded.updated_at
+             ended_at = excluded.ended_at, note = excluded.note, updated_at = excluded.updated_at,
+             task_name = excluded.task_name
            WHERE time_sessions.user_id = excluded.user_id`,
         ).bind(
           id,
@@ -623,7 +627,8 @@ exportRoutes.post('/restore', async (c) => {
         c.env.DB.prepare(
           `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT (id) DO UPDATE SET archived = 0, updated_at = excluded.updated_at
+         ON CONFLICT (id) DO UPDATE SET archived = 0, updated_at = excluded.updated_at,
+           deleted_at = NULL
          WHERE projects.user_id = excluded.user_id`,
         ).bind(
           p.id,
@@ -673,7 +678,8 @@ exportRoutes.post('/restore', async (c) => {
           c.env.DB.prepare(
             `INSERT INTO tasks (id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-           ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at
+           ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at,
+             deleted_at = NULL
            WHERE tasks.user_id = excluded.user_id`,
           ).bind(
             t.id,
@@ -813,8 +819,8 @@ exportRoutes.post('/restore', async (c) => {
       .map(({ s, started, ended }) => {
         const sub = s.subtask_id && restoreSubs.get(s.subtask_id) === s.task_id ? s.subtask_id : null;
         return c.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, (SELECT name FROM tasks WHERE id = ?3))
            ON CONFLICT (id) DO NOTHING`,
         ).bind(
           s.id,

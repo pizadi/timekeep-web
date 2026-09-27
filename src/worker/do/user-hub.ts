@@ -221,7 +221,6 @@ export class UserHub extends DurableObject {
     if (url.pathname === '/notify') {
       const body = await request.json<{ events: WsEvent[] }>().catch(() => null);
       if (body?.events?.length) {
-        let runningCleared = false;
         let pomoCancelled = false;
         for (const e of body.events) {
           this.lastEventId = Math.max(this.lastEventId, e.id);
@@ -233,20 +232,9 @@ export class UserHub extends DurableObject {
               pomoCancelled = true;
             }
           }
-          if (this.invalidateDeletedTasks(e)) runningCleared = true;
-        }
-        if (runningCleared) {
-          // cascade-deleted rows are already gone from D1; drop the ghost timer
-          // and tell every device — then persist/reset pomo + alarms
-          await this.persistPomo();
-          await this.rearmAlarm();
-          await this.logAndBroadcast({
-            id: 0,
-            type: 'timer.stopped',
-            actor: 'server',
-            at: Date.now(),
-            data: { session: null },
-          });
+          // a tombstoned task stops the running session (ending the row, not
+          // deleting it) and broadcasts the stop itself — see the method
+          if (await this.invalidateDeletedTasks(e)) await this.rearmAlarm();
         }
         if (pomoCancelled) {
           await this.persistPomo();
@@ -456,7 +444,8 @@ export class UserHub extends DurableObject {
     }
     const task = await this.env.DB.prepare(
       `SELECT t.id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.id = ?1 AND (t.user_id = ?2
+       WHERE t.id = ?1 AND t.deleted_at IS NULL AND p.deleted_at IS NULL
+         AND (t.user_id = ?2
          OR p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?2))`,
     )
       .bind(taskId, this.userId())
@@ -491,8 +480,10 @@ export class UserHub extends DurableObject {
     try {
       results = await this.env.DB.batch([
         this.env.DB.prepare(
-          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`,
+          // task_name snapshots the name at write time (INV-06) so a later
+          // tombstone never leaves the session rendering as a bare id
+          `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
+           VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6, (SELECT name FROM tasks WHERE id = ?3))`,
         ).bind(sessionId, this.userId(), taskId, now, session.source, subtaskId),
         this.env.DB.prepare(
           `INSERT INTO active_timers (user_id, task_id, session_id, started_at, pomo_state, subtask_id)
@@ -666,8 +657,8 @@ export class UserHub extends DurableObject {
         stopped.id,
       ),
       this.env.DB.prepare(
-        `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6)`,
+        `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, '', ?4, ?4, ?6, (SELECT name FROM tasks WHERE id = ?3))`,
       ).bind(newId, this.userId(), taskId, now + 1, newSource, subtaskId),
       this.env.DB.prepare(
         `UPDATE active_timers SET task_id = ?2, session_id = ?3, started_at = ?4, pomo_state = ?5, subtask_id = ?6 WHERE user_id = ?1`,
@@ -916,11 +907,19 @@ export class UserHub extends DurableObject {
   // ---------- fan-out ----------
 
   /**
-   * Cascade deletes (task/project) remove time_sessions + active_timers rows in
-   * D1, but the DO holds the running session in memory — clear it here when the
-   * deleted subtree contained it. Returns true when state changed.
+   * A task/project is gone from every live path, so the DO has to stop tracking
+   * it — but the time already recorded against it must SURVIVE (INV-06). So the
+   * running session is ENDED, not deleted: the row stays with its duration and
+   * name, which is exactly what a user pressing "stop" would have produced.
+   *
+   * (It used to be a cascade delete: the row disappeared, along with every other
+   * member's sessions on a shared task. A running timer on a task the user can no
+   * longer see is also just broken — they could not start anything else, since
+   * the single-timer invariant is enforced.)
+   *
+   * Returns true when this DO's live state changed.
    */
-  private invalidateDeletedTasks(e: WsEvent): boolean {
+  private async invalidateDeletedTasks(e: WsEvent): Promise<boolean> {
     const d = e.data as any;
     const ids = new Set<string>();
     if (e.type === 'task.deleted' && d?.task?.id) ids.add(d.task.id);
@@ -930,7 +929,30 @@ export class UserHub extends DurableObject {
     if (ids.size === 0) return false;
     let changed = false;
     if (this.running && ids.has(this.running.task_id)) {
+      const now = Date.now();
+      const session = { ...this.running, ended_at: now };
+      // END the row — the time stands, the timer does not
+      await this.env.DB.batch([
+        this.env.DB.prepare('UPDATE time_sessions SET ended_at = ?1, updated_at = ?1 WHERE id = ?2').bind(
+          now,
+          this.running.id,
+        ),
+        this.env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?1').bind(this.userId()),
+      ]);
       this.running = null;
+      this.nudgeNextAt = null;
+      if (this.pomo.phase === 'focus' && this.pomo.lastResumeMs) {
+        this.pomo.accumulatedFocusMs += now - this.pomo.lastResumeMs;
+        this.pomo.lastResumeMs = null;
+      }
+      await this.persistPomo();
+      await this.logAndBroadcast({
+        id: 0,
+        type: 'timer.stopped',
+        actor: 'server',
+        at: now,
+        data: { session, reason: 'task_deleted' },
+      });
       changed = true;
     }
     if (this.pomo.taskId && ids.has(this.pomo.taskId)) {
