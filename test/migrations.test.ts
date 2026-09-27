@@ -110,11 +110,21 @@ function apply0002(db: string): string {
  */
 function expectUniqueHeld(db: string): void {
   expect(run(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_users_username'")).toBe('1');
+  // stderr piped, not inherited: the sqlite3 CLI prints the constraint violation
+  // it is SUPPOSED to produce here, and it was showing up in the test output as
+  // if something had gone wrong.
   expect(() =>
-    run(
-      db,
-      "INSERT INTO users (id, email, created_at, updated_at) VALUES ('probe', 'probe@x.com', 1, 1);" +
-        "UPDATE users SET username = (SELECT username FROM users WHERE id = 'u1') WHERE id = 'probe';",
+    execFileSync(
+      'sqlite3',
+      [db, "INSERT INTO users (id, email, created_at, updated_at) VALUES ('probe', 'probe@x.com', 1, 1);"],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    ),
+  ).not.toThrow();
+  expect(() =>
+    execFileSync(
+      'sqlite3',
+      [db, "UPDATE users SET username = (SELECT username FROM users WHERE id = 'u1') WHERE id = 'probe';"],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
     ),
   ).toThrow();
 }

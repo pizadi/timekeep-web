@@ -7,8 +7,13 @@
 # instance the rest of the suite uses — see scripts/run-e2e.sh, which drives the
 # full suite and calls this for the write-limit and session-race cases.
 #
-# Usage: scripts/with-dev-instance.sh <port> <state-dir> <log-file> <script> [env=KV ...]
-#   env assignments are exported to the script, e.g. TK_BASE=... node e2e/x.mjs
+# Usage: scripts/with-dev-instance.sh <port> <state-dir> <log-file> <script> [--wrangler args...]
+#   <script>      a shell command, run with the instance up. Env it needs is set
+#                 inside that string, e.g.
+#                   'TK_BASE=http://127.0.0.1:8788/api node e2e/write-limit-test.mjs'
+#   [--wrangler]  EXTRA ARGS FOR WRANGLER, e.g. --var RL_WRITE_USER:5
+#                 (NOT env vars — a var that only exists in the environment never
+#                 reaches the Worker, and the instance silently runs on defaults)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,9 +23,15 @@ LOG=$3
 SCRIPT=$4
 shift 4
 
+# A private instance starts against an EMPTY database, so migrations are
+# applied unconditionally — `wrangler d1 migrations apply` skips whatever is
+# already recorded, so this is safe on a reused state dir. It used to be tied to
+# SEED_SQL, which meant "fresh state dir, no fixture" booted a Worker with no
+# schema at all: the first request failed with `D1_ERROR: no such table:
+# rate_counters` and every later check cascaded into a confusing 401.
+npx wrangler d1 migrations apply timekeep --local --persist-to "$STATE" >/dev/null
+
 if [ -n "${SEED_SQL:-}" ]; then
-	rm -rf "$STATE"
-	npx wrangler d1 migrations apply timekeep --local --persist-to "$STATE" >/dev/null
 	npx wrangler d1 execute timekeep --local --persist-to "$STATE" --file "$SEED_SQL" >/dev/null
 	# `wrangler d1 execute` leaves its writes in the SQLite WAL, and a dev
 	# instance started straight afterwards does not see them — the seeded rows

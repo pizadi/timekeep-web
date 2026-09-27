@@ -9,6 +9,8 @@
 //  - a burst big enough to trip the 300/min default would take minutes through
 //    the local dev proxy, which has a ~0.5 s/request baseline. The limit is a
 //    config value; what needs proving is the mechanism.
+import { withProxyRetry } from './support/proxy-retry.mjs';
+
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8788/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = 'a-very-long-admin-password-123';
@@ -68,12 +70,7 @@ async function callOnce(jar, device, method, path, data) {
  * password three checks later.
  */
 async function call(jar, device, method, path, data) {
-  const first = await callOnce(jar, device, method, path, data);
-  if (first.status >= 500 && first.body === null) {
-    console.log(`  (local proxy flake: ${first.status} with no body — retrying)`);
-    return callOnce(jar, device, method, path, data);
-  }
-  return first;
+  return withProxyRetry(`${method} ${path}`, () => callOnce(jar, device, method, path, data));
 }
 
 const adm = { cookies: [] };
