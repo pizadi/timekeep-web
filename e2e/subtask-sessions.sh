@@ -18,7 +18,12 @@ req() { local jar=$1 dev=$2 method=$3 path=$4 data=$5
     else
       out=$(curl -s --max-time 20 -b "$jar" -c "$jar" -X "$method" "$BASE$path" -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t")
     fi
-    rc=$?; [ $rc -eq 0 ] && [ -n "$out" ] && break; sleep 1
+    # the local dev proxy answers a dropped request with an HTTP 500 whose body
+    # is an "Error: Network connection lost." page — curl exits 0 and the body
+    # is non-empty, so a bare rc/-n check treats it as a real answer. Retry it.
+    rc=$?
+    if [ $rc -eq 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | grep -q "Network connection lost"; then break; fi
+    sleep 1
   done
   echo "$out"; }
 

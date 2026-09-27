@@ -5,7 +5,8 @@ import type { WorkerType } from '../env';
 import { jsonError } from '../env';
 import { requireAuth, limitHeavy, limitWrites } from '../middleware';
 import { settingsSchema, layoutSchema } from '../validators';
-import { appendEvents, notifyHub } from '../events';
+import { commitWithEvents, type EventDraft } from '../events';
+import type { WsEvent } from '../../shared/constants';
 import { socialLists } from './friends';
 import { groupLists } from './groups';
 import { DEFAULT_SETTINGS } from '../defaults';
@@ -140,39 +141,30 @@ miscRoutes.put('/settings', requireAuth, limitWrites, async (c) => {
     ...(parsed.data.sound_enabled !== undefined ? { sound_enabled: parsed.data.sound_enabled } : {}),
     ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {}),
   };
-  // settings write + profile theme mirror + event append in ONE batch (audit:
-  // three unrelated round-trips could leave theme/settings/event divergent on
-  // a crash)
-  const evDrafts = [{ type: 'settings.updated' as const, actor: c.get('deviceId'), data: { settings: next } }];
-  const [evs] = await Promise.all([
-    (async () => {
-      const stmts = [
-        c.env.DB.prepare(
-          `INSERT INTO settings (user_id, data) VALUES (?1, ?2)
+  // settings write + profile theme mirror + event in ONE batch (audit: three
+  // unrelated round-trips could leave theme/settings/event divergent on a
+  // crash). commitWithEvents is that batch, with the same statements.
+  const evs = await commitWithEvents(
+    c.env,
+    c.get('user').id,
+    [{ type: 'settings.updated', actor: c.get('deviceId'), data: { settings: next } }],
+    [
+      c.env.DB.prepare(
+        `INSERT INTO settings (user_id, data) VALUES (?1, ?2)
            ON CONFLICT (user_id) DO UPDATE SET data = excluded.data`,
-        ).bind(c.get('user').id, JSON.stringify(next)),
-        ...(parsed.data.theme !== undefined
-          ? [
-              c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3').bind(
-                parsed.data.theme,
-                Date.now(),
-                c.get('user').id,
-              ),
-            ]
-          : []),
-        c.env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
-          c.get('user').id,
-          evDrafts[0].type,
-          JSON.stringify({ actor: evDrafts[0].actor, data: evDrafts[0].data }),
-          Date.now(),
-        ),
-      ];
-      const results = await c.env.DB.batch(stmts);
-      const eventId = Number(results[results.length - 1]?.meta.last_row_id ?? 0);
-      return [{ id: eventId, at: Date.now(), ...evDrafts[0] }];
-    })(),
-  ]);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+      ).bind(c.get('user').id, JSON.stringify(next)),
+      ...(parsed.data.theme !== undefined
+        ? [
+            c.env.DB.prepare('UPDATE users SET theme = ?1, updated_at = ?2 WHERE id = ?3').bind(
+              parsed.data.theme,
+              Date.now(),
+              c.get('user').id,
+            ),
+          ]
+        : []),
+    ],
+    c.executionCtx,
+  );
   return c.json({ settings: next, events: evs });
 });
 
@@ -203,34 +195,47 @@ miscRoutes.put('/layout/:projectId', requireAuth, limitWrites, async (c) => {
        ON CONFLICT (user_id, task_id) DO UPDATE SET x = excluded.x, y = excluded.y`,
     ).bind(userId, p.x, p.y, p.task_id, c.req.param('projectId')),
   );
-  for (let i = 0; i < stmts.length; i += CHUNK) {
-    await c.env.DB.batch(stmts.slice(i, i + CHUNK));
-  }
   // audit: layout used to fan out nothing — other devices kept stale map
   // positions until a full reload. Clients react by refetching the layout.
-  const evs = await appendEvents(c.env, userId, [
-    {
-      type: 'layout.updated',
-      actor: c.get('deviceId'),
-      data: { project_id: c.req.param('projectId'), count: parsed.data.positions.length },
-    },
-  ]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  //
+  // The positions and the event share ONE batch (INV-11). The layout schema
+  // caps a project at LIMITS.tasksPerUser positions, which exceeds a single
+  // D1 batch's statement limit, so this is the one route that keeps the
+  // CHUNK loop — and the event is appended to the LAST chunk rather than
+  // written after all of them, which is what keeps "positions saved" and
+  // "other devices told" a single commit for any realistic payload.
+  const draft: EventDraft = {
+    type: 'layout.updated',
+    actor: c.get('deviceId'),
+    data: { project_id: c.req.param('projectId'), count: parsed.data.positions.length },
+  };
+  if (stmts.length <= CHUNK) {
+    const evs = await commitWithEvents(c.env, userId, [draft], stmts, c.executionCtx);
+    return c.json({ ok: true, events: evs });
+  }
+  let evs: WsEvent[] = [];
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    const chunk = stmts.slice(i, i + CHUNK);
+    const last = i + CHUNK >= stmts.length;
+    evs = await commitWithEvents(c.env, userId, last ? [draft] : [], chunk, last ? c.executionCtx : undefined);
+  }
   return c.json({ ok: true, events: evs });
 });
 
 miscRoutes.delete('/layout/:projectId', requireAuth, limitWrites, async (c) => {
   // "Reset layout" → auto layered layout recomputed client-side (FR-M8)
-  await c.env.DB.prepare(
-    `DELETE FROM layout WHERE user_id = ?1 AND task_id IN
-       (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`,
-  )
-    .bind(c.get('user').id, c.req.param('projectId'))
-    .run();
-  const evs = await appendEvents(c.env, c.get('user').id, [
-    { type: 'layout.updated', actor: c.get('deviceId'), data: { project_id: c.req.param('projectId'), count: 0 } },
-  ]);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+  const evs = await commitWithEvents(
+    c.env,
+    c.get('user').id,
+    [{ type: 'layout.updated', actor: c.get('deviceId'), data: { project_id: c.req.param('projectId'), count: 0 } }],
+    [
+      c.env.DB.prepare(
+        `DELETE FROM layout WHERE user_id = ?1 AND task_id IN
+             (SELECT id FROM tasks WHERE project_id = ?2 AND user_id = ?1)`,
+      ).bind(c.get('user').id, c.req.param('projectId')),
+    ],
+    c.executionCtx,
+  );
   return c.json({ ok: true, events: evs });
 });
 

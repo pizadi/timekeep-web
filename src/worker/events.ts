@@ -17,26 +17,71 @@ export interface EventDraft<T = unknown> {
   data: T;
 }
 
-/** Append events to sync_log and return full events with ids. */
-export async function appendEvents(env: Env, userId: string, drafts: EventDraft[]): Promise<WsEvent[]> {
-  if (drafts.length === 0) return [];
-  const now = Date.now();
-  const stmts = drafts.map((d) =>
+/** sync_log INSERTs for one user, in order — the shape both writers below use. */
+function syncLogStmts(env: Env, userId: string, drafts: EventDraft[], at: number): D1PreparedStatement[] {
+  return drafts.map((d) =>
     env.DB.prepare('INSERT INTO sync_log (user_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4)').bind(
       userId,
       d.type,
       JSON.stringify({ actor: d.actor, data: d.data }),
-      now,
+      at,
     ),
   );
-  const results = await env.DB.batch(stmts);
+}
+
+/** The returned events for an already-committed batch of sync_log inserts. */
+function eventsFrom(drafts: EventDraft[], results: D1Result[], at: number): WsEvent[] {
   return results.map((r, i) => ({
     id: Number(r.meta.last_row_id),
     type: drafts[i]!.type,
     actor: drafts[i]!.actor,
-    at: now,
+    at,
     data: drafts[i]!.data,
   }));
+}
+
+/**
+ * The ONLY way a route handler should write: the entity mutation and its
+ * sync_log events in ONE D1 batch.
+ *
+ * D1 runs a batch as a single transaction, so this makes "the change happened"
+ * and "the change is in the event log" one atomic fact (INV-11). The old shape —
+ * write the entity, then `appendEvents` in a second round trip — had a window
+ * where a crash (or a thrown error, or a killed isolate) left the entity
+ * written and NO event: sync_log is the client's only recovery path
+ * (`GET /sync?since=`, which is a pure cursor walk and never refetches), so
+ * that state was not eventually consistent, it was permanently divergent until
+ * a full reload. The UserHub DO already batched its own writes this way.
+ *
+ * If the batch throws, NOTHING is written — the handler's error response
+ * matches the untouched database, which is the whole point.
+ */
+export async function commitWithEvents(
+  env: Env,
+  userId: string,
+  drafts: EventDraft[],
+  entityStmts: D1PreparedStatement[] = [],
+  ctx?: { waitUntil(p: Promise<unknown>): void },
+): Promise<WsEvent[]> {
+  if (drafts.length === 0 && entityStmts.length === 0) return [];
+  const now = Date.now();
+  const results = await env.DB.batch([...entityStmts, ...syncLogStmts(env, userId, drafts, now)]);
+  const events = eventsFrom(drafts, results.slice(entityStmts.length), now);
+  notifyHub(env, userId, events, ctx);
+  return events;
+}
+
+/**
+ * Append events to sync_log with no entity write — for the cases where the
+ * mutation is not ours to batch (the UserHub DO's own transitions) or is a
+ * pure signal about rows another component wrote. Prefer `commitWithEvents` in
+ * route handlers: two batches means a window with no event.
+ */
+export async function appendEvents(env: Env, userId: string, drafts: EventDraft[]): Promise<WsEvent[]> {
+  if (drafts.length === 0) return [];
+  const now = Date.now();
+  const results = await env.DB.batch(syncLogStmts(env, userId, drafts, now));
+  return eventsFrom(drafts, results, now);
 }
 
 /**

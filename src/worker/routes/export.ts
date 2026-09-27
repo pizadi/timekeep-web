@@ -572,8 +572,19 @@ exportRoutes.post('/import', async (c) => {
     }
   }
 
-  // other devices learn about the import; clients react to this event with a
-  // full refetch (store.applyEvent)
+  // Other devices learn about the import; clients react to this event with a
+  // full refetch (store.applyEvent).
+  //
+  // import.completed CANNOT share a batch with the imported rows: the import is
+  // chunked into many batches (200 rows each, up to 200k sessions), and the
+  // event means "the whole import finished" — it is only true once every chunk
+  // has. So this is the one deliberate exception to INV-11 in the import path.
+  // EVENT-ATOMICITY-ALLOWED — the SAFE shape: the event is a completion signal,
+  // not a record of a single entity write, and clients treat it by refetching
+  // everything. The
+  // client that loses the event sees stale data until its next reload, not a
+  // partial import. The per-entity invariants (overlap, caps) are unaffected —
+  // they live inside the import's own statements.
   const drafts: EventDraft[] = [{ type: 'import.completed', actor: c.get('deviceId'), data: { mode, summary } }];
   const evs = await appendEvents(c.env, userId, drafts);
   notifyHub(c.env, userId, evs, c.executionCtx);
@@ -823,8 +834,11 @@ exportRoutes.post('/restore', async (c) => {
     }
   }
 
-  // other devices learn about the undo — clients react with a full refetch
-  // (audit: restore used to fan out nothing, silently diverging other devices)
+  // Other devices learn about the undo — clients react with a full refetch
+  // (audit: restore used to fan out nothing, silently diverging other devices).
+  // Like import.completed, this is a completion signal for a multi-batch
+  // operation, so it cannot share a batch with the restored rows (see the note
+  // at import.completed).
   const evs = await appendEvents(c.env, userId, [
     { type: 'restore.completed', actor: c.get('deviceId'), data: { restored } },
   ] as EventDraft[]);

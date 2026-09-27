@@ -6,7 +6,7 @@ import { requireAuth, limitWrites, clearSessionCookie } from '../middleware';
 import { profilePatchSchema, passwordChangeSchema } from '../validators';
 import { isValidTimezone } from '../../shared/time';
 import { passwordProblem } from '../../shared/validation';
-import { appendEvents, notifyHub, revokeHub, EventDraft } from '../events';
+import { commitWithEvents, revokeHub, EventDraft } from '../events';
 import { hashPassword, verifyPassword, isCommonPassword } from '../auth';
 
 export const meRoutes = new Hono<WorkerType>();
@@ -63,14 +63,15 @@ meRoutes.patch('/me', async (c) => {
 
   sets.push('updated_at = ?');
   binds.push(Date.now(), c.get('user').id);
-  await c.env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
-    .bind(...binds)
-    .run();
 
-  // timezone/theme changes sync to other devices (FR-A7 AC, FR-U1)
+  // timezone/theme changes sync to other devices (FR-A7 AC, FR-U1). The UPDATE
+  // and the event share ONE batch (INV-11) — a profile change with no event
+  // would leave other devices on the old timezone/theme indefinitely, since
+  // the sync poll only walks the event cursor.
   const drafts: EventDraft[] = [{ type: 'settings.updated', actor: c.get('deviceId'), data: { profile: u } }];
-  const evs = await appendEvents(c.env, c.get('user').id, drafts);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+  await commitWithEvents(c.env, c.get('user').id, drafts, [
+    c.env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...binds),
+  ]);
 
   const fresh = await c.env.DB.prepare(
     `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,

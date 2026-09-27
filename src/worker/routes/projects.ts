@@ -4,12 +4,11 @@
 // per-member perms (edit_tasks / manage_projects) via worker/access.ts.
 import { Hono } from 'hono';
 import type { WorkerType } from '../env';
-import type { Context } from 'hono';
 import { jsonError } from '../env';
 import { requireAuth, limitWrites } from '../middleware';
 import { projectCreateSchema, projectPatchSchema, reorderSchema } from '../validators';
-import { assertProjectLimit, RuleError, isUniqueConstraintError } from '../rules';
-import { appendEvents, notifyHub, emitEntityEvents, emitToUsers, EventDraft } from '../events';
+import { assertProjectLimit, isUniqueConstraintError } from '../rules';
+import { commitWithEvents, emitEntityEvents, emitToUsers, EventDraft } from '../events';
 import { requireProjectAccess } from '../access';
 import { ulid } from '../../shared/ids';
 import { PALETTE } from '../../shared/constants';
@@ -17,15 +16,6 @@ import { PALETTE } from '../../shared/constants';
 export const projectRoutes = new Hono<WorkerType>();
 projectRoutes.use('/projects', requireAuth, limitWrites);
 projectRoutes.use('/projects/*', requireAuth, limitWrites);
-
-/** Re-read a just-written row (creator-scoped — creation is personal-only). */
-async function getOwned(c: Context<WorkerType>, id: string) {
-  const p = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?1 AND user_id = ?2')
-    .bind(id, c.get('user').id)
-    .first();
-  if (!p) throw new RuleError(404, 'not_found', 'project not found');
-  return p as any;
-}
 
 // ---------- read ----------
 
@@ -58,25 +48,42 @@ projectRoutes.post('/projects', async (c) => {
     .bind(c.get('user').id)
     .first<{ p: number }>();
 
+  // The INSERT and the event in ONE batch (INV-11). The project row is built
+  // here rather than re-read: the batch is the commit, and a read-back would
+  // also be a second statement that can disagree with what was written.
+  const project = {
+    id,
+    user_id: c.get('user').id,
+    name: parsed.data.name,
+    color,
+    archived: 0,
+    position: (posRow?.p ?? -1) + 1,
+    group_id: null,
+    visibility: 'private',
+    created_at: now,
+    updated_at: now,
+  };
   try {
-    await c.env.DB.prepare(
-      `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)`,
-    )
-      .bind(id, c.get('user').id, parsed.data.name, color, (posRow?.p ?? -1) + 1, now)
-      .run();
+    const drafts: EventDraft[] = [{ type: 'project.created', actor: c.get('deviceId'), data: { project } }];
+    const evs = await commitWithEvents(
+      c.env,
+      c.get('user').id,
+      drafts,
+      [
+        c.env.DB.prepare(
+          `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)`,
+        ).bind(id, c.get('user').id, parsed.data.name, color, (posRow?.p ?? -1) + 1, now),
+      ],
+      c.executionCtx,
+    );
+    return c.json({ project, events: evs }, 201);
   } catch (e: any) {
     if (isUniqueConstraintError(e))
-      // UNIQUE(user_id, name)
+      // UNIQUE(user_id, name) — the whole batch rolled back, event included
       return jsonError(422, 'duplicate', 'a project with this name already exists');
     throw e;
   }
-
-  const project = await getOwned(c, id);
-  const drafts: EventDraft[] = [{ type: 'project.created', actor: c.get('deviceId'), data: { project } }];
-  const evs = await appendEvents(c.env, c.get('user').id, drafts);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
-  return c.json({ project, events: evs }, 201);
 });
 
 // ---------- patch / delete ----------
@@ -165,13 +172,16 @@ projectRoutes.post('/projects/reorder', async (c) => {
     ).bind(i, now, id, c.get('user').id),
   );
   // chunked like import/layout — stay under D1 batch statement limits
-  for (let i = 0; i < stmts.length; i += 50) {
-    await c.env.DB.batch(stmts.slice(i, i + 50));
-  }
-  const evs = await appendEvents(c.env, c.get('user').id, [
-    { type: 'project.updated', actor: c.get('deviceId'), data: { reordered: parsed.data.ids } },
-  ]);
-  notifyHub(c.env, c.get('user').id, evs, c.executionCtx);
+  // Reorder and its event in ONE batch (INV-11). This is the whole payload —
+  // 200 ids is well under the batch statement limit — so there is no reason for
+  // the event to be a second round trip.
+  const evs = await commitWithEvents(
+    c.env,
+    c.get('user').id,
+    [{ type: 'project.updated', actor: c.get('deviceId'), data: { reordered: parsed.data.ids } }],
+    stmts,
+    c.executionCtx,
+  );
   return c.json({ ok: true, events: evs });
 });
 

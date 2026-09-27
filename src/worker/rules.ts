@@ -263,11 +263,10 @@ export async function findSameTaskOverlaps(
   return r.results;
 }
 
-export type GuardedWrite =
-  /** the statement matched and wrote */
-  | { ok: true }
-  /** nothing was written — the caller re-reads to pick the right error */
-  | { ok: false };
+/** Whether a guarded write matched its row — read from a batch's D1Result. */
+export function wroteOne(result: D1Result | undefined): boolean {
+  return Number(result?.meta?.changes ?? 0) === 1;
+}
 
 /**
  * The manual-session INSERT with BOTH invariants inside the statement:
@@ -279,88 +278,42 @@ export type GuardedWrite =
  * existed on the session cap (audit 🟡2's rule: never COUNT then insert —
  * D1 serializes writes per database, so a guarded single statement cannot be
  * raced, while count-then-insert overshoots).
+ *
+ * Exported as SQL rather than a function so the caller can put it in the SAME
+ * batch as the entity's sync_log insert (INV-11) — a guard needs its own
+ * round trip otherwise, and the event write would be a third.
+ *
+ * Parameters: 1 id · 2 user_id · 3 task_id · 4 started_at · 5 ended_at
+ *             6 note · 7 created_at/updated_at · 8 subtask_id
+ *             9 now (a running session occupies until this instant) · 10 cap
  */
-export async function insertSessionGuarded(
-  env: Env,
-  row: {
-    id: string;
-    userId: string;
-    taskId: string;
-    subtaskId: string | null;
-    startedAt: number;
-    endedAt: number;
-    note: string;
-    now: number;
-    cap: number;
-  },
-): Promise<GuardedWrite> {
-  const res = await env.DB.prepare(
-    `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+export const INSERT_SESSION_GUARDED = `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
      SELECT ?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8
      WHERE NOT EXISTS (
        SELECT 1 FROM time_sessions
        WHERE ${overlapSql({ TASK: 3, USER: 2, END: 5, NOW: 9, START: 4 })}
      )
-       AND (SELECT COUNT(*) FROM time_sessions WHERE user_id = ?2) < ?10`,
-  )
-    .bind(
-      row.id,
-      row.userId,
-      row.taskId,
-      row.startedAt,
-      row.endedAt,
-      row.note,
-      row.now,
-      row.subtaskId,
-      row.now, // ?9 — a running session occupies until the insert instant
-      row.cap,
-    )
-    .run();
-  return { ok: Number(res.meta?.changes ?? 0) === 1 };
-}
+       AND (SELECT COUNT(*) FROM time_sessions WHERE user_id = ?2) < ?10`;
 
 /**
  * The manual-session UPDATE with the overlap invariant inside the statement —
  * the PATCH path had exactly the same check-then-write race as the INSERT
- * (two devices editing the same session into overlapping windows).
- * `?3` is the row being edited and is excluded from its own overlap test.
+ * (two devices editing the same session into overlapping windows). The row
+ * being edited is excluded from its own overlap test.
+ *
+ * Exported as SQL for the same reason as INSERT_SESSION_GUARDED: it has to
+ * share a batch with the event insert (INV-11).
+ *
+ * Parameters: 1 task_id · 2 subtask_id · 3 started_at · 4 ended_at · 5 note
+ *             6 updated_at · 7 id · 8 user_id · 9 now
  */
-export async function updateSessionGuarded(
-  env: Env,
-  row: {
-    id: string;
-    userId: string;
-    taskId: string;
-    subtaskId: string | null;
-    startedAt: number;
-    endedAt: number;
-    note: string;
-    now: number;
-  },
-): Promise<GuardedWrite> {
-  const res = await env.DB.prepare(
-    `UPDATE time_sessions
+export const UPDATE_SESSION_GUARDED = `UPDATE time_sessions
      SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
      WHERE id = ?7 AND user_id = ?8
        AND NOT EXISTS (
          SELECT 1 FROM time_sessions
          WHERE ${overlapSql({ TASK: 1, USER: 8, END: 4, NOW: 9, START: 3 })} AND id <> ?7
-       )`,
-  )
-    .bind(
-      row.taskId,
-      row.subtaskId,
-      row.startedAt,
-      row.endedAt,
-      row.note,
-      row.now,
-      row.id,
-      row.userId,
-      row.now, // ?9 — a running session occupies until the update instant
-    )
-    .run();
-  return { ok: Number(res.meta?.changes ?? 0) === 1 };
-}
+       )`;
 
 export function conflictError(rows: { id: string; started_at: number; ended_at: number | null }[]) {
   return new RuleError(409, 'overlap', 'this session overlaps an existing session on the same task', rows);

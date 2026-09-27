@@ -20,13 +20,20 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-purple-marmalade-admin-42}"
 
 # req JAR DEVICE METHOD PATH [JSON] — cookie-jar aware, auto CSRF header,
-# retries transient local-dev drops (empty responses from `wrangler dev`'s
-# DO proxy are connection-level curl errors; HTTP errors are never retried)
+# retries transient local-dev drops.
+#
+# "Transient drop" is NOT only a connection-level curl error: `wrangler dev`'s
+# proxy also answers some dropped requests with an HTTP 500 whose body is an
+# "Error: Network connection lost." page (AGENTS.md). curl exits 0 for that and
+# the body is non-empty, so a rc-based check alone treated it as a real answer —
+# which is how a dropped password change used to pass silently and surface as a
+# failure in a LATER script. Both shapes are retried; genuine HTTP errors from
+# the app (4xx with a JSON envelope) are not.
 req() {
   local jar=$1 dev=$2 method=$3 path=$4 data=$5
   local t; t=$(grep tk_csrf "$jar" 2>/dev/null | awk '{print $NF}')
   local out rc=1 a
-  for a in 1 2 3; do
+  for a in 1 2 3 4 5; do
     if [ -n "$data" ]; then
       out=$(curl -s -b "$jar" -c "$jar" -X "$method" "$BASE$path" -H "content-type: application/json" \
         -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t" -d "$data")
@@ -35,7 +42,7 @@ req() {
         -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t")
     fi
     rc=$?
-    [ $rc -eq 0 ] && break
+    if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q "Network connection lost"; then break; fi
     sleep 1
   done
   echo "$out"

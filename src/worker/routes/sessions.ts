@@ -8,12 +8,12 @@ import { sessionCreateSchema, sessionPatchSchema } from '../validators';
 import { checkSessionTimes, noteProblem } from '../../shared/validation';
 import {
   findSameTaskOverlaps,
-  insertSessionGuarded,
-  updateSessionGuarded,
+  INSERT_SESSION_GUARDED,
+  UPDATE_SESSION_GUARDED,
   conflictError,
   assertNotRunning,
 } from '../rules';
-import { appendEvents, notifyHub, EventDraft } from '../events';
+import { commitWithEvents, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';
 
@@ -149,30 +149,50 @@ sessionRoutes.post('/sessions', async (c) => {
   if (conflicts.length > 0) throw conflictError(conflicts); // formatted by app.onError
 
   const id = ulid(now);
-  const written = await insertSessionGuarded(c.env, {
+  // The guarded INSERT and the event in ONE batch. The event payload is built
+  // from the values we just validated, so the payload can never disagree with
+  // the committed row (it used to be a separate read-back after the write).
+  const session = {
     id,
-    userId,
-    taskId: task_id,
-    subtaskId: subtask_id ?? null,
-    startedAt: started_at,
-    endedAt: ended_at,
+    user_id: userId,
+    task_id,
+    started_at,
+    ended_at,
+    source: 'manual',
     note,
-    now,
-    cap: LIMITS.sessionsPerUser,
-  });
-  if (!written.ok) {
-    // A concurrent request got there first. Re-read to report the right error:
-    // the overlap wins if it now conflicts, otherwise it is the account cap.
+    created_at: now,
+    updated_at: now,
+    subtask_id: subtask_id ?? null,
+  };
+  const evs = await commitWithEvents(
+    c.env,
+    userId,
+    [{ type: 'session.created', actor: c.get('deviceId'), data: { session } }] as EventDraft[],
+    [
+      c.env.DB.prepare(INSERT_SESSION_GUARDED).bind(
+        id,
+        userId,
+        task_id,
+        started_at,
+        ended_at,
+        note,
+        now,
+        subtask_id ?? null,
+        now,
+        LIMITS.sessionsPerUser,
+      ),
+    ],
+    c.executionCtx,
+  );
+  if (evs.length === 0) {
+    // the guarded INSERT matched 0 rows: a concurrent request got there first.
+    // Re-read to report the right error — the overlap wins if it now conflicts,
+    // otherwise it is the account cap.
     const raced = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at, now);
     if (raced.length > 0) throw conflictError(raced);
     return jsonError(422, 'limit', `limit reached: at most ${LIMITS.sessionsPerUser} sessions per account`);
   }
 
-  const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(id).first();
-  const evs = await appendEvents(c.env, userId, [
-    { type: 'session.created', actor: c.get('deviceId'), data: { session } },
-  ] as EventDraft[]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs }, 201);
 });
 
@@ -218,21 +238,42 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   if (conflicts.length > 0) throw conflictError(conflicts);
 
   // Same shape as the insert: the pre-check above only builds the 409 body, the
-  // guarded statement decides (the PATCH path had the same check-then-write
-  // race, from two devices editing one session into overlapping windows).
-  const written = await updateSessionGuarded(c.env, {
-    id: existing.id,
-    userId,
-    taskId,
-    subtaskId,
-    startedAt: started,
-    endedAt: ended,
+  // guarded UPDATE decides (the PATCH path had the same check-then-write race,
+  // from two devices editing one session into overlapping windows). Guarded
+  // write and event in ONE batch (INV-11); the payload is built from the
+  // validated values so it cannot disagree with the committed row.
+  const session = {
+    ...existing,
+    task_id: taskId,
+    subtask_id: subtaskId,
+    started_at: started,
+    ended_at: ended,
     note,
-    now,
-  });
-  if (!written.ok) {
-    // either a concurrent request created an overlap, or the row was deleted
-    // while we were validating it
+    source: 'manual',
+    updated_at: now,
+  };
+  const evs = await commitWithEvents(
+    c.env,
+    userId,
+    [{ type: 'session.updated', actor: c.get('deviceId'), data: { session } }] as EventDraft[],
+    [
+      c.env.DB.prepare(UPDATE_SESSION_GUARDED).bind(
+        taskId,
+        subtaskId,
+        started,
+        ended,
+        note,
+        now,
+        existing.id,
+        userId,
+        now,
+      ),
+    ],
+    c.executionCtx,
+  );
+  if (evs.length === 0) {
+    // the guarded UPDATE matched 0 rows: either a concurrent request created
+    // an overlap, or the row was deleted while we were validating it
     const still = await c.env.DB.prepare('SELECT 1 FROM time_sessions WHERE id = ?1 AND user_id = ?2')
       .bind(existing.id, userId)
       .first();
@@ -240,12 +281,6 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
     const raced = await findSameTaskOverlaps(c.env, userId, taskId, started, ended, now, existing.id);
     throw conflictError(raced);
   }
-
-  const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(existing.id).first();
-  const evs = await appendEvents(c.env, userId, [
-    { type: 'session.updated', actor: c.get('deviceId'), data: { session } },
-  ] as EventDraft[]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
   return c.json({ session, events: evs });
 });
 
@@ -256,10 +291,14 @@ sessionRoutes.delete('/sessions/:id', async (c) => {
     .first<any>();
   if (!existing) return jsonError(404, 'not_found', 'session not found');
   await assertNotRunning(c.env, userId, existing.id);
-  await c.env.DB.prepare('DELETE FROM time_sessions WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId).run();
-  const evs = await appendEvents(c.env, userId, [
-    { type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } },
-  ] as EventDraft[]);
-  notifyHub(c.env, userId, evs, c.executionCtx);
+  // delete + event in ONE batch (INV-11): a deleted session with no
+  // session.deleted event is a row other devices keep rendering forever.
+  const evs = await commitWithEvents(
+    c.env,
+    userId,
+    [{ type: 'session.deleted', actor: c.get('deviceId'), data: { session: existing } }] as EventDraft[],
+    [c.env.DB.prepare('DELETE FROM time_sessions WHERE id = ?1 AND user_id = ?2').bind(existing.id, userId)],
+    c.executionCtx,
+  );
   return c.json({ deleted: true, undo: { sessions: [existing] }, events: evs });
 });

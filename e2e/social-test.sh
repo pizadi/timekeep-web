@@ -33,7 +33,11 @@ req() {
         -H "origin: $ORIGIN" -H "x-device-id: $dev" -H "x-csrf-token: $t")
     fi
     rc=$?
-    [ $rc -eq 0 ] && [ -n "$out" ] && break
+    # the local dev proxy answers a dropped request with an HTTP 500 whose body
+    # is an "Error: Network connection lost." page — curl exits 0 and the body
+    # is non-empty, so `[ -n "$out" ]` alone treats it as a real answer and the
+    # script dies at some later line. Retry that shape too (AGENTS.md).
+    if [ $rc -eq 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | grep -q "Network connection lost"; then break; fi
     sleep 2
   done
   echo "$out"
