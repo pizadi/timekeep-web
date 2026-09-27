@@ -23,6 +23,7 @@ export interface Env {
   RL_LOGIN_IP?: string;
   RL_LOGIN_EMAIL?: string;
   RL_RESET_EMAIL?: string;
+  RL_RESET_IP?: string;
   RL_TOKEN_IP?: string;
   RL_ADMIN_IP?: string;
   RL_API_USER?: string;

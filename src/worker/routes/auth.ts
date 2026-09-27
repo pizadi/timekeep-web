@@ -70,6 +70,14 @@ authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
     return jsonError(422, 'no_email', 'this account has no email address to verify');
   if (user.email_verified_at) return c.json({ ok: true }); // already verified
 
+  // Layered like reset-request: the per-IP fan-out budget first, then the
+  // per-address one. No challenge here — this route is requireAuth (a known,
+  // admin-created account) and there is no self-signup, so the abuse it guards
+  // is mail volume from a compromised session, not anonymous spraying; adding
+  // a captcha widget here would cost a real user a click for no threat
+  // reduction. The per-IP budget is what bounds the volume.
+  const rlIp = await rateLimitHit(c.env, rateRules(c.env).resetIp, clientIp(c) ?? 'unknown');
+  if (rlIp) return tooMany(rlIp);
   const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
   if (rl) return tooMany(rl);
 
@@ -180,12 +188,22 @@ authRoutes.post('/auth/logout', requireAuth, async (c) => {
 // ---------- password reset (FR-A5, no enumeration) ----------
 authRoutes.post('/auth/reset-request', async (c) => {
   const parsed = resetRequestSchema.safeParse(await c.req.json().catch(() => null));
-  if (!parsed.success) return c.json({ ok: true }); // shape-identical response anyway
+  // A malformed body gets the same shape-identical ok:true, so it must not
+  // consume any budget either — otherwise a probe could burn a victim's
+  // per-address or the caller's per-IP reset allowance for free.
+  if (!parsed.success) return c.json({ ok: true });
   const email = parsed.data.email;
+  const ip = clientIp(c) ?? 'unknown';
+  // Order mirrors login: the coarse per-IP budget runs FIRST (it is the only
+  // thing that bounds a fan-out over MANY addresses — the audit's #11), then the
+  // bot challenge, then the per-address budget. A challenge failure must not
+  // spend the victim's mailbox allowance either.
+  const rlIp = await rateLimitHit(c.env, rateRules(c.env).resetIp, ip);
+  if (rlIp) return tooMany(rlIp);
+  if (!(await verifyTurnstile(c.env, parsed.data.turnstile, ip)))
+    return jsonError(422, 'turnstile', 'captcha verification failed');
   const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
   if (rl) return tooMany(rl);
-  if (!(await verifyTurnstile(c.env, parsed.data.turnstile, clientIp(c))))
-    return jsonError(422, 'turnstile', 'captcha verification failed');
 
   const user = await c.env.DB.prepare('SELECT id, email_verified_at, role, active FROM users WHERE email = ?1')
     .bind(email)

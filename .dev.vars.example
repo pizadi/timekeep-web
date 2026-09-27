@@ -20,6 +20,11 @@ RL_LOGIN_IP=1000
 RL_LOGIN_EMAIL=1000
 RL_ADMIN_IP=1000
 RL_TOKEN_IP=1000
+# Reset fan-out: 20/hour/IP by default, 5/hour per address. Not raised here —
+# reset-request is the one endpoint where a hammer is genuinely abusive
+# (every accepted address is an email), and no e2e script needs more.
+# RL_RESET_IP=1000
+# RL_RESET_EMAIL=1000
 # Writes default to 300/min per user. Keep this at the default (or absent) for
 # e2e/write-limit-test.mjs — it bursts past the real number to prove the 429.
 # RL_WRITE_USER=1000

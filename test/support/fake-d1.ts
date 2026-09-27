@@ -150,6 +150,21 @@ export function fakeD1(sessionRows: FakeSessionRow[] = [], userRows: FakeUserRow
           const [key] = stmt._args as string[];
           return { n: bumpCounter(key) } as T;
         }
+        // reset-request's account lookup (whether a reset is even possible)
+        if (norm.includes('FROM users') && norm.includes('purpose')) {
+          return null;
+        }
+        if (norm.startsWith('SELECT id, email_verified_at, role, active FROM users')) {
+          const [email] = stmt._args as string[];
+          const row = [...users.values()].find((u) => u.email.toLowerCase() === String(email).toLowerCase());
+          if (!row) return null;
+          return {
+            id: row.id,
+            email_verified_at: row.email_verified_at,
+            role: row.role,
+            active: row.active,
+          } as T;
+        }
         // login lookup: WHERE username = ?1 OR email = ?1 COLLATE NOCASE
         if (norm.includes('FROM users') && norm.includes('username = ?1 OR email')) {
           const [identifier] = stmt._args as string[];

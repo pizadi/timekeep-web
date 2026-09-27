@@ -314,6 +314,12 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
     loginIp: { name: 'login_ip', limit: n(env.RL_LOGIN_IP, 10), windowMs: 15 * 60_000 },
     loginEmail: { name: 'login_email', limit: n(env.RL_LOGIN_EMAIL, 10), windowMs: 15 * 60_000 },
     resetEmail: { name: 'reset_email', limit: n(env.RL_RESET_EMAIL, 5), windowMs: 3600_000 },
+    // Password-reset fan-out: the per-address rule above stops one mailbox being
+    // spammed, but nothing stopped ONE source asking for many distinct
+    // addresses (mail-provider quota, notification spam, service cost — the
+    // audit's #11). IP-keyed and deliberately loose, since a shared office or
+    // a NAT legitimately has several people resetting passwords.
+    resetIp: { name: 'reset_ip', limit: n(env.RL_RESET_IP, 20), windowMs: 3600_000 },
     // unauthenticated token endpoints + admin mutations (CPU-heavy PBKDF2) — IP-keyed
     tokenIp: { name: 'token_ip', limit: n(env.RL_TOKEN_IP, 30), windowMs: 15 * 60_000 },
     adminIp: { name: 'admin_ip', limit: n(env.RL_ADMIN_IP, 20), windowMs: 15 * 60_000 },
