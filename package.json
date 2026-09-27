@@ -2,6 +2,9 @@
   "name": "timekeep-web",
   "version": "0.5.3",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "license": "MIT",
   "description": "TimeKeep Web \u2014 time tracking & task management on Cloudflare Workers + D1 + Durable Objects",
   "type": "module",
@@ -30,7 +33,7 @@
     "@cloudflare/workers-types": "^5.20260911.0",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.6",
-    "@vitejs/plugin-react": "^4.4.1",
+    "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-react-hooks": "^5.2.0",
@@ -39,11 +42,12 @@
     "prettier": "^3.9.9",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.70.1",
-    "vite": "^5.4.21",
-    "vitest": "^2.1.9",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2",
     "wrangler": "^4.18.0"
   },
   "allowScripts": {
-    "workerd@1.20260911.1": true
+    "workerd": true,
+    "esbuild": true
   }
 }

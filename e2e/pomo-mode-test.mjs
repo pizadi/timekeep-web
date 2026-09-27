@@ -5,9 +5,11 @@
 // 4. /timer/switch mid-focus re-anchors the cycle (source 'pomodoro')
 // 5. /pomo/skip → idle; disabling mid-cycle resets to idle, timer keeps running
 // 6. legacy /pomo/start still works with the mode off
-const BASE = 'http://127.0.0.1:8787';
+import { withProxyRetry } from './support/proxy-retry.mjs';
 
-async function raw(path, opts = {}, cookie) {
+const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787';
+
+const rawOnce = async (path, opts = {}, cookie) => {
   const res = await fetch(`${BASE}/api${path}`, {
     ...opts,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -21,7 +23,18 @@ async function raw(path, opts = {}, cookie) {
     body = text;
   }
   return { status: res.status, body, headers: res.headers };
+};
+
+/**
+ * `wrangler dev`'s local proxy intermittently answers a dropped request with an
+ * HTTP 500 and no body (AGENTS.md). A local artifact — but this script COUNTS
+ * sessions, so one dropped `/timer/start` reads as a missing pomodoro segment
+ * and fails two checks about a cycle that behaved correctly. Retry it.
+ */
+async function raw(path, opts = {}, cookie) {
+  return withProxyRetry(`${opts.method ?? 'GET'} ${path}`, () => rawOnce(path, opts, cookie));
 }
+
 const cookieOf = (r) => (r.headers.get('set-cookie') ?? '').split(';')[0];
 let failures = 0;
 const check = (name, ok, extra = '') => {

@@ -122,11 +122,15 @@ describe('restore payload caps', () => {
     const r = restoreSchema.safeParse({ sessions });
     expect(r.success).toBe(true);
   });
+  // The guard is a TOTAL-row cap, so this case necessarily builds a
+  // LIMITS.restoreMaxRows-element array and hands it to zod — real CPU work,
+  // about as slow as the test above it. It sat right on the default 5 s timeout
+  // before (5.4 s), so the budget is stated rather than left to the runner.
   it('rejects payloads over the total-row guard', () => {
     const row = { id: ULID, task_id: ULID, name: 'x', done: 0, position: 0, created_at: 0 };
     const r = restoreSchema.safeParse({
       subtasks: Array.from({ length: LIMITS.restoreMaxRows }, () => row),
     });
     expect(r.success).toBe(false);
-  });
+  }, 30_000);
 });
