@@ -11,13 +11,16 @@ testing, deployment, admin-guide) — keep them in sync with real behavior.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR: `verify`
 (typecheck + tests + build), `version-sync` (`scripts/check-version.mjs`
-guards package.json ↔ wrangler.jsonc `__APP_VERSION__`), and a blocking `e2e`
+guards package.json ↔ wrangler.jsonc `__APP_VERSION__` ↔ package-lock), and a blocking `e2e`
 job — `scripts/run-e2e.sh` wipes local state (only when `CI=true`), migrates,
-starts `wrangler dev`, and runs all ten e2e scripts in order, with one
+starts `wrangler dev`, and runs all fourteen e2e scripts in order, with one
 automatic retry for the proxy flake.
 
 CD: `.github/workflows/deploy.yml` deploys on `workflow_dispatch` and `v*` tag
-pushes via the `production` environment (required reviewers = approval gate).
+pushes via the `production` environment (required reviewers = approval gate). Its
+`ci-gate` job requires the FULL CI suite (lint · format · typecheck · unit · e2e)
+to have passed **for the exact sha being deployed** — it polls, because a tag push
+starts both workflows at once. CI therefore also runs on `v*` tags.
 Pipeline: CI gate → `scripts/render-wrangler.mjs` renders `wrangler.jsonc` +
 GitHub variables into `wrangler.ci.jsonc` (gitignored — resource ids stay out
 of the repo) → build → remote D1 migrations → `wrangler deploy` → post-deploy
@@ -152,18 +155,30 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   - Friend-visible projects require `visibility='friends' AND group_id IS NULL` — the two
     sharing mechanisms (friends ↔ groups) never cross. Presence/chat never expose raw session
     rows or notes; reports are buckets only.
-  - Group-project/group-task deletes are permanent (no undo payload across member boundaries);
-    personal deletes keep the 5s undo.
+  - Deletes TOMBSTONE, never cascade: `tasks`/`projects` carry `deleted_at` and the row keeps its
+    name. `time_sessions.task_id … ON DELETE CASCADE` used to mean one member deleting a shared
+    task destroyed every OTHER member's history (INV-06). `access.ts` treats a tombstone as
+    nonexistent for every live path (404, listings, "jump back in", un-startable), while reports
+    and the session log render it through `HISTORICAL_TASK_NAME` (live name, else the session's
+    `task_name` snapshot). Sessions are still the owner's to delete outright. Undo/import clear
+    `deleted_at` on their upserts; a tombstoned project yields its name on recreate (renamed to
+    `<name> (deleted <date>)` in the same batch, because `projects` keeps its inline UNIQUE and a
+    partial index would need a table rebuild).
   - Rate limits: `social_user` bucket (friend requests, username lookups, joins, invite/link
     minting; `RL_SOCIAL_USER`), chat sends ride `limitHeavy`. Invite-link tokens are stored as
     SHA-256 hashes and returned exactly once.
-- **State-changing writes are throttled by `limitWrites`** (`write_user` bucket,
-  `RL_WRITE_USER`, 300/min default) — the CRUD/task/session/timer/group routes had no rate
-  limit at all before, only eventual entity-count caps. Chained after `requireAuth` in the
-  `use(...)` of every mutating route file (chat edits, `/me`, and misc's settings/layout take it
-  per-route); reads are skipped (they ride `api_user` via `limitHeavy`) and a per-request flag
-  keeps a single write counted once even when two route files match the same path. Never add a
-  mutating route without it.
+- **State-changing writes are throttled by `limitWrites`** (`write_user`, 300/min, **plus
+  `write_user_day`, 20k/day**) — the CRUD/task/session/timer/group routes had no rate limit at all
+  before, only eventual entity-count caps. The DAILY budget is the one that bounds database work:
+  a per-minute request cap says nothing about cost, and one account could otherwise drive ~432k
+  requests a day. Fan-out routes (group projects, membership, chat — one request writes a
+  `sync_log` row per member) use **`limitSocialWrites`** (`social_write`, 60/min) INSTEAD, because
+  chaining both would spend the day budget twice. Chained after `requireAuth` in the `use(...)` of
+  every mutating route file (chat edits, `/me`, and misc's settings/layout take it per-route);
+  reads are skipped (they ride `api_user` via `limitHeavy`) and a per-request flag keeps a single
+  write counted once even when two route files match the same path. Never add a mutating route
+  without it. The DO's counters live in the DO's own storage, not memory — a cap that forgets
+  itself when the instance is evicted is not a cap.
 - **Capacity caps are enforced inside the INSERT/UPDATE, never by a prior
   `SELECT COUNT(*)`** (audit 🟡2). D1 serializes writes per database, so a guarded statement
   (`INSERT … SELECT … WHERE (SELECT COUNT(*) …) < ?` plus a `meta.changes` check) cannot be
@@ -171,6 +186,11 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   (member cap _and_ the link's `use_count < max_uses`), invite accept, invite-link minting,
   friend requests, and friend-request accept (both friendship rows in ONE guarded statement so
   the pair is all-or-nothing). Keep the same 422 `limit` error when `changes` comes back short.
+  The same rule governs the session overlap/cap guards (`INSERT_SESSION_GUARDED` /
+  `UPDATE_SESSION_GUARDED` in `rules.ts`, exported as SQL so they can share a batch with their
+  event). A guarded write that matches zero rows still appends its event, so read the ENTITY
+  statement's `meta.changes` (`rules.wroteOne`) — never the event count, which reports a lost
+  race as a success.
 - End-of-run pomodoro notifications (`decide`/`ready` phases) bypass the `notifications_enabled`
   toggle (they need only browser permission, requested when pomodoro is enabled in Settings);
   every other notification respects the toggle. Notification permission is never requested

@@ -1,109 +1,108 @@
-# 0.5.3
+# 0.5.4.dev1 – 0.5.4.dev14
 
-Fifteen dev iterations closing the repository audit plus six fixes from the
-"add later" list. The headline items: every mutating route is now
-rate-limited, capacity caps are enforced atomically, and the repo has ESLint
-and Prettier in CI.
+Fourteen dev iterations against a second adversarial audit. The theme is the
+same as last time but the teeth are in the invariants: a revoked session can no
+longer be resurrected by a rotation already in flight, overlapping sessions are
+rejected _inside_ the write, a mutation and the event announcing it commit
+together, deleting shared metadata no longer destroys other people's history,
+and production deploys are gated on the full CI suite passing for the exact sha.
 
-## Security & correctness (audit)
+## Security & correctness
 
-- **Write rate limiting** — the CRUD/task/session/timer/group routes had _no_
-  rate limit, only eventual entity-count caps, so a leaked session could
-  hammer `/timer/start` + `/timer/stop` freely. New `write_user` bucket
-  (`RL_WRITE_USER`, 300/min) with `limitWrites` middleware on every mutating
-  route; reads are skipped and a per-request flag keeps one write counted once
-  where two route files match the same path. `e2e/write-limit-test.mjs` covers
-  it against a dedicated throwaway instance.
-- **Atomic capacity caps** — group creation, join-by-link, invite accept,
-  invite-link minting, friend requests and friend-request accept enforced their
-  caps with `SELECT COUNT(*)` in a _separate_ statement from the insert, so
-  concurrent requests could overshoot. Each cap now lives inside the
-  INSERT/UPDATE with a `meta.changes` check; friend accept writes both
-  friendship rows from one compound statement so the pair is all-or-nothing.
-- **Reset-request timing** — the response body was identical whether or not an
-  account existed, but the paths took very different time (an unknown email
-  skipped the token insert _and_ the outbound email fetch). The send moved onto
-  `waitUntil` and every skip branch now burns equivalent work.
-- **Seeded admin credential** — the daily cron verifies the published default
-  password against the admin hash and logs `SECURITY_admin_default_password`
-  while it still works. The deploy workflow warns (non-blocking) when Turnstile
-  is unconfigured, since bot defense silently no-ops without the secret.
-- **CSP containment** — `style-src-elem 'self'` refuses an injected `<style>`
-  block while React's inline style attributes keep working.
-  `test/csp.test.ts` locks the "no `innerHTML` / `dangerouslySetInnerHTML` in
-  the SPA" invariant, so a future HTML-rendering feature trips a test instead
-  of silently losing CSP.
-- **Release-tag guard** — the deploy workflow's `v*` glob would also have
-  matched a `vX.Y.Z.devN` tag; the filter now excludes dev versions and
-  `scripts/check-release-tag.mjs` fails a tagged run whose package.json isn't a
-  clean `x.y.z` matching the tag.
+- **Session rotation is a compare-and-swap (INV-01)** — renewal used to INSERT
+  a new `auth_sessions` row and DELETE the old one, so a revocation landing
+  between the read and the insert was silently undone and a stolen token became
+  a fresh valid session. It is now one `UPDATE … WHERE id = ? AND token_hash =
+<the hash that was read>`: 0 affected rows means the session is gone (401), or
+  a peer rotated first (no cookie set, so two racing requests cannot clobber
+  each other's token). Every revocation path deletes by `id` or `user_id`, so a
+  revoke that lands after the CAS still catches the renamed row.
+- **`requireAuth` runs once per request** — every route file registers both a
+  bare path and its wildcard (`use('/me', …)` + `use('/me/*', …)`) and Hono
+  matches a bare path against BOTH, so the second run re-authorized against the
+  now-stale request cookie. That doubled the session/user lookups on every bare
+  path and 401'd any request inside the 7-day rotation window, signing the user
+  out once per 30 days.
+- **Login checks the bot challenge before charging the lockout budget** — the
+  route charged both rate-limit counters and only then verified Turnstile, so an
+  anonymous caller that never solved the challenge could burn a known username's
+  whole 10-per-15-minutes budget from any number of IPs.
+- **Password-reset fan-out is bounded per IP (audit #11)** — an accepted reset
+  request SENDS MAIL; only a per-address budget existed, so one source could
+  spray many addresses. New `reset_ip` (20/hour/IP) ahead of the challenge and
+  the per-address rule, so a refused challenge charges the IP budget only.
+- **Reset and verification links use a configured origin (INV-09)** — the emailed
+  link IS the credential, and its origin came from the request. `APP_PUBLIC_URL`
+  wins now; the deploy workflow warns (non-blocking) when it is unset.
+- **WebSocket connections are capped and re-authorized (INV-10)** — a valid or
+  leaked session could open unbounded sockets, each a live WebSocket in the
+  user's Durable Object and a target of every broadcast. The DO now refuses past
+  8 per session / 32 per account, and re-reads the session row at upgrade time so
+  a revocation in the gap between the Worker's check and the DO's still wins.
+- **Deletes tombstone instead of cascading (INV-06)** — `time_sessions.task_id
+REFERENCES tasks(id) ON DELETE CASCADE` meant one member deleting a shared task
+  erased every OTHER member's historical records. Tasks and projects now carry
+  `deleted_at`, the row keeps its name, and `time_sessions.task_name` snapshots
+  it at write time. Invisible to every live path; present in reports and the log.
+- **Mutation and event commit together (INV-11)** — the client's only recovery
+  path is `GET /sync?since=<cursor>`, a pure cursor walk that never refetches, so
+  a write whose event was lost was not eventually consistent but permanently
+  divergent. `commitWithEvents` makes it one D1 batch, and a convention test
+  fails if a handler reverts to the two-batch shape.
+- **Overlapping sessions are rejected inside the write (INV-03)** — the route
+  selected the conflicts, then inserted, so two concurrent requests both saw "no
+  overlap" and both inserted. The overlap predicate and the per-account session
+  cap now live in the INSERT/UPDATE itself.
+- **Migration 0002's duplicate-username backfill actually de-duplicates** —
+  `SELECT id … GROUP BY username HAVING COUNT(*) > 1` returns one arbitrary row
+  per group, so a group of three+ left collisions and the unique index failed,
+  aborting the migration mid-file.
+- **A write spends a DAILY budget, not just a per-minute one (INV-12)** — a
+  request cap says nothing about database cost (300/min is ~432k requests/day
+  for one account), and the DO's in-memory counters were reset by eviction, which
+  a 24-hour cap cannot survive.
 
-## Bugs found by the new tooling
+## Deployment
 
-- **Conditional hook in Settings** — `useModalA11y` was called after an
-  `if (!settings) return null`, so React would have thrown "rendered fewer
-  hooks than expected" had the settings row ever arrived a render late.
-- **A round-trip assertion that never asserted** — `roundtrip-test.mjs`
-  computed the imported session count and printed it, but left it out of the
-  verdict.
-- **Chart cleanup used a stale ref** — the dashboard destroyed whatever
-  `charts.current` held at teardown instead of the instances its own effect
-  created.
-- **`fromLocalInput` diverged inside a DST gap** — a wall clock that doesn't
-  exist (spring forward) drifted ~4h per iteration and saved the session hours
-  away from what was typed. It now case-analyses the two offsets and falls
-  forward (`02:30` → `03:30`).
-- Plus a dead `PRESETS` const surviving only as a type, four bare
-  `eslint-disable` comments that suppressed nothing, and vestigial bindings in
-  three e2e scripts.
+- **Deploys are gated on the full CI suite for that exact sha (INV-07)** — the
+  "CI gate" was `typecheck && tests`, a strictly weaker gate than the CI
+  workflow: lint, format and the whole e2e/security suite were not required. The
+  gate now polls this commit's check runs and requires verify + version-sync +
+  e2e all green, reporting the CI run's URL on every failure path. CI also runs
+  on `v*` tags, since a tag is a different ref from main.
 
-## Timezone
+## Housekeeping
 
-- **The profile timezone is seeded from the device** on first login, while it
-  still holds the `'UTC'` default that admin-created users start with — a zone
-  picked in Settings is never overwritten. This was the real cause of manual
-  session entry feeling "off": the whole app bucketed and displayed wall clocks
-  in UTC.
-- **Manual session editor** labels both date fields with the zone, shows the
-  zone's UTC offset and the resulting duration, and warns about DST edge cases
-  (a time that doesn't exist, or one that happens twice).
+- `check-version.mjs` guards `package-lock.json` too — 0.5.3 shipped with a
+  lockfile still saying 0.5.2, and nothing broke, which is exactly why it needed
+  a guard.
+- New password hashes are labelled `pbkdf2-chain$`: the Workers runtime caps a
+  single `deriveBits` call at 100k, so the 600k total is reached by chaining
+  rounds. The legacy `pbkdf2$` label is still accepted (same derivation, only the
+  label differed), and the seeded admin hash keeps verifying.
+- e2e retry helpers now also retry the proxy's HTTP 500 drop page, not just
+  connection-level curl errors — on a security probe, "the CSRF guard returned
+  500" is exactly the line a human is tempted to wave away.
 
-## Resume
+## Tests
 
-- **Resume restores the subtask**, not just the task. `/api/bootstrap` now
-  returns `recent: [{ task_id, subtask_id }]` (one entry per task, carrying the
-  subtask of that task's newest session), and the Resume button, the `R`
-  shortcut and the "Jump back in" chips all start where you actually left off —
-  falling back to the whole task if that subtask is gone.
+Twenty-one new unit tests and three new e2e scripts:
 
-## UI
+- `test/session-rotation.test.ts`, `test/require-auth-once.test.ts` — the CAS
+  interleavings and the double-authorization, against a D1 double that can inject
+  a concurrent mutation at a chosen point.
+- `test/login-lockout.test.ts` — challenge/budget ordering for login and reset.
+- `test/public-url.test.ts`, `test/migrations.test.ts` — the reset-link origin,
+  and migration 0002 against real SQLite (clean, colliding pair, triple, several
+  groups, ids sharing a prefix).
+- `test/event-atomicity.test.ts` — the one-batch convention.
+- `e2e/session-race-test.mjs`, `e2e/race-test.mjs`, `e2e/tombstone-test.mjs` —
+  the three concurrency/consistency invariants, over real HTTP.
 
-- Running-time badges read **"N running"** instead of "+N minutes running" in
-  both the Daily summary and the per-task table (the printed value already
-  includes running time; the `+` read as an addition).
-- **Multi-line chat messages render with their line breaks** — the composer's
-  Shift+Enter newlines were stored correctly all along but collapsed visually.
-- **The sidebar ✕ is hidden on wide screens.** `.icon-btn`'s
-  `display: inline-flex` sits later in the stylesheet with equal specificity
-  and was overriding the hide rule, so the button appeared at ≥1024px where
-  closing the sidebar does nothing.
+Each of the new e2e scripts was verified to have teeth: the session race
+resurrects a live session on 24/24 rounds against the old rotation, the overlap
+race stores 5–6 rows per round against the old check-then-insert, and the
+tombstone test shows another user's minute going to null against the old
+cascade.
 
-## Tooling
-
-- **ESLint 9** (flat config, typescript-eslint + react-hooks) and **Prettier 3**,
-  both blocking in CI's `verify` job. `noUnusedLocals`/`noUnusedParameters` on
-  both tsconfig projects make the existing typecheck a dead-code gate.
-- `no-explicit-any` is off by design (the store/API layer is `any`-typed at its
-  edges) and `react-hooks/exhaustive-deps` is a warning, with each intentional
-  narrowing carrying a named disable and a reason.
-- The repository was reformatted once, in a single mechanical commit.
-
-## Docs
-
-- Deployment notes state that the **Workers free plan is sufficient**; the
-  previous "Workers Paid required" claim (and its reasoning about PBKDF2 CPU
-  cost) was wrong.
-- `oauth_accounts` and `users.totp_secret` are documented as reserved,
-  unused placeholders for the unimplemented FR-A3/FR-A9.
-- Scratch files and throwaway `wrangler dev` state belong in the gitignored
-  `.work/` directory, not `/tmp`.
+Not a release: no tag, and `package.json` still reads 0.5.3.

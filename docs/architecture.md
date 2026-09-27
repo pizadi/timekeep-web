@@ -66,10 +66,21 @@ notified via `ctx.waitUntil`).
   guard in the store) — timer/pomodoro API responses carry `pomo`/`running`
   payloads the caller must apply via `store.setPomo`/`store.setRunning`, or
   the UI state goes stale.
-- **Transactionality**: the UserHub DO writes entity rows and events in ONE D1
-  batch; route handlers use two back-to-back batches (entity write, then
-  events). A crash between the two can drop the event — clients recover via
-  the reconcile poll / refetch.
+- **Transactionality**: entity write and event are ONE D1 batch, everywhere.
+  `commitWithEvents(env, userId, drafts, entityStmts)` is the only way a route
+  writes; `emitToUsers`/`emitEntityEvents` take the entity statements as an
+  argument so a fan-out is atomic with what it announces. D1 runs a batch as a
+  transaction, so "the change happened" and "the change is in the log" are one
+  fact. This matters because the client's only recovery path is
+  `GET /sync?since=<cursor>` — a pure cursor walk that never refetches — so a
+  change whose event was lost is not eventually consistent, it is permanently
+  divergent until a full reload. Two exceptions, both documented at the call
+  site: `import.completed` and `restore.completed` are completion signals for
+  multi-batch operations (up to 200k rows, 200 at a time) and cannot share a
+  batch; clients treat both as a full refetch, so losing one is
+  stale-until-reload rather than divergence.
+  `test/event-atomicity.test.ts` fails if a handler calls the standalone
+  `appendEvents` again.
 - Cross-user fan-out (friends, groups) uses `emitToUsers`: ONE sync_log row
   per recipient + a notify of each recipient's UserHub.
 - **Recency** ("Jump back in" / Resume): `GET /api/bootstrap` returns
@@ -117,8 +128,14 @@ notified via `ctx.waitUntil`).
   endpoints, heavy API, social actions, and **state-changing writes**). The hot
   per-user `api_user` counter lives in the user's UserHub DO (atomic); KV is
   the fallback and the counter for cold per-IP/per-email limits.
-  `limitWrites` (`write_user`, 300/min) covers the CRUD/task/session/timer/group
-  routes — previously they had _no_ rate limit, only eventual entity-count caps,
+  `limitWrites` covers the CRUD/task/session/timer/group routes — previously they
+  had _no_ rate limit, only eventual entity-count caps. It charges TWO budgets in
+  one round trip: `write_user` (300/min) and `write_user_day` (20k/day), the
+  latter being what actually bounds database work. Fan-out routes use
+  `limitSocialWrites` (`social_write`, 60/min) instead, since one request there
+  writes a `sync_log` row per group member. Per-user counters live in the
+  UserHub's own storage, so they survive instance eviction — a 24-hour cap that
+  resets when the DO is evicted is not a cap,
   so a leaked session could hammer `/timer/start`+`stop` freely. It is chained
   after `requireAuth` in each mutating route file's `use(...)` (and per-route for
   `misc.ts`'s settings/layout writes), skips GET/HEAD/OPTIONS (reads already ride
@@ -154,8 +171,18 @@ notified via `ctx.waitUntil`).
   with `edit_tasks` edits), sessions stay strictly user-owned.
 - Presence/chat never expose raw session rows or notes; reports are buckets
   only.
-- Group-project/group-task deletes are permanent (no undo payload across
-  member boundaries); personal deletes keep the 5-second undo.
+- Group-project/group-task deletes carry no undo payload across member
+  boundaries; personal deletes keep the 5-second undo. Either way the delete is a
+  **tombstone** (`deleted_at`), never a cascade: the row stays with its name, and
+  so do the `time_sessions` that referenced it. `time_sessions.task_id … ON
+DELETE CASCADE` meant one member deleting a shared task erased every OTHER
+  member's history, which is the opposite of what a shared log is for.
+  `access.ts` treats a tombstone as nonexistent for every live path; reports and
+  the session log render it through `HISTORICAL_TASK_NAME` (the task's live
+  name, else the `task_name` snapshot the session took at write time). A running
+  timer on a tombstoned task is ENDED, not left running — the user can no longer
+  see the task, and the single-timer invariant would otherwise block them from
+  starting anything else. Undo and import clear `deleted_at`.
 
 ## Responsive & touch UI
 
