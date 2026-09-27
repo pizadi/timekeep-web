@@ -6,7 +6,13 @@ import { jsonError } from '../env';
 import { requireAuth, limitWrites } from '../middleware';
 import { sessionCreateSchema, sessionPatchSchema } from '../validators';
 import { checkSessionTimes, noteProblem } from '../../shared/validation';
-import { findSameTaskOverlaps, conflictError, assertNotRunning } from '../rules';
+import {
+  findSameTaskOverlaps,
+  insertSessionGuarded,
+  updateSessionGuarded,
+  conflictError,
+  assertNotRunning,
+} from '../rules';
 import { appendEvents, notifyHub, EventDraft } from '../events';
 import { ulid } from '../../shared/ids';
 import { LIMITS } from '../../shared/constants';
@@ -135,23 +141,32 @@ sessionRoutes.post('/sessions', async (c) => {
   const nErr = noteProblem(note);
   if (nErr) return jsonError(422, 'validation', nErr);
 
-  // same-task overlap rejected; conflicts returned so the UI can highlight them (FR-S4 AC)
+  // Same-task overlap rejected; conflicts returned so the UI can highlight them
+  // (FR-S4 AC). This query only builds the 409 BODY — the insert below is the
+  // authoritative check, with the overlap predicate and the session cap inside
+  // the statement, because check-then-insert loses concurrent requests (INV-03).
   const conflicts = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at, now);
   if (conflicts.length > 0) throw conflictError(conflicts); // formatted by app.onError
 
-  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM time_sessions WHERE user_id = ?1')
-    .bind(userId)
-    .first<{ n: number }>();
-  if (Number(count?.n ?? 0) >= LIMITS.sessionsPerUser)
-    return jsonError(422, 'limit', 'limit reached: at most 200000 sessions per account');
-
   const id = ulid(now);
-  await c.env.DB.prepare(
-    `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8)`,
-  )
-    .bind(id, userId, task_id, started_at, ended_at, note, now, subtask_id ?? null)
-    .run();
+  const written = await insertSessionGuarded(c.env, {
+    id,
+    userId,
+    taskId: task_id,
+    subtaskId: subtask_id ?? null,
+    startedAt: started_at,
+    endedAt: ended_at,
+    note,
+    now,
+    cap: LIMITS.sessionsPerUser,
+  });
+  if (!written.ok) {
+    // A concurrent request got there first. Re-read to report the right error:
+    // the overlap wins if it now conflicts, otherwise it is the account cap.
+    const raced = await findSameTaskOverlaps(c.env, userId, task_id, started_at, ended_at, now);
+    if (raced.length > 0) throw conflictError(raced);
+    return jsonError(422, 'limit', `limit reached: at most ${LIMITS.sessionsPerUser} sessions per account`);
+  }
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(id).first();
   const evs = await appendEvents(c.env, userId, [
@@ -202,12 +217,29 @@ sessionRoutes.patch('/sessions/:id', async (c) => {
   const conflicts = await findSameTaskOverlaps(c.env, userId, taskId, started, ended, now, existing.id);
   if (conflicts.length > 0) throw conflictError(conflicts);
 
-  await c.env.DB.prepare(
-    `UPDATE time_sessions SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
-     WHERE id = ?7 AND user_id = ?8`,
-  )
-    .bind(taskId, subtaskId, started, ended, note, now, existing.id, userId)
-    .run();
+  // Same shape as the insert: the pre-check above only builds the 409 body, the
+  // guarded statement decides (the PATCH path had the same check-then-write
+  // race, from two devices editing one session into overlapping windows).
+  const written = await updateSessionGuarded(c.env, {
+    id: existing.id,
+    userId,
+    taskId,
+    subtaskId,
+    startedAt: started,
+    endedAt: ended,
+    note,
+    now,
+  });
+  if (!written.ok) {
+    // either a concurrent request created an overlap, or the row was deleted
+    // while we were validating it
+    const still = await c.env.DB.prepare('SELECT 1 FROM time_sessions WHERE id = ?1 AND user_id = ?2')
+      .bind(existing.id, userId)
+      .first();
+    if (!still) return jsonError(404, 'not_found', 'session not found');
+    const raced = await findSameTaskOverlaps(c.env, userId, taskId, started, ended, now, existing.id);
+    throw conflictError(raced);
+  }
 
   const session = await c.env.DB.prepare('SELECT * FROM time_sessions WHERE id = ?1').bind(existing.id).first();
   const evs = await appendEvents(c.env, userId, [

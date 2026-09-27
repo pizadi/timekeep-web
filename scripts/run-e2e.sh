@@ -8,7 +8,12 @@
 #                          password on the fresh DB
 #   roundtrip-test.mjs last — it deletes the dana account
 #   everything in between either creates its own users or reuses dana.
-#   write-limit-test.mjs gets a dedicated throwaway instance (see below).
+#   write-limit-test.mjs and session-race-test.mjs get dedicated throwaway
+#   instances (see below).
+#
+# The three concurrency scripts (session-race, race-test, security-probes) are
+# the only things in the suite that assert on INTERLEAVINGS; everything else is
+# sequential and a lost race shows up as a plain failure.
 #
 # Logs and the throwaway D1 state live in .work/ (gitignored — AGENTS.md
 # "Temp files and scratch state go in .work/", not /tmp).
@@ -141,4 +146,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 echo
-echo "e2e suite passed (11/11 scripts)"
+echo "e2e suite passed (13/13 scripts)"

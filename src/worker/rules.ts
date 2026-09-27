@@ -227,6 +227,22 @@ export async function assertSubtaskLimit(env: Env, userId: string, taskId: strin
 
 // ---------- sessions (FR-S4/S6) ----------
 
+/**
+ * The overlap predicate, verbatim, as it appears in BOTH the conflict SELECT
+ * below and the guarded INSERT/UPDATE that follow. Kept in one place because
+ * the two must agree exactly: the SELECT only builds the 409 body the UI
+ * highlights, the guarded statement is what actually decides (INV-03).
+ *
+ * Half-open intervals: `a.start < b.end AND a.end > b.start`. A running
+ * session (ended_at NULL) occupies until `now`.
+ */
+export const OVERLAP_PREDICATE =
+  'task_id = %TASK% AND user_id = %USER% AND started_at < %END% AND COALESCE(ended_at, %NOW%) > %START%';
+
+/** Fill %TOKEN% placeholders with positional parameter numbers, e.g. {TASK: 1}. */
+const overlapSql = (n: { TASK: number; USER: number; END: number; NOW: number; START: number }) =>
+  OVERLAP_PREDICATE.replace(/%(\w+)%/g, (_m, key: string) => `?${n[key as keyof typeof n]}`);
+
 /** Same-task overlap query; a running session occupies until `now`. Returns conflicting rows. */
 export async function findSameTaskOverlaps(
   env: Env,
@@ -239,14 +255,111 @@ export async function findSameTaskOverlaps(
 ) {
   const sql = `
     SELECT id, started_at, ended_at FROM time_sessions
-    WHERE task_id = ?1 AND user_id = ?2
-      AND started_at < ?3 AND COALESCE(ended_at, ?4) > ?5
-      ${excludeId ? 'AND id <> ?6' : ''}`;
+    WHERE ${excludeId ? overlapSql({ TASK: 1, USER: 2, END: 3, NOW: 4, START: 5 }) + ' AND id <> ?6' : overlapSql({ TASK: 1, USER: 2, END: 3, NOW: 4, START: 5 })}`;
   const stmt = excludeId
     ? env.DB.prepare(sql).bind(taskId, userId, end, now, start, excludeId)
     : env.DB.prepare(sql).bind(taskId, userId, end, now, start);
   const r = await stmt.all<any>();
   return r.results;
+}
+
+export type GuardedWrite =
+  /** the statement matched and wrote */
+  | { ok: true }
+  /** nothing was written — the caller re-reads to pick the right error */
+  | { ok: false };
+
+/**
+ * The manual-session INSERT with BOTH invariants inside the statement:
+ * the same-task overlap check and the per-account session cap.
+ *
+ * This is the authoritative check. The route runs findSameTaskOverlaps first
+ * only to build the 409 body; check-then-insert let two concurrent requests
+ * both observe "no overlap" and both insert (INV-03), and the same race
+ * existed on the session cap (audit 🟡2's rule: never COUNT then insert —
+ * D1 serializes writes per database, so a guarded single statement cannot be
+ * raced, while count-then-insert overshoots).
+ */
+export async function insertSessionGuarded(
+  env: Env,
+  row: {
+    id: string;
+    userId: string;
+    taskId: string;
+    subtaskId: string | null;
+    startedAt: number;
+    endedAt: number;
+    note: string;
+    now: number;
+    cap: number;
+  },
+): Promise<GuardedWrite> {
+  const res = await env.DB.prepare(
+    `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id)
+     SELECT ?1, ?2, ?3, ?4, ?5, 'manual', ?6, ?7, ?7, ?8
+     WHERE NOT EXISTS (
+       SELECT 1 FROM time_sessions
+       WHERE ${overlapSql({ TASK: 3, USER: 2, END: 5, NOW: 9, START: 4 })}
+     )
+       AND (SELECT COUNT(*) FROM time_sessions WHERE user_id = ?2) < ?10`,
+  )
+    .bind(
+      row.id,
+      row.userId,
+      row.taskId,
+      row.startedAt,
+      row.endedAt,
+      row.note,
+      row.now,
+      row.subtaskId,
+      row.now, // ?9 — a running session occupies until the insert instant
+      row.cap,
+    )
+    .run();
+  return { ok: Number(res.meta?.changes ?? 0) === 1 };
+}
+
+/**
+ * The manual-session UPDATE with the overlap invariant inside the statement —
+ * the PATCH path had exactly the same check-then-write race as the INSERT
+ * (two devices editing the same session into overlapping windows).
+ * `?3` is the row being edited and is excluded from its own overlap test.
+ */
+export async function updateSessionGuarded(
+  env: Env,
+  row: {
+    id: string;
+    userId: string;
+    taskId: string;
+    subtaskId: string | null;
+    startedAt: number;
+    endedAt: number;
+    note: string;
+    now: number;
+  },
+): Promise<GuardedWrite> {
+  const res = await env.DB.prepare(
+    `UPDATE time_sessions
+     SET task_id = ?1, subtask_id = ?2, started_at = ?3, ended_at = ?4, note = ?5, source = 'manual', updated_at = ?6
+     WHERE id = ?7 AND user_id = ?8
+       AND NOT EXISTS (
+         SELECT 1 FROM time_sessions
+         WHERE ${overlapSql({ TASK: 1, USER: 8, END: 4, NOW: 9, START: 3 })} AND id <> ?7
+       )`,
+  )
+    .bind(
+      row.taskId,
+      row.subtaskId,
+      row.startedAt,
+      row.endedAt,
+      row.note,
+      row.now,
+      row.id,
+      row.userId,
+      row.now, // ?9 — a running session occupies until the update instant
+    )
+    .run();
+  return { ok: Number(res.meta?.changes ?? 0) === 1 };
 }
 
 export function conflictError(rows: { id: string; started_at: number; ended_at: number | null }[]) {
