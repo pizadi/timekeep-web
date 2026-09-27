@@ -29,18 +29,40 @@ export async function sha256Hex(input: string): Promise<string> {
 }
 
 /**
- * PBKDF2-SHA256, iterations from env (NFR-3: ≥ 600k in production).
- * Format: pbkdf2$<iterations>$<saltHex>$<hashHex> — verified with constant-time compare.
+ * Password hashing. Format: `<scheme>$<iterations>$<saltHex>$<hashHex>`,
+ * verified with a constant-time compare.
+ *
+ * SCHEMES. The scheme identifier is load-bearing, not decoration:
+ *
+ *   `pbkdf2-chain` — what this code produces. It is NOT plain
+ *     PBKDF2-HMAC-SHA256 at <iterations>: the Workers runtime rejects a single
+ *     `deriveBits` call above 100 000 iterations, so the total is reached by
+ *     CHAINING rounds, each feeding the previous 32-byte output back in as the
+ *     password with the salt fixed (see pbkdf2Chain). It matches a single call in
+ *     work factor only; it is a different construction, and anyone reading the
+ *     stored string must not conclude otherwise.
+ *
+ *   `pbkdf2` — the legacy label, accepted for hashes written before the scheme
+ *     was renamed. Same chained derivation, same work factor: only the label
+ *     differed, so verification is identical and nothing needs re-hashing. It is
+ *     kept ONLY so existing rows and the seeded admin hash (migrations/0002)
+ *     keep verifying.
+ *
+ * A new scheme must ship a new label and a verifying fallback for what is
+ * already stored, exactly as this rename did.
  */
+const SCHEME = 'pbkdf2-chain';
+const LEGACY_SCHEMES = new Set([SCHEME, 'pbkdf2']);
+
 export async function hashPassword(password: string, iterations: number): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const bits = await pbkdf2Chain(password, salt, iterations);
-  return `pbkdf2$${iterations}$${[...salt].map((b) => b.toString(16).padStart(2, '0')).join('')}$${hex(bits)}`;
+  return `${SCHEME}$${iterations}$${[...salt].map((b) => b.toString(16).padStart(2, '0')).join('')}$${hex(bits)}`;
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [scheme, iterStr, saltHex, hashHex] = stored.split('$');
-  if (scheme !== 'pbkdf2' || !iterStr || !saltHex || !hashHex) return false;
+  if (!LEGACY_SCHEMES.has(scheme) || !iterStr || !saltHex || !hashHex) return false;
   const iterations = Number(iterStr);
   if (!Number.isInteger(iterations) || iterations < 1) return false;
   // malformed stored hashes (e.g. odd-length salt hex) verify to `false`,
@@ -68,11 +90,13 @@ function pbkdf2(password: BufferSource, salt: Uint8Array, iterations: number): P
 // The Workers runtime rejects a single PBKDF2 deriveBits call above 100,000
 // iterations. To reach the configured counts (NFR-3: 600k), rounds are chained:
 // each round feeds the previous 32-byte output back in as the password, with
-// the salt fixed. This matches a single 600k call in *work factor* only — it is
-// a chained construction, not literally PBKDF2-600k. That constraint is why the
-// stored format string is used as a label (verified by format, not interop):
-// any future standard-compliant alternative must ship with a new prefix and a
-// verifying fallback for existing hashes.
+// the salt fixed.
+//
+// This matches a single 600k call in WORK FACTOR only. It is a chained
+// construction, not PBKDF2-600k, which is why the stored string is labelled
+// `pbkdf2-chain` rather than `pbkdf2` — see the scheme note above. Any
+// future standard-compliant alternative must ship with a new label and a
+// verifying fallback for what is already stored.
 const PBKDF2_MAX_ITERATIONS = 100_000;
 
 async function pbkdf2Chain(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
