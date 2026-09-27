@@ -89,13 +89,15 @@ run() {
 # it down. Kept as a function so the failure path still reaps the second server.
 run_write_limit() {
 	echo
-	echo "=== node e2e/write-limit-test.mjs (dedicated instance, RL_WRITE_USER=5) ==="
+	echo "=== node e2e/write-limit-test.mjs (dedicated instance, RL_WRITE_USER=5, RL_WRITE_USER_DAY=5) ==="
 	rm -rf "$WL_STATE"
 	npx wrangler d1 migrations apply timekeep --local --persist-to "$WL_STATE" >/dev/null 2>&1
-	npx wrangler dev --port "$WL_PORT" --persist-to "$WL_STATE" --var RL_WRITE_USER:5 >"$WL_LOG" 2>&1 &
+	npx wrangler dev --port "$WL_PORT" --persist-to "$WL_STATE" \
+		--var RL_WRITE_USER:5 --var RL_WRITE_USER_DAY:5 >"$WL_LOG" 2>&1 &
 	local wl_pid=$!
 	if wait_ready "http://127.0.0.1:$WL_PORT" "$wl_pid" wrangler-writelimit "$WL_LOG"; then
-		TK_BASE="http://127.0.0.1:$WL_PORT/api" RL_WRITE_USER=5 node e2e/write-limit-test.mjs || fail=1
+		TK_BASE="http://127.0.0.1:$WL_PORT/api" RL_WRITE_USER=5 RL_WRITE_USER_DAY=5 \
+			node e2e/write-limit-test.mjs || fail=1
 	else
 		fail=1
 	fi
@@ -110,7 +112,8 @@ run_session_race() {
 	npx wrangler d1 migrations apply timekeep --local --persist-to "$SR_STATE" >/dev/null 2>&1
 	# Seed one user + N sessions expiring in 3 days (< the 7-day rotation
 	# window) — see scripts/gen-session-race-seed.mjs.
-	node scripts/gen-session-race-seed.mjs "$SR_ROUNDS" "$SR_SEED" "$SR_STATE/sessions.json"	npx wrangler d1 execute timekeep --local --persist-to "$SR_STATE" --file "$SR_SEED" >/dev/null 2>&1
+	node scripts/gen-session-race-seed.mjs "$SR_ROUNDS" "$SR_SEED" "$SR_STATE/sessions.json"
+	npx wrangler d1 execute timekeep --local --persist-to "$SR_STATE" --file "$SR_SEED" >/dev/null 2>&1
 	npx wrangler dev --port "$SR_PORT" --persist-to "$SR_STATE" >"$SR_LOG" 2>&1 &
 	local sr_pid=$!
 	if wait_ready "http://127.0.0.1:$SR_PORT" "$sr_pid" wrangler-sessionrace "$SR_LOG"; then

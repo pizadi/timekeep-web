@@ -60,7 +60,6 @@ export class UserHub extends DurableObject {
   };
   private settings = { pomoEnabled: false, focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
   private lastEventId = 0;
-  private rl = new Map<string, number>(); // rate-limit counters (window key → hits)
   /** Next 12h-nudge deadline once the first has fired — the nudge repeats hourly
    *  while the timer runs past 12h instead of every alarm tick (audit: the old
    *  rearm-always-past-deadline behavior looped D1 writes until the timer
@@ -265,21 +264,47 @@ export class UserHub extends DurableObject {
       return Response.json({ ok: true });
     }
     if (url.pathname === '/ratelimit') {
-      // Atomic per-user counter for the hot-path rate limit: the DO
-      // is a single instance per user, so read-modify-write here is race-free
-      // and puts no writes on a shared KV key. Counters are in-memory (reset on
+      // Atomic per-user counters for the hot-path rate limits: the DO is a
+      // single instance per user, so read-modify-write here is race-free and
+      // puts no writes on a shared KV key. Counters are in-memory (reset on
       // eviction); the D1 rateLimitHit fallback in middleware is atomic anyway.
-      const body = await request.json<{ key: string; limit: number; windowMs: number }>().catch(() => null);
-      if (
-        !body ||
-        typeof body.key !== 'string' ||
-        !Number.isFinite(body.limit) ||
-        body.limit < 1 ||
-        !Number.isFinite(body.windowMs) ||
-        body.windowMs < 1000
-      )
+      //
+      // A LIST of rules, charged in one round trip — a write spends both its
+      // per-minute and its daily budget, and two calls per mutation is a silly
+      // price for that. A single { key, limit, windowMs } is still accepted.
+      const body = await request
+        .json<{
+          key?: string;
+          limit?: number;
+          windowMs?: number;
+          rules?: Array<{ key: string; limit: number; windowMs: number }>;
+        }>()
+        .catch(() => null);
+      const rules = Array.isArray(body?.rules) && body.rules.length ? body!.rules! : body ? [body as any] : [];
+      const valid = (r: { key?: string; limit?: number; windowMs?: number }) =>
+        !!r &&
+        typeof r.key === 'string' &&
+        Number.isFinite(r.limit) &&
+        (r.limit as number) >= 1 &&
+        Number.isFinite(r.windowMs) &&
+        (r.windowMs as number) >= 1000;
+      if (rules.length === 0 || rules.length > 8 || !rules.every(valid))
         return this.err(422, 'validation', 'invalid body');
-      return Response.json(this.rateLimit(body.key, body.limit, body.windowMs));
+      // every rule is charged (so a caller cannot probe one budget for free),
+      // and the FIRST over-budget one decides the response
+      let limited = { limited: false, retry_after_s: 0 };
+      for (const r of rules) {
+        const outcome = this.rateLimit(r.key, r.limit as number, r.windowMs as number);
+        if (outcome.limited && !limited.limited) limited = outcome;
+      }
+      // drop the previous window's key per rule, so storage does not grow with
+      // every window a long-lived DO sees (the keys are namespaced 'rl:<rule>:<window>')
+      const now = Date.now();
+      for (const r of rules) {
+        const win = Math.floor(now / (r.windowMs as number));
+        this.ctx.storage.sql.exec(`DELETE FROM kv WHERE k LIKE ?1 AND k <> ?2`, `rl:${r.key}:%`, `rl:${r.key}:${win}`);
+      }
+      return Response.json(limited);
     }
     if (url.pathname === '/timer') {
       const body = await request
@@ -916,17 +941,33 @@ export class UserHub extends DurableObject {
     return changed;
   }
 
+  /**
+   * Atomic per-user counter for the hot-path rate limits.
+   *
+   * The counter lives in the DO's OWN storage, not in memory: this DO is the
+   * serialized authority for the user's live state, and one instance per user
+   * makes read-modify-write atomic here without a shared-key write on every
+   * request. It is a single statement (INSERT … ON CONFLICT … RETURNING), so
+   * two concurrent requests cannot both read the same count.
+   *
+   * Durable rather than in-memory on purpose: one of these budgets is a DAY
+   * long (write_user_day), and an evicted DO would silently forget it — a cap
+   * that resets on eviction is not a cap. An old key is dropped when the window
+   * rolls, so storage does not grow without bound.
+   */
   private rateLimit(key: string, limit: number, windowMs: number): { limited: boolean; retry_after_s: number } {
     const now = Date.now();
     const win = Math.floor(now / windowMs);
-    const k = `${win}:${key}`;
-    const cur = (this.rl.get(k) ?? 0) + 1;
-    this.rl.set(k, cur);
-    if (this.rl.size > 64) {
-      for (const [k2] of this.rl) {
-        if (Number(k2.split(':', 1)[0]) < win) this.rl.delete(k2);
-      }
-    }
+    const k = `${key}:${win}`;
+    const row = this.ctx.storage.sql
+      .exec<{ n: number }>(
+        `INSERT INTO kv (k, v) VALUES (?1, '1')
+         ON CONFLICT (k) DO UPDATE SET v = CAST(CAST(v AS INTEGER) + 1 AS TEXT)
+         RETURNING CAST(v AS INTEGER) AS n`,
+        `rl:${k}`,
+      )
+      .toArray()[0];
+    const cur = Number(row?.n ?? 1);
     if (cur > limit) return { limited: true, retry_after_s: Math.ceil((windowMs - (now % windowMs)) / 1000) };
     return { limited: false, retry_after_s: 0 };
   }

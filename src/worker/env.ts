@@ -29,6 +29,8 @@ export interface Env {
   RL_API_USER?: string;
   RL_SOCIAL_USER?: string;
   RL_WRITE_USER?: string;
+  RL_WRITE_USER_DAY?: string;
+  RL_SOCIAL_WRITE?: string;
 
   // secrets
   // NOTE: no SESSION_SECRET — session tokens are 256-bit random, hashed at rest.

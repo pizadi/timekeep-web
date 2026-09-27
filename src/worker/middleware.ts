@@ -330,6 +330,17 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
     // fan-out. Generous enough that no human hits it (polling/reports are all
     // GETs and ride apiUser), low enough to cap abuse at a few writes/second.
     writeUser: { name: 'write_user', limit: n(env.RL_WRITE_USER, 300), windowMs: 60_000 },
+    // The budget that actually bounds DATABASE work. A per-minute request cap
+    // is not a cost cap: 300/min is ~432k requests/day for one account, and
+    // social mutations write one sync_log row per group member on top of the
+    // entity row. This is the ceiling on sustained D1 writes per account per
+    // day, and it is the number the audit's "bound the work, not the request
+    // count" asks for (INV-12). Env-overridable for tests, like the others.
+    writeUserDay: { name: 'write_user_day', limit: n(env.RL_WRITE_USER_DAY, 20_000), windowMs: 24 * 3600_000 },
+    // Fan-out routes (group projects/membership/chat): one request here writes
+    // up to LIMITS.membersPerGroup rows, so it gets its own, much lower,
+    // per-minute allowance instead of the ordinary write budget.
+    socialWrite: { name: 'social_write', limit: n(env.RL_SOCIAL_WRITE, 60), windowMs: 60_000 },
     // friend requests + username lookups (blocks request spam and cheap
     // username enumeration — the only user-existence oracle in the app)
     socialUser: { name: 'social_user', limit: n(env.RL_SOCIAL_USER, 30), windowMs: 3600_000 },
@@ -377,8 +388,12 @@ export function tooMany(retryAfterS: number) {
  * user's UserHub DO (single instance per user → the read-modify-write is
  * atomic, and the hot per-user key does no shared-key writes); falls back to
  * the atomic D1 upsert when the DO is unavailable.
+ *
+ * Takes a LIST of rules and charges them in ONE round trip: a write spends both
+ * its per-minute budget and its daily budget, and two DO calls per mutation
+ * would be a silly price for that.
  */
-async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
+async function userRateLimit(c: Ctx, rules: RateRule[]): Promise<Response | null> {
   const userId = c.get('user').id;
   try {
     const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
@@ -386,7 +401,9 @@ async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
       new Request('https://do/ratelimit', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-internal': '1' },
-        body: JSON.stringify({ key: rule.name, limit: rule.limit, windowMs: rule.windowMs }),
+        body: JSON.stringify({
+          rules: rules.map((r) => ({ key: r.name, limit: r.limit, windowMs: r.windowMs })),
+        }),
       }),
     );
     if (res.ok) {
@@ -396,8 +413,11 @@ async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
   } catch {
     /* DO unavailable → D1 fallback below */
   }
-  const rl = await rateLimitHit(c.env, rule, userId);
-  return rl ? tooMany(rl) : null;
+  for (const rule of rules) {
+    const rl = await rateLimitHit(c.env, rule, userId);
+    if (rl) return tooMany(rl);
+  }
+  return null;
 }
 
 /**
@@ -407,7 +427,20 @@ async function userRateLimit(c: Ctx, rule: RateRule): Promise<Response | null> {
  * would round-trip the DO needlessly.
  */
 export async function limitHeavy(c: Ctx): Promise<Response | null> {
-  return userRateLimit(c, rateRules(c.env).apiUser);
+  return userRateLimit(c, [rateRules(c.env).apiUser]);
+}
+
+/** The shared body of both write throttles; see limitWrites for the rules. */
+function writeThrottle(rulesOf: (r: ReturnType<typeof rateRules>) => RateRule[]) {
+  return createMiddleware<WorkerType>(async (c, next) => {
+    if (c.req.method === 'GET' || c.req.method === 'HEAD' || c.req.method === 'OPTIONS') return next();
+    if (c.get('writeLimited')) return next();
+    c.set('writeLimited', true);
+    if (!c.get('user')) return next(); // always chained after requireAuth; defensive only
+    const limited = await userRateLimit(c, rulesOf(rateRules(c.env)));
+    if (limited) return limited;
+    return next();
+  });
 }
 
 /**
@@ -416,20 +449,28 @@ export async function limitHeavy(c: Ctx): Promise<Response | null> {
  * mutates state — the CRUD/task/session/timer/group routes used to have no rate
  * limit at all, only eventual entity-count caps.
  *
+ * TWO budgets, not one. A per-minute request cap says nothing about the cost a
+ * request actually imposes on D1: at 300/min a single account can drive ~432k
+ * requests a day, and one social mutation writes a `sync_log` row per group
+ * member, so the real D1 write rate is up to two orders of magnitude above what
+ * the request limiter implies. The daily budget is the one that bounds actual
+ * database work over time; the per-minute one is what keeps a burst smooth.
+ *
  * Reads are skipped: the SPA's polling and report refetches are all GETs and
  * ride `apiUser` instead. The once-per-request flag matters because two route
  * files can register a `use` chain for the same path (tasks.ts and projects.ts
  * both cover `/projects/*`) — without it one write would be counted twice.
  */
-export const limitWrites = createMiddleware<WorkerType>(async (c, next) => {
-  if (c.req.method === 'GET' || c.req.method === 'HEAD' || c.req.method === 'OPTIONS') return next();
-  if (c.get('writeLimited')) return next();
-  c.set('writeLimited', true);
-  if (!c.get('user')) return next(); // always chained after requireAuth; defensive only
-  const limited = await userRateLimit(c, rateRules(c.env).writeUser);
-  if (limited) return limited;
-  return next();
-});
+export const limitWrites = writeThrottle((r) => [r.writeUser, r.writeUserDay]);
+
+/**
+ * The same daily budget, for the routes where ONE request costs N database
+ * writes: group projects, group membership and chat all fan a `sync_log` event
+ * out to every member (up to LIMITS.membersPerGroup), so they get a much lower
+ * per-minute allowance than ordinary CRUD. Use this INSTEAD of limitWrites on
+ * those routes — chaining both would spend the daily budget twice per request.
+ */
+export const limitSocialWrites = writeThrottle((r) => [r.socialWrite, r.writeUserDay]);
 
 // ---------- Turnstile (FR-A2) ----------
 

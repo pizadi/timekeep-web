@@ -31,7 +31,7 @@ function check(name, ok, detail = '') {
 }
 
 /** fetch() + cookie jar (the session cookie and the rotating CSRF token). */
-async function call(jar, device, method, path, data) {
+async function callOnce(jar, device, method, path, data) {
   const res = await fetch(BASE + path, {
     method,
     headers: {
@@ -62,9 +62,22 @@ async function call(jar, device, method, path, data) {
   return { status: res.status, body, headers: res.headers };
 }
 
+/**
+ * `wrangler dev`'s local proxy answers a dropped request with an HTTP 500 and
+ * no body (AGENTS.md) — retry, so a dropped login doesn't look like a wrong
+ * password three checks later.
+ */
+async function call(jar, device, method, path, data) {
+  const first = await callOnce(jar, device, method, path, data);
+  if (first.status >= 500 && first.body === null) {
+    console.log(`  (local proxy flake: ${first.status} with no body — retrying)`);
+    return callOnce(jar, device, method, path, data);
+  }
+  return first;
+}
+
 const adm = { cookies: [] };
 const ui = { cookies: [] };
-
 console.log('== admin: sign in, clear the forced-rotate gate, create a throwaway user ==');
 let adminIn = await call(adm, 'wl-adm', 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
 check('admin login (seeded password)', adminIn.status === 200, `status ${adminIn.status}`);
@@ -89,13 +102,18 @@ console.log(`== fire ${BURST} writes (RL_WRITE_USER is ${LIMIT}/min) ==`);
 // `wrangler dev`'s local proxy intermittently answers rapid sequential writes
 // with a bodiless 5xx ("Network connection lost" — AGENTS.md). Local artifact,
 // not the limiter: skip those instead of failing the run.
-let limited = 0,
-  made = 0,
-  flake = 0,
-  hard = 0;
-for (let i = 0; i < BURST; i++) {
+// Fire until the FIRST refusal, then check the next one is refused too. Firing
+// a fixed burst and then asserting "still limited" depends on the whole burst
+// fitting inside one 60s window, which is a property of how fast the machine
+// happens to be — the old shape failed for exactly that reason on a slow
+// runner, with the limiter working perfectly.
+let made = 0;
+let flake = 0;
+let hard = 0;
+let firstThrottleAt = -1;
+for (let i = 0; i < BURST && firstThrottleAt < 0; i++) {
   const r = await call(ui, 'wl-ui', 'POST', `/projects/${pid}/tasks`, { name: `t${i}` });
-  if (r.status === 429) limited++;
+  if (r.status === 429) firstThrottleAt = i;
   else if (r.status >= 500 && r.body === null) flake++;
   else if (r.status >= 400) {
     hard++;
@@ -103,18 +121,70 @@ for (let i = 0; i < BURST; i++) {
     if (hard > 3) break;
   } else made++;
 }
-console.log(`  ${made} created, ${limited} throttled, ${flake} proxy flakes skipped`);
-check('the burst gets throttled', limited > 0, `${limited} of ${BURST} responses were 429`);
+console.log(`  ${made} created, first 429 at write ${firstThrottleAt}, ${flake} proxy flakes skipped`);
+check('the burst gets throttled', firstThrottleAt >= 0, `no 429 in ${BURST} writes (RL_WRITE_USER=${LIMIT})`);
 check('no unexpected client errors', hard === 0, `${hard} unexpected`);
 
 const after = await call(ui, 'wl-ui', 'POST', `/projects/${pid}/tasks`, { name: 'x' });
-check('still limited right after the burst', after.status === 429, `status ${after.status}`);
+check('still limited right after the first refusal', after.status === 429, `status ${after.status}`);
 check('the standard rate_limited envelope', after.body?.error?.code === 'rate_limited', JSON.stringify(after.body));
 check(
   'a retry-after header is present',
   !!after.headers.get('retry-after'),
   `retry-after=${after.headers.get('retry-after')}`,
 );
+
+console.log('== the DAILY write budget (RL_WRITE_USER_DAY) ==');
+// A second, independent budget: the per-minute cap bounds a burst, the daily one
+// bounds sustained DATABASE work. Both are charged per write, so with the same
+// numbers the per-minute one always trips first — the only way to see the daily
+// budget on its own is to spend the per-minute one, WAIT for its window to roll,
+// and write again: the per-minute count is back to 1, so a refusal can only
+// come from the day budget. The retry-after says which: minutes, or hours.
+const DAY_LIMIT = Number(process.env.RL_WRITE_USER_DAY ?? 5);
+if (DAY_LIMIT < LIMIT) {
+  console.log(`  (RL_WRITE_USER_DAY=${DAY_LIMIT} < RL_WRITE_USER=${LIMIT} — unreachable here)`);
+} else {
+  const daily = { cookies: [] };
+  const name = `wd${Date.now().toString(36)}`;
+  const created = await call(adm, 'wl-adm', 'POST', '/admin/users', { username: name, password: PASS });
+  check('second throwaway user created', created.status === 201, `status ${created.status}`);
+  const li = await call(daily, 'wl-d', 'POST', '/auth/login', { identifier: name, password: PASS });
+  await call(daily, 'wl-d', 'POST', '/me/password', { current_password: PASS, password: `${PASS}-work` });
+  check('second user signed in', li.status === 200, `status ${li.status}`);
+
+  const codes = [];
+  // The forced password change above is itself a write, so it already spent one
+  // slot of BOTH budgets — the counts below are DAY_LIMIT-1 project writes.
+  for (let i = 0; i < DAY_LIMIT - 1; i++) {
+    const r = await call(daily, 'wl-d', 'POST', '/projects', { name: `d${i}-${name}` });
+    codes.push(r.status);
+  }
+  check(
+    `writes are allowed up to the per-minute budget (${codes.join(',')})`,
+    codes.every((c) => c === 201 || c === 200),
+    `${codes.join(',')}`,
+  );
+
+  // let the per-minute window roll over
+  console.log('  …waiting out the 60s per-minute window');
+  await new Promise((r) => setTimeout(r, 65_000));
+
+  const spent = await call(daily, 'wl-d', 'POST', '/projects', { name: `after-${name}` });
+  check(
+    'after the per-minute window rolls, the DAILY budget still refuses the write',
+    spent.status === 429 && spent.body?.error?.code === 'rate_limited',
+    `status ${spent.status} ${JSON.stringify(spent.body)}`,
+  );
+  const retryAfter = Number(spent.headers.get('retry-after') ?? 0);
+  check(
+    'its retry-after counts hours, not seconds (it is the day budget talking)',
+    retryAfter > 60,
+    `retry-after=${retryAfter}s (${Math.round(retryAfter / 3600)}h)`,
+  );
+  const read = await call(daily, 'wl-d', 'GET', '/projects');
+  check('reads are unaffected by the write budgets', read.status === 200, `status ${read.status}`);
+}
 
 console.log('== reads are NOT throttled (the SPA polls constantly) ==');
 const reads = [];
