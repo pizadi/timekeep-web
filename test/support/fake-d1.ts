@@ -24,6 +24,7 @@ export interface FakeUserRow {
   id: string;
   username: string;
   email: string;
+  password_hash: string | null;
   name: string;
   timezone: string;
   week_start: number;
@@ -38,6 +39,8 @@ export interface FakeUserRow {
 export interface FakeD1 {
   readonly sessions: Map<string, FakeSessionRow>;
   readonly users: Map<string, FakeUserRow>;
+  /** rate_counters key → current count (the D1 upsert…RETURNING n counter). */
+  readonly counters: Map<string, number>;
   /** Every statement the code under test ran, in order (for assertions). */
   readonly log: string[];
   /** Injected before a statement's effect is applied — the "other request". */
@@ -52,9 +55,17 @@ export interface FakeD1 {
 export function fakeD1(sessionRows: FakeSessionRow[] = [], userRows: FakeUserRow[] = []): FakeD1 {
   const sessions = new Map(sessionRows.map((r) => [r.id, { ...r }]));
   const users = new Map(userRows.map((u) => [u.id, { ...u }]));
+  const counters = new Map<string, number>();
   const log: string[] = [];
   const state = {
     beforeApply: null as ((sql: string) => void | Promise<void>) | null,
+  };
+
+  /** The rate_counters upsert: INSERT … ON CONFLICT DO UPDATE SET n = n + 1 … RETURNING n */
+  const bumpCounter = (key: string): number => {
+    const n = (counters.get(key) ?? 0) + 1;
+    counters.set(key, n);
+    return n;
   };
 
   const prepare = (sql: string): any => {
@@ -135,6 +146,25 @@ export function fakeD1(sessionRows: FakeSessionRow[] = [], userRows: FakeUserRow
           const [id] = stmt._args as string[];
           return (users.get(id) ?? null) as T | null;
         }
+        if (norm.includes('rate_counters')) {
+          const [key] = stmt._args as string[];
+          return { n: bumpCounter(key) } as T;
+        }
+        // login lookup: WHERE username = ?1 OR email = ?1 COLLATE NOCASE
+        if (norm.includes('FROM users') && norm.includes('username = ?1 OR email')) {
+          const [identifier] = stmt._args as string[];
+          const id = identifier.toLowerCase();
+          const row = [...users.values()].find((u) => u.username === id || u.email.toLowerCase() === id);
+          if (!row) return null;
+          return {
+            id: row.id,
+            username: row.username,
+            password_hash: row.password_hash,
+            role: row.role,
+            active: row.active,
+            must_change_password: row.must_change_password,
+          } as T;
+        }
         throw new Error(`fakeD1: unsupported first(): ${norm}`);
       },
     };
@@ -144,6 +174,7 @@ export function fakeD1(sessionRows: FakeSessionRow[] = [], userRows: FakeUserRow
   const fake: FakeD1 = {
     sessions,
     users,
+    counters,
     log,
     get beforeApply() {
       return state.beforeApply;
@@ -180,6 +211,7 @@ export function fakeUser(id: string, over: Partial<FakeUserRow> = {}): FakeUserR
     id,
     username: id,
     email: `${id}@example.com`,
+    password_hash: null,
     name: 'Test',
     timezone: 'UTC',
     week_start: 1,

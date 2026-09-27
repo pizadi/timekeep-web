@@ -94,12 +94,18 @@ authRoutes.post('/auth/login', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   const identifier = parsed.data.identifier;
 
+  // Order matters (the audit's #2): the coarse per-IP limit runs FIRST, so
+  // obvious flood traffic is cheap to shed, but the per-identifier budget is
+  // only charged to requests that already solved the bot challenge. Charging it
+  // before Turnstile let an unauthenticated attacker lock any known username
+  // out of its 10/15min budget without ever passing the challenge — which is
+  // the one thing the challenge is there to stop.
   const rlIp = await rateLimitHit(c.env, rateRules(c.env).loginIp, ip);
-  const rlLogin = await rateLimitHit(c.env, rateRules(c.env).loginEmail, identifier);
   if (rlIp) return tooMany(rlIp);
-  if (rlLogin) return tooMany(rlLogin);
   if (!(await verifyTurnstile(c.env, parsed.data.turnstile, ip)))
     return jsonError(422, 'turnstile', 'captcha verification failed');
+  const rlLogin = await rateLimitHit(c.env, rateRules(c.env).loginEmail, identifier);
+  if (rlLogin) return tooMany(rlLogin);
 
   const user = await c.env.DB.prepare(
     `SELECT id, username, password_hash, role, active, must_change_password FROM users
