@@ -36,6 +36,7 @@ const hasSqlite = (() => {
 })();
 
 // AGENTS.md: scratch state lives in .work/, not /tmp.
+const WORK = '.work';
 let dir: string;
 
 const run = (db: string, sql: string) => execFileSync('sqlite3', [db, sql], { encoding: 'utf8' }).trim();
@@ -60,8 +61,13 @@ const runScript = (db: string, sql: string) => execFileSync('sqlite3', [db], { i
 
 beforeAll(() => {
   if (!hasSqlite) return;
-  dir = mkdtempSync(join('.work', 'migrations-'));
-  mkdirSync(dir, { recursive: true });
+  // `.work/` is the documented scratch location (AGENTS.md) and it is
+  // gitignored, so it does NOT exist on a fresh CI checkout — mkdtemp creates
+  // the leaf, not the parent, and fails ENOENT without this. It existed locally
+  // only because the dev/e2e scratch state lived there too, which is exactly
+  // the kind of assumption that stays invisible until CI.
+  mkdirSync(WORK, { recursive: true });
+  dir = mkdtempSync(join(WORK, 'migrations-'));
 });
 afterAll(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
