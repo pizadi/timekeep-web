@@ -4,6 +4,7 @@
 import { store, pushToast } from './store';
 import { api } from './api';
 import { openPrompt } from '../components/PromptModal';
+import { fmtTarget } from '../../shared/goals';
 
 export async function addProject(): Promise<void> {
   // non-blocking modal instead of window.prompt
@@ -131,8 +132,7 @@ export async function toggleLastTask(): Promise<void> {
 
 /** Resume the most recently tracked task — on its last-used subtask when the
  *  newest session for that task was attributed to one. A subtask deleted
- *  since falls back to the whole task. */
-export async function resumeLastTask(): Promise<void> {
+ *  since falls back to the whole task. */ export async function resumeLastTask(): Promise<void> {
   const s = store.get();
   const last = s.recentEntries[0];
   const task = last ? s.tasks.find((t) => t.id === last.task_id) : null;
@@ -148,4 +148,58 @@ export async function resumeLastTask(): Promise<void> {
   } catch (e: any) {
     pushToast('error', e.message);
   }
+}
+
+// ---------- goals (v0.6.0) ----------
+
+export interface GoalInput {
+  name: string;
+  period: 'day' | 'week' | 'month';
+  direction: 'at_least' | 'at_most';
+  target_minutes: number;
+  scope: string[];
+  ends_at: number | null;
+}
+
+export async function addGoal(input: GoalInput): Promise<void> {
+  try {
+    const res = await api<{ goal: any }>('/goals', { method: 'POST', body: input });
+    store.upsertLocal('goal', res.goal);
+  } catch (e: any) {
+    pushToast('error', e.message);
+  }
+}
+
+export async function updateGoal(id: string, patch: Partial<GoalInput> & { archived?: boolean }): Promise<void> {
+  try {
+    const res = await api<{ goal: any }>(`/goals/${id}`, { method: 'PATCH', body: patch });
+    store.upsertLocal('goal', res.goal);
+  } catch (e: any) {
+    pushToast('error', e.message);
+  }
+}
+
+/** Goals are referenced by nothing, so delete is not a tombstone — undo
+ *  re-creates the goal from the row the DELETE returned (fresh id). */
+export async function deleteGoalWithUndo(goal: any): Promise<void> {
+  try {
+    await api(`/goals/${goal.id}`, { method: 'DELETE' });
+    pushToast('undo', `Goal “${goalLabel(goal)}” deleted — undo?`, async () => {
+      await addGoal({
+        name: goal.name,
+        period: goal.period,
+        direction: goal.direction,
+        target_minutes: goal.target_minutes,
+        scope: goal.scope,
+        ends_at: goal.ends_at,
+      });
+    });
+  } catch (e: any) {
+    pushToast('error', e.message);
+  }
+}
+
+/** Display label: the user's name, else the auto target phrase. */
+function goalLabel(goal: any): string {
+  return goal.name || fmtTarget(goal);
 }

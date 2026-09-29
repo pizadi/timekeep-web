@@ -49,6 +49,40 @@ breaks and skips. Soft timeouts only — nothing ever auto-stops; disabling
 mid-cycle resets the cycle but keeps the timer running. Sessions started in
 focus are tagged `source: 'pomodoro'`; `/timer/switch` re-anchors the cycle.
 
+## Goals
+
+"X hours per period (day/week/month) on Z" — Z is any mix of project/task/
+subtask nodes (`goals.scope`, JSON `"kind:id"` refs; a project ref covers all
+its tasks, and scope may include group-project nodes the user can track).
+Directions: `at_least` (habit) or `at_most` (limit).
+
+- **Pure math lives in `src/shared/goals.ts`** (unit-locked in
+  `test/goals.test.ts`): period windows follow the same `Intl` engine as
+  reports (profile timezone + week start); a goal's FIRST and LAST partial
+  periods are **pro-rated** by covered time — `ceil`, min 1 minute — so a goal
+  expiring 4 days into a week carries a 4/7 target for that week.
+- **Status is derived, never stored**: `goalStatus()` computes
+  active/completed/expired/archived from `archived_at`, `ends_at`, and the
+  live done-states of the scope refs. There is no `completed_at` column and
+  nothing hooks task toggles — un-checking a scope item re-activates a
+  completed goal. Tombstoned scope items are ignored by the done-check (their
+  past sessions still count, matching reports).
+- **Progress is server-side** (`GET /api/goals/progress`): period windows go
+  back into SQL via `json_each()` exactly like the report day table; clients
+  get window buckets + stats, never session rows. The running session is
+  included, clipped to `now`. All goals compute in ONE `DB.batch` (two
+  statements per goal: per-window tracked ms, and the scope's live/done counts).
+- **Deletion is a hard DELETE** — goals are referenced by nothing, so there is
+  no tombstone; the client's undo re-creates the goal from the DELETE's
+  returned row (fresh id).
+- **Cap inside the INSERT** (audit 🟡2): the guarded statement carries
+  `WHERE (SELECT COUNT(*) …) < LIMITS.goalsPerUser` (30), `meta.changes` read
+  for the 422.
+- **Period-end notifications are client-side** (`src/web/lib/goalNotify.ts`):
+  when a boundary passes while the app is open, progress is refetched and one
+  notification per affected goal fires — only with the Settings toggle on and
+  permission already granted (never requested here). No server cron.
+
 ## Sync & events
 
 Every mutation appends a row to `sync_log`, then the UserHub DO fans the event

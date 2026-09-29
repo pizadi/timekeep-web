@@ -6,6 +6,10 @@ import { LIMITS } from '../../shared/constants';
 import { api, getDeviceId, wsUrl, ApiError } from './api';
 import { mergeRecent, recentFromBootstrap, type RecentEntry } from './recent';
 import { deviceTimezone } from './time';
+import { armGoalNotifications } from './goalNotify';
+import type { Goal } from '../../shared/goals';
+
+export type { Goal };
 
 export interface Project {
   id: string;
@@ -154,12 +158,13 @@ export interface AppState {
   tasks: Task[];
   subtasks: Subtask[];
   deps: Dependency[];
+  goals: Goal[];
   running: RunningSession | null;
   pomo: PomoState | null;
   connection: 'online' | 'reconnecting' | 'offline';
   selectedProjectId: string | null;
   selectedTaskId: string | null;
-  view: 'tree' | 'log' | 'map' | 'dashboard' | 'social';
+  view: 'tree' | 'log' | 'map' | 'dashboard' | 'goals' | 'social';
   recentEntries: RecentEntry[]; // "Jump back in" / Resume — newest-first, one per task, with its last subtask
   reportsVersion: number; // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
@@ -183,6 +188,7 @@ let state: AppState = {
   tasks: [],
   subtasks: [],
   deps: [],
+  goals: [],
   running: null,
   pomo: null,
   connection: 'reconnecting',
@@ -235,6 +241,7 @@ export const store = {
         tasks: b.tasks,
         subtasks: b.subtasks,
         deps: b.dependencies,
+        goals: b.goals ?? [],
         recentEntries: recentFromBootstrap(b),
         running: b.running ?? null,
         pomo: b.pomo ?? null,
@@ -250,6 +257,7 @@ export const store = {
       set({});
       startWsAndSync();
       void store.seedTimezoneFromDevice();
+      void armGoalNotifications(); // period-end goal reminders (no permission requests here)
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'password_change_required') {
         // forced password change: /me is the only readable surface — surface the
@@ -300,6 +308,7 @@ export const store = {
       tasks: [],
       subtasks: [],
       deps: [],
+      goals: [],
       running: null,
       pomo: null,
       recentEntries: [],
@@ -459,6 +468,14 @@ export const store = {
         break;
       }
 
+      case 'goal.created':
+      case 'goal.updated':
+        patch.goals = upsert(state.goals, d.goal as Goal);
+        break;
+      case 'goal.deleted':
+        patch.goals = state.goals.filter((g) => g.id !== d.goal.id);
+        break;
+
       case 'subtask.created':
       case 'subtask.updated':
       case 'subtask.toggled':
@@ -543,10 +560,11 @@ export const store = {
   },
 
   // ---------- optimistic local helpers (used by the acting device) ----------
-  upsertLocal(kind: 'project' | 'task' | 'subtask', item: any) {
+  upsertLocal(kind: 'project' | 'task' | 'subtask' | 'goal', item: any) {
     if (kind === 'project') set({ projects: upsertLocalList(state.projects, item) });
     if (kind === 'task') set({ tasks: upsertLocalList(state.tasks, item) });
     if (kind === 'subtask') set({ subtasks: upsertLocalList(state.subtasks, item) });
+    if (kind === 'goal') set({ goals: upsertLocalList(state.goals, item) });
   },
   removeLocalTask(id: string) {
     set({
@@ -717,6 +735,7 @@ export async function refreshAll(): Promise<void> {
     tasks: b.tasks,
     subtasks: b.subtasks,
     deps: b.dependencies,
+    goals: b.goals ?? [],
     recentEntries: recentFromBootstrap(b),
     friends: b.friends ?? [],
     incoming: b.incoming_requests ?? [],
@@ -751,7 +770,7 @@ export function pathForView(view: AppState['view']): string {
 /** URL path → view; null for non-view routes (/login, /reset, /settings…). */
 export function viewFromPath(path: string): AppState['view'] | null {
   if (path === '/' || path === '') return 'tree';
-  if (path === '/log' || path === '/map' || path === '/dashboard' || path === '/social') {
+  if (path === '/log' || path === '/map' || path === '/dashboard' || path === '/goals' || path === '/social') {
     return path.slice(1) as AppState['view'];
   }
   return null;

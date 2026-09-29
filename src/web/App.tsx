@@ -37,6 +37,7 @@ import type { Project, Task } from './lib/store';
 // chart.js is only used here — lazy-loading roughly halves the initial bundle
 // (audit: 441 KB eager for a time tracker)
 const DashboardView = lazy(() => import('./views/DashboardView'));
+const GoalsView = lazy(() => import('./views/GoalsView'));
 
 /** Audit: no error boundary anywhere — a render exception white-screened the SPA. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -155,8 +156,8 @@ function Shell({ route }: { route: string }) {
         setHelpOpen((v) => !v);
         return;
       }
-      if (e.key >= '1' && e.key <= '5') {
-        const views = ['tree', 'log', 'map', 'dashboard', 'social'] as const;
+      if (e.key >= '1' && e.key <= '6') {
+        const views = ['tree', 'log', 'map', 'dashboard', 'goals', 'social'] as const;
         store.navigateToView(views[Number(e.key) - 1]!);
         return;
       }
@@ -255,7 +256,7 @@ function Shell({ route }: { route: string }) {
         )}
 
         <nav className="view-tabs" role="tablist" aria-label="Views">
-          {(['tree', 'log', 'map', 'dashboard', 'social'] as const).map((v, i) => (
+          {(['tree', 'log', 'map', 'dashboard', 'goals', 'social'] as const).map((v, i) => (
             <button key={v} role="tab" aria-selected={view === v} onClick={() => store.navigateToView(v)}>
               {labelFor(v)} {hasHover && <span aria-hidden> ({i + 1})</span>}
             </button>
@@ -270,6 +271,17 @@ function Shell({ route }: { route: string }) {
           {view === 'log' && <LogView />}
           {view === 'map' && <MapView />}
           {view === 'social' && <SocialView />}
+          {view === 'goals' && (
+            <Suspense
+              fallback={
+                <div className="muted" style={{ padding: 24 }}>
+                  Loading goals…
+                </div>
+              }
+            >
+              <GoalsView />
+            </Suspense>
+          )}
           {view === 'dashboard' && (
             <Suspense
               fallback={
@@ -311,7 +323,9 @@ function labelFor(v: string): string {
         ? 'Map'
         : v === 'dashboard'
           ? 'Dashboard'
-          : 'Social';
+          : v === 'goals'
+            ? 'Goals'
+            : 'Social';
 }
 
 function navigateHome(): void {
@@ -687,7 +701,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
             </tr>
             <tr>
               <td>
-                <span className="kbd">1</span>–<span className="kbd">5</span>
+                <span className="kbd">1</span>–<span className="kbd">6</span>
               </td>
               <td>Switch views</td>
             </tr>

@@ -22,7 +22,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
   const userId = c.get('user').id;
-  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social, groups] = await Promise.all([
+  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social, groups, goals] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
        FROM projects
@@ -89,6 +89,12 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     })(),
     socialLists(c.env.DB, userId),
     groupLists(c.env.DB, userId),
+    c.env.DB.prepare(
+      `SELECT id, user_id, name, period, direction, target_minutes, scope, ends_at, created_at, archived_at
+       FROM goals WHERE user_id = ?1 ORDER BY created_at`,
+    )
+      .bind(userId)
+      .all(),
   ]);
 
   return c.json({
@@ -98,6 +104,8 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     tasks: tasks.results,
     subtasks: subtasks.results,
     dependencies: deps.results,
+    // scope arrives as a JSON string from D1 — parse it to match the API's Goal shape
+    goals: goals.results.map((g: any) => ({ ...g, scope: JSON.parse(g.scope) })),
     recent: recent.results.map((r) => ({ task_id: r.task_id, subtask_id: r.subtask_id ?? null })),
     friends: social.friends,
     incoming_requests: social.incoming,

@@ -11,6 +11,7 @@ import { meRoutes } from './routes/me';
 import { adminRoutes } from './routes/admin';
 import { projectRoutes } from './routes/projects';
 import { taskRoutes } from './routes/tasks';
+import { goalRoutes } from './routes/goals';
 import { sessionRoutes } from './routes/sessions';
 import { timerRoutes } from './routes/timer';
 import { reportRoutes } from './routes/reports';
@@ -103,6 +104,7 @@ app.route('/api', meRoutes); // requireAuth inside
 app.route('/api', adminRoutes); // user management, requireAdmin inside
 app.route('/api', projectRoutes); // requireAuth inside
 app.route('/api', taskRoutes);
+app.route('/api', goalRoutes); // goals (v0.6.0) — user-owned, derived status
 app.route('/api', sessionRoutes);
 app.route('/api', timerRoutes);
 app.route('/api', reportRoutes);

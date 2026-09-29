@@ -1500,3 +1500,111 @@ table.tbl tr[tabindex]:focus-visible {
 .map-arrow.unmet {
   fill: var(--warn);
 }
+
+/* ---------- goals (v0.6.0) ---------- */
+.goal-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+.goal-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width var(--dur) linear;
+}
+.goal-bar-fill.over {
+  background: var(--warn);
+}
+.goal-strip {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.goal-cell {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex: none;
+  color: var(--muted);
+}
+.goal-cell.met {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.goal-cell.missed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.goal-cell.current {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.goal-badge-ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.scope-tree {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.goal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.goal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 4px 2px 9px;
+  font-size: 12.5px;
+  max-width: 100%;
+  min-width: 0;
+}
+.goal-chip .scope-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-chip .icon-btn {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+/* native number-input spinners are unthemeable cross-browser (the same reason
+   selects/datalists are replaced) — hidden app-wide; fields that benefit from
+   stepping get themed buttons (GoalsView) */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+.step-field {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 0;
+}
+.step-field .input {
+  width: 64px;
+  text-align: center;
+  flex: none;
+}

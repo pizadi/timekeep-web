@@ -13,7 +13,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR: `verify`
 (typecheck + tests + build), `version-sync` (`scripts/check-version.mjs`
 guards package.json ↔ wrangler.jsonc `__APP_VERSION__` ↔ package-lock), and a blocking `e2e`
 job — `scripts/run-e2e.sh` wipes local state (only when `CI=true`), migrates,
-starts `wrangler dev`, and runs all fourteen e2e scripts in order, with one
+starts `wrangler dev`, and runs all fifteen e2e scripts in order, with one
 automatic retry for the proxy flake.
 
 CD: `.github/workflows/deploy.yml` deploys on `workflow_dispatch` and `v*` tag
@@ -116,6 +116,16 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   `recent: [{ task_id, subtask_id }]` (newest session per task, via a window function) and the
   client keeps those pairs in `recentEntries` (`src/web/lib/recent.ts` — pure, unit-tested).
   Keep task-level-only recency out; Resume must restore the subtask.
+- Goals (`src/shared/goals.ts`, v0.6.0): "X minutes per day/week/month on a scope of
+  project/task/subtask refs" (`goals.scope`, JSON `"kind:id"`), direction `at_least`/`at_most`.
+  Status is DERIVED, never stored — `goalStatus()` reads `archived_at`/`ends_at` + the live
+  done-states of the scope refs, so nothing hooks task toggles and un-checking re-activates a
+  completed goal; no `completed_at` column exists. First and last partial periods are PRO-RATED
+  (ceil, min 1 min). Progress is server-side only (`GET /api/goals/progress`, json_each windows
+  like reports, running session included; one `DB.batch`, two statements per goal) — the client
+  never derives tracked time. Goal DELETE is a hard delete (nothing references goals; the
+  client's undo re-creates). The per-user cap is a guarded INSERT (`LIMITS.goalsPerUser`).
+  Period-end notifications are client-side (`lib/goalNotify.ts`, no new permission requests).
 - Every mutation appends to `sync_log`, then the DO fans out (`src/worker/events.ts`,
   notify via `ctx.waitUntil`). Batch granularity: the UserHub DO writes entity rows and
   events in ONE D1 batch; route handlers use two back-to-back batches (entity write, then

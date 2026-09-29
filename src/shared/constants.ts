@@ -16,6 +16,11 @@ export const LIMITS = {
   inviteLinksPerGroup: 20,
   // Max events returned by GET /sync per page (client drains full pages).
   syncPageMax: 500,
+  // Goals (v0.6.0): active-goal cap per account, and the scope-ref limit that
+  // keeps one goal's SQL predicate well under D1's 100 bound params.
+  goalsPerUser: 30,
+  goalScopeMax: 50,
+  goalNameMax: 80,
   // Total-row cap for /restore (undo). Sized to cover the largest possible
   // legitimate delete payload: 200 projects + 5000 tasks + 500k subtasks
   // (100/task) + 500k dependencies + 200k sessions.
@@ -115,6 +120,9 @@ export const EVENT_TYPES = [
   'project.created',
   'project.updated',
   'project.deleted',
+  'goal.created',
+  'goal.updated',
+  'goal.deleted',
   'dependency.created',
   'dependency.deleted',
   'pomodoro.phase',

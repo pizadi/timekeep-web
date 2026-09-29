@@ -1,6 +1,7 @@
 // Zod schemas — every request body validated server-side (NFR-3).
 import { z } from 'zod';
 import { GROUP_PERMS, HEX_COLOR_RE, LIMITS, POMODORO_LIMITS } from '../shared/constants';
+import { GOAL_DIRECTIONS, GOAL_PERIODS } from '../shared/goals';
 
 // Uppercase-only, matching isUlid() in shared/ids.ts (ids are generated uppercase).
 export const ulidish = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'invalid id');
@@ -137,6 +138,24 @@ export const subtaskPatchSchema = z.object({
 });
 
 export const depCreateSchema = z.object({ depends_on_id: ulidish });
+
+// Goals (v0.6.0). Scope refs are "kind:id" strings; ids are NOT ulid-restricted
+// because imported tasks keep their import ids. Ownership/accessibility of each
+// referenced node is checked in routes/goals.ts against the live tables.
+const goalScopeRef = z.string().regex(/^(project|task|subtask):[A-Za-z0-9_-]{1,64}$/, 'invalid scope ref');
+
+export const goalCreateSchema = z.object({
+  name: z.string().trim().max(LIMITS.goalNameMax).optional().default(''),
+  period: z.enum(GOAL_PERIODS),
+  direction: z.enum(GOAL_DIRECTIONS),
+  target_minutes: z.number().int().min(1).max(20160), // ≤ 14 days in minutes
+  scope: z.array(goalScopeRef).min(1).max(LIMITS.goalScopeMax),
+  ends_at: z.number().int().min(0).max(4_102_444_800_000).nullable().optional(), // clamp: [0, 2100]
+});
+
+export const goalPatchSchema = goalCreateSchema.partial().extend({
+  archived: z.boolean().optional(), // archive / un-archive (derived status makes completion non-permanent)
+});
 
 // Manual sessions are always closed intervals: an open-ended (ended_at NULL) row
 // is the *running* session, owned exclusively by the timer authority (UserHub DO);
