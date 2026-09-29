@@ -427,12 +427,41 @@ groupRoutes.delete('/groups/:id', async (c) => {
   if (!parsed.success) return jsonError(422, 'validation', 'invalid id');
   const ctx = await requireGroup(c.env, parsed.data, c.get('user').id);
   if (ctx.role !== 'owner') return jsonError(403, 'forbidden', 'only the group owner can delete the group');
-  await c.env.DB.prepare('DELETE FROM groups WHERE id = ?1').bind(ctx.group.id).run(); // cascades members/invites/links
-  await emitToGroup(c.env, ctx.group.id, {
-    type: 'group.deleted',
-    actor: c.get('deviceId'),
-    data: { group_id: ctx.group.id },
-  });
+  // Audit F8: capture the members BEFORE the delete — `DELETE FROM groups`
+  // cascades group_members away, so emitToGroup's own lookup would find
+  // nobody and the event would reach an empty set.
+  const members = await c.env.DB.prepare('SELECT user_id FROM group_members WHERE group_id = ?1')
+    .bind(ctx.group.id)
+    .all<{ user_id: string }>();
+  const memberIds = members.results.map((m) => m.user_id);
+  // Audit F2 (INV-06): `projects.group_id REFERENCES groups(id) ON DELETE
+  // CASCADE` would cascade the group's projects into `tasks.project_id` and
+  // `time_sessions.task_id` cascades too — one owner deleting the group
+  // destroyed EVERY member's recorded time on it. Tombstone the tasks and
+  // detach + tombstone the projects first, in the same batch, so the rows
+  // (and everyone's sessions) survive: live paths treat tombstones as
+  // nonexistent (access.ts) and history renders them via the session's
+  // task_name snapshot (HISTORICAL_TASK_NAME). Chat history is deliberately
+  // not preserved — group_messages dies with the group.
+  const now = Date.now();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE tasks SET deleted_at = ?2, updated_at = ?2
+       WHERE deleted_at IS NULL AND project_id IN (SELECT id FROM projects WHERE group_id = ?1)`,
+    ).bind(ctx.group.id, now),
+    c.env.DB.prepare(
+      `UPDATE projects SET group_id = NULL, deleted_at = ?2, updated_at = ?2
+       WHERE group_id = ?1 AND deleted_at IS NULL`,
+    ).bind(ctx.group.id, now),
+    c.env.DB.prepare('DELETE FROM groups WHERE id = ?1').bind(ctx.group.id), // cascades members/invites/links
+  ]);
+  await emitToGroup(
+    c.env,
+    ctx.group.id,
+    { type: 'group.deleted', actor: c.get('deviceId'), data: { group_id: ctx.group.id } },
+    memberIds,
+    c.executionCtx,
+  );
   return c.json({ ok: true });
 });
 

@@ -139,6 +139,7 @@ run_write_limit
 run_session_race
 run node e2e/race-test.mjs
 run node e2e/tombstone-test.mjs
+run node e2e/deletion-test.mjs
 run node e2e/goals-test.mjs
 run node e2e/regression-check.mjs
 run bash e2e/social-test.sh
@@ -151,4 +152,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 echo
-echo "e2e suite passed (15/15 scripts)"
+echo "e2e suite passed (16/16 scripts)"

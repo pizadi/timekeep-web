@@ -219,3 +219,11 @@ export function revokeHub(env: Env, userId: string, opts?: { keep?: string; only
       : '';
   stub.fetch(new Request(`https://do/revoke${q}`, { method: 'POST', headers: { 'x-internal': '1' } })).catch(() => {});
 }
+
+/** The account was hard-deleted: erase the hub's DO-private storage (pomodoro
+ *  state otherwise outlives the D1 batch forever — audit F1) and close every
+ *  socket. Best-effort, like revokeHub; call AFTER the D1 batch succeeded. */
+export function wipeHub(env: Env, userId: string): void {
+  const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
+  stub.fetch(new Request('https://do/wipe', { method: 'POST', headers: { 'x-internal': '1' } })).catch(() => {});
+}

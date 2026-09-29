@@ -217,6 +217,24 @@ DELETE CASCADE` meant one member deleting a shared task erased every OTHER
   timer on a tombstoned task is ENDED, not left running — the user can no longer
   see the task, and the single-timer invariant would otherwise block them from
   starting anything else. Undo and import clear `deleted_at`.
+- **Group deletion** (owner-only) tombstones the group's tasks and detaches +
+  tombstones its projects INSTEAD of letting `projects.group_id … ON DELETE
+CASCADE` do the work — the old `DELETE FROM groups` cascaded every member's
+  sessions on the group's tasks away (audit F2). Chat history is the one
+  deliberate exception: `group_messages` dies with the group. `group.deleted`
+  is emitted to the member list captured BEFORE the delete (the cascade empties
+  `group_members`, so a post-delete lookup would notify nobody — audit F8).
+- **Account deletion** (`DELETE /me`) resolves owned groups first, in the same
+  atomic batch: a group with remaining active members is transferred to the
+  earliest-joined one and the deleter's shared rows (projects, tasks, subtasks,
+  dependencies — all carry a denormalized `user_id`) are reassigned to the new
+  owner; a solo group is deleted exactly like the group-delete path above. The
+  FKs with no `ON DELETE` action (`goals.user_id`, `group_invites.invited_by`,
+  `group_invite_links.created_by`, `groups.owner_id`) get explicit deletes —
+  without them the atomic batch 500'd and the account could never be deleted
+  (audit F1). After the batch, the user's UserHub DO is wiped
+  (`ctx.storage.deleteAll()` via the internal `/wipe` route) so pomodoro state
+  doesn't outlive the account.
 
 ## Responsive & touch UI
 

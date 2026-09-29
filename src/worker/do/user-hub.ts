@@ -218,6 +218,30 @@ export class UserHub extends DurableObject {
       }
       return Response.json({ ok: true });
     }
+    if (url.pathname === '/wipe') {
+      // The account was deleted (routes/me.ts DELETE /me): erase the DO's
+      // private storage — pomodoro state otherwise outlives the D1 batch,
+      // which nothing else cleans up (audit F1) — and close every socket.
+      // The DO id is the user id (never reused), so nothing here can belong
+      // to anyone else. In-memory snapshots are reset with `loaded = false`
+      // so a stray access re-loads from the now-empty sources instead of
+      // serving a ghost of the deleted account.
+      for (const ws of this.ctx.getWebSockets()) {
+        try {
+          ws.close(4001, 'account deleted');
+        } catch {
+          /* already closing */
+        }
+      }
+      this.ctx.storage.deleteAll();
+      this.loaded = false;
+      this.running = null;
+      this.pomo = { phase: 'idle', taskId: null, accumulatedFocusMs: 0, lastResumeMs: null, breakEndsAt: null };
+      this.settings = { pomoEnabled: false, focusMs: 25 * 60_000, breakMs: 5 * 60_000, autoStart: false };
+      this.lastEventId = 0;
+      this.nudgeNextAt = null;
+      return Response.json({ ok: true });
+    }
     if (url.pathname === '/notify') {
       const body = await request.json<{ events: WsEvent[] }>().catch(() => null);
       if (body?.events?.length) {

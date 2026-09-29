@@ -56,6 +56,19 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   last (it deletes the `dana` account).
 - `wrangler dev`'s local proxy intermittently drops requests under rapid sequential e2e load
   (`Error: Network connection lost` → the script dies on a random step). Re-run before investigating.
+- **Killing a `wrangler dev` requires killing its SUPERVISOR, not the listener.** The process tree
+  is `npx → node …/wrangler-dist/cli.js dev → workerd` (+ esbuild); `workerd` is merely the
+  supervisor's child and is RESPAWNED the moment it dies, so `kill <workerd-pid>` (or killing by
+  the port via `ss -tlnp`) never frees :8787 — a fresh workerd reappears seconds later and every
+  later `wrangler dev` / `run-e2e.sh` silently talks to the stale one (or dies with
+  `Address already in use`). Kill the `node …/wrangler-dist/cli.js dev` process first
+  (`pkill -9 -f 'cli\.js dev'`), then any orphaned `workerd`. Two traps: (1) `scripts/run-e2e.sh`'s
+  EXIT trap kills only the `npx` wrapper, so an interrupted/failed run can leave the inner
+  supervisor orphaned to init (PPID 1) still holding :8787 — check `ss -tlnp | grep 8787` after any
+  odd suite run; (2) `pkill -f "wrangler dev"` also matches the invoking shell's OWN command line
+  and kills it mid-command — the rest of the line silently never runs. Use a non-self-matching
+  pattern (e.g. `[w]rangler`), `pkill -x`, or kill by PID. Never leave a background
+  `wrangler dev` running between commands.
 - **Temp files and scratch state go in `.work/`** (gitignored, inside the project) — never `/tmp`.
   Cookie jars, throwaway D1/KV state for a local `wrangler dev --persist-to`, ad-hoc verification
   scripts, build logs. Same machine, same repo, and it survives a reboot's `/tmp` cleanup.
@@ -174,6 +187,16 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
     `deleted_at` on their upserts; a tombstoned project yields its name on recreate (renamed to
     `<name> (deleted <date>)` in the same batch, because `projects` keeps its inline UNIQUE and a
     partial index would need a table rebuild).
+  - Deletion integrity (audit F1/F2/F8): `DELETE /groups/:id` tombstones the group's tasks and
+    detaches + tombstones its projects in the same batch BEFORE `DELETE FROM groups` (the
+    `projects.group_id` CASCADE would otherwise destroy every member's sessions), and emits
+    `group.deleted` to the member list captured BEFORE the delete. `DELETE /me` deletes the
+    FKs-without-ON-DELETE rows explicitly (`goals`, `group_invites`, `group_invite_links`),
+    transfers each owned group with remaining active members to the earliest-joined one
+    (owner decision D1) or safe-deletes solo ones, and reassigns the deleter's shared
+    rows (projects/tasks/subtasks/task_dependencies all carry a denormalized `user_id`) to the
+    surviving group's owner — all in ONE atomic batch; then the UserHub DO is wiped via the
+    internal `/wipe` route (`ctx.storage.deleteAll()`).
   - Rate limits: `social_user` bucket (friend requests, username lookups, joins, invite/link
     minting; `RL_SOCIAL_USER`), chat sends ride `limitHeavy`. Invite-link tokens are stored as
     SHA-256 hashes and returned exactly once.
