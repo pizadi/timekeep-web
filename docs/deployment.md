@@ -87,14 +87,69 @@ Limits that actually apply on free (raise only if an instance outgrows them):
 
 An upgrade to Workers Paid removes the daily caps — that's its only role here.
 
-## Daily cron
+## Backups
 
-A scheduled handler runs at **03:17 UTC** daily (`cron.ts`):
+Two independent safety nets exist. Know both before you need either.
 
-- dumps all tables to the R2 bucket as NDJSON (streamed multipart, 30-day
-  retention) — no R2 bucket configured → dumps are skipped, everything else
-  still runs
-- prunes `sync_log`, expired sessions, and expired email tokens
+### 1. D1 Time Travel (always on)
+
+D1 keeps point-in-time snapshots for the window in the
+[plan-requirements table](#plan-requirements) — restore from the Cloudflare
+dashboard (**Storage & Databases → D1 → timekeep → Time Travel**) or:
+
+```bash
+npx wrangler d1 time-travel restore timekeep -c wrangler.local.jsonc
+```
+
+This is the primary recovery path for accidents inside the window (a bad
+migration, an accidental delete). It cannot help with older damage or total
+loss — that is what the dump is for.
+
+### 2. The daily R2 dump (opt-in)
+
+The daily cron (03:17 UTC, `cron.ts`) dumps every persistent table to the R2
+bucket as NDJSON — one `dumps/<date>/dump.jsonl` object per day, kept 30 days:
+
+- **Complete:** every table the migrations define except the transient ones
+  (`sync_log`, `rate_counters`, `active_timers`, `email_tokens`,
+  `auth_sessions`). The manifest is pinned by `test/cron-dump.test.ts` against
+  the live schema, so a migration that adds a table/column fails CI until the
+  dump manifest is updated — backups can't silently lose coverage.
+- **No credentials:** `users.password_hash`, `users.totp_secret` and
+  `group_invite_links.token_hash` are excluded (the dump is plaintext JSONL).
+  Restored users have no password — use the admin panel to set one.
+- It also prunes `sync_log`, expired sessions, and expired email tokens.
+
+**Without an R2 binding the dump is skipped** and the cron logs
+`SECURITY_backup_not_configured` on every run — an instance without the
+binding has no dump, only Time Travel. Enable it:
+
+```bash
+npx wrangler r2 bucket create timekeep-dumps
+# then in wrangler.local.jsonc (keep the committed template's "r2_buckets": []):
+#   "r2_buckets": [{ "binding": "R2", "bucket_name": "timekeep-dumps" }]
+```
+
+A failed dump logs `cron_dump_failed` and rethrows — the other cron jobs still
+ran, but the missing object is the alarm. Check for `dumps/<today>/…` if you
+ever suspect the cron.
+
+### Restore runbook (rehearse before you need it)
+
+1. Fetch the newest healthy object:
+   `npx wrangler r2 object get timekeep-dumps/dumps/<date>/dump.jsonl --file dump.jsonl`
+2. Create + migrate a scratch database (same schema version as the dump):
+   `npx wrangler d1 create timekeep-restore` and apply `migrations/` to it.
+3. Replay: the dump is JSONL, one `{"t": "<table>", "row": {…}}` object per
+   line. Group rows by table and insert each with `INSERT OR REPLACE` — the
+   dump is the truth, so schema-seeded rows (the admin user from migration 0002) are overwritten and a partially-applied restore can be re-run.
+4. Verify row counts per table against the dump, then point the instance at
+   the restored database (or export per-user from it).
+
+The replay recipe was rehearsed end-to-end when this section was written
+(dump produced by the real cron against a local workerd R2, replayed into a
+scratch SQLite with foreign keys on). Rehearse it again whenever the schema
+changed shape — a restore you have never run is not a restore.
 
 ## Deploying from GitHub (CI/CD)
 

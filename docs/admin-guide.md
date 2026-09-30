@@ -47,9 +47,13 @@ Friend-sharing and group-sharing never cross: a project shared to a friend
 
 ## Backups & data safety
 
-- **Daily R2 dump** — at 03:17 UTC all tables are dumped to the R2 bucket as
-  NDJSON, kept 30 days. Requires the optional R2 bucket from
-  [deployment.md](deployment.md).
+- **Daily R2 dump** — at 03:17 UTC every persistent table (projects, tasks,
+  sessions, goals, groups, chat, …) is dumped to the R2 bucket as NDJSON, kept
+  30 days. Credential columns (`password_hash`, invite-link token hashes) are
+  never written. Requires the optional R2 bucket from [deployment.md](deployment.md);
+  without it the instance has only D1 Time Travel, and the cron logs a
+  `SECURITY_backup_not_configured` warning every run. Restore instructions:
+  [deployment.md — Restore runbook](deployment.md#restore-runbook-rehearse-before-you-need-it).
 - **User-facing export** — every user can export their own data as JSON or
   CSV at any time; JSON import supports merge-by-id and duplicate modes.
 - Rate counters, sessions and email tokens are pruned automatically on the

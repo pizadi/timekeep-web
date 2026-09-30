@@ -22,11 +22,12 @@ Route modules (`src/worker/routes/`): `auth`, `me`, `admin`, `projects`,
 
 ## Storage: D1, KV, and the UserHub Durable Object
 
-| Store                                        | Used for                                                                                                                                               |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **D1** (SQLite)                              | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters |
-| **KV**                                       | cold rate-limit counters (per-IP / per-email buckets), misc cache                                                                                      |
-| **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter                                    |
+| Store                                        | Used for                                                                                                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **D1** (SQLite)                              | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters                               |
+| **R2** (optional)                            | the daily logical backup: every persistent table as NDJSON to `dumps/<date>/dump.jsonl`, 30-day retention (credential columns excluded — see [deployment.md](deployment.md#backups)) |
+| **KV**                                       | cold rate-limit counters (per-IP / per-email buckets), misc cache                                                                                                                    |
+| **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter                                                                  |
 
 ## Single-timer invariant
 

@@ -1,35 +1,25 @@
-// Cron dump keyset pagination: user-scoped tables must page on the
-// (user_id, id) tuple — a plain `user_id >` cursor would skip the remaining
-// rows of the page's last user. This test pins the predicate shape.
+// Cron dump paging: uniform rowid keyset. The previous (user_id, id) tuple
+// assumed an `id` column that task_dependencies/layout/settings don't have —
+// the nightly dump could never get past the fifth table (audit F4). rowid
+// exists on every dumped table (none is WITHOUT ROWID), which also retires the
+// old user-boundary class of bug entirely: a rowid keyset has no per-user
+// pages to spill across, so no table needs special-cased predicates.
+// test/cron-dump.test.ts drives the real dump end-to-end against a real
+// database; this file pins the predicate shape.
 import { describe, it, expect } from 'vitest';
 import { tableScan } from '../src/worker/cron';
 
-describe('cron dump keyset', () => {
-  it('pages the users table by id', () => {
-    const scan = tableScan('users', { userId: null, id: 'u42' });
-    expect(scan.where).toBe('id > ?1');
-    expect(scan.order).toBe('id');
-    expect(scan.binds).toEqual(['u42']);
+describe('cron dump rowid paging', () => {
+  it('pages every table uniformly by rowid', () => {
+    const scan = tableScan(42);
+    expect(scan.where).toBe('rowid > ?1');
+    expect(scan.order).toBe('rowid');
+    expect(scan.binds).toEqual([42]);
   });
 
-  it('pages user-scoped tables on the (user_id, id) tuple', () => {
-    const scan = tableScan('time_sessions', { userId: 'u7', id: 's9' });
-    expect(scan.where).toContain('user_id = ?1');
-    expect(scan.where).toContain('id > ?2');
-    expect(scan.order).toBe('user_id, id');
-    expect(scan.binds).toEqual(['u7', 's9']);
-  });
-
-  it('first page has empty cursor binds (matches all rows)', () => {
-    const scan = tableScan('tasks', { userId: null, id: null });
-    expect(scan.binds).toEqual(['', '']);
-  });
-
-  it('the tuple predicate cannot skip rows of the cursor user (regression)', () => {
-    // Old predicate: user_id > 'u7\0s9' — false for user_id 'u7' itself.
-    // New predicate keeps u7's remaining rows.
-    const scan = tableScan('time_sessions', { userId: 'u7', id: 's9' });
-    // rows for u7 with id > s9 satisfy the second clause; u8+ satisfy the first
-    expect(scan.where).toBe('(user_id > ?1 OR (user_id = ?1 AND id > ?2))');
+  it('first page has a zero cursor (matches all rows)', () => {
+    const scan = tableScan(0);
+    expect(scan.where).toBe('rowid > ?1');
+    expect(scan.binds).toEqual([0]);
   });
 });
