@@ -155,7 +155,9 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   while the hash is NULL. Users are created/deactivated via `/api/admin/*` (`routes/admin.ts`,
   `requireAdmin`).
 - Login identifier is the `username` column (`users.email` is only an optional reset-mail address;
-  users without one store their username there). The `must_change_password` gate in `requireAuth`
+  users without one store their username there; since 0013 the nullable `users.login_email` is the
+  authoritative mailbox marker — mail paths derive the address via `realEmail()` in `auth.ts`, never
+  from raw `user.email`). The `must_change_password` gate in `requireAuth`
   blocks every endpoint except `GET /api/me`, `POST /api/me/password`, `POST /api/auth/logout`.
 - "Remove user" means deactivation (`active=0` + session revocation) — user data is never deleted
   from the admin panel; the admin account cannot be deactivated or self-deleted.
@@ -235,6 +237,15 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - No native `<datalist>` pickers — use `src/web/components/Combobox.tsx`. Inside modals/grids,
   `.input` needs `min-width: 0` and `1fr` tracks must be `minmax(0, 1fr)` (a `datetime-local`'s
   intrinsic width overflows the dialog otherwise — the v0.1.0 dialog-clip fix).
+- **Strict CSP, no inline-style exception (F13)**: the Worker sends `style-src 'self'` +
+  `style-src-attr 'none'` + `style-src-elem 'self'`. Never introduce `setAttribute('style', …)`,
+  `<style>` blocks or `style=` attributes — React's `style={{…}}` prop is fine (it mutates CSSOM,
+  which CSP does not govern); move repeated styles into `styles.css` and dynamic values into CSS
+  custom properties. `test/csp.test.ts` fails on the unsafe vectors and on any policy weakening.
+- CSRF double-submit is enforced whenever the CSRF cookie is present on an unsafe method — NOT only
+  when an `Origin` header accompanies it (F11). Non-browser clients: any authenticated GET (re)issues
+  the cookie; from then on unsafe requests must send `x-csrf-token`. `clientIp` trusts
+  `X-Forwarded-For` only under the dev-only `DEV_TRUST_XFF=1` (F12) — never enable that in prod.
 - Responsive UI (details in `docs/architecture.md`): three width tiers (<640 phone,
   640–1023 tablet/drawer, ≥1024 desktop) live in `styles.css` and mirror `BREAKPOINTS`
   in `src/web/lib/responsive.ts`. `(pointer: coarse)` scales touch targets (44px class)

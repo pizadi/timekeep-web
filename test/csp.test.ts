@@ -1,11 +1,17 @@
-// CSP posture (audit #5). The app has no HTML-injection sink today, so the
+// CSP posture (audit #5, F13). The app has no HTML-injection sink today, so the
 // policy is defence-in-depth for the day someone adds one. This locks BOTH
 // halves of the story:
 //   - the invariant: nothing writes HTML from a string,
-//   - the containment: `style-src-elem 'self'` refuses an injected <style>
-//     block even though inline style attributes stay allowed (React needs them).
-// The remaining gap is documented rather than silently forgotten: dropping
-// 'unsafe-inline' entirely means extracting ~200 `style={{…}}` sites.
+//   - the containment: no 'unsafe-inline' anywhere — style-src 'self' +
+//     style-src-attr 'none' + style-src-elem 'self' refuse every inline style
+//     vector (attributes, <style> blocks). React's style={{…}} prop mutates
+//     CSSOM, which CSP does not govern, so the flip was evidence-first: the
+//     tightened policy shipped as Report-Only and the whole SPA was
+//     browser-driven with zero violation reports before the enforced header
+//     dropped the exception.
+// A new inline-style vector (setAttribute('style', …), a style= attribute, a
+// <style> block) must NOT land together with a policy weakening — these
+// assertions fail first.
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,6 +43,13 @@ describe('no HTML-injection sinks (CSP precondition)', () => {
     const chat = sources.find((s) => s.file.endsWith('ChatDock.tsx'))!;
     expect(chat.text).toMatch(/className="msg-body"[\s\S]*?\{m\.body\}[\s\S]*?<\/span>/);
   });
+
+  it('finds no style-attribute sinks (the CSP-unsafe inline-style vectors)', () => {
+    // React's style={{…}} prop is CSSOM (CSP-exempt); these are the vectors
+    // 'unsafe-inline' would have been needed for:
+    const offenders = sources.filter((s) => /setAttribute\(\s*['"`]style|<style[ >]/.test(s.text));
+    expect(offenders.map((s) => s.file)).toEqual([]);
+  });
 });
 
 describe('CSP header', () => {
@@ -46,10 +59,19 @@ describe('CSP header', () => {
     expect(csp).toContain('"style-src-elem \'self\'"');
   });
 
-  it("keeps 'unsafe-inline' for style attributes only, with the trade-off documented", () => {
-    expect(csp).toContain("\"style-src 'self' 'unsafe-inline'\"");
-    // the comment must keep naming the real blocker (200+ inline styles)
-    expect(csp).toMatch(/audit #5/);
+  it("declares style-src-attr 'none' (blocks style attributes outright, F13)", () => {
+    expect(csp).toContain('"style-src-attr \'none\'"');
+  });
+
+  it("carries NO 'unsafe-inline' in the policy (F13: flipped after the zero-violation drive)", () => {
+    // the POLICY strings — the word may (and must) still appear in the
+    // comment documenting why it was dropped
+    expect(csp).not.toContain("\"style-src 'self' 'unsafe-inline'\"");
+    expect(csp).toContain('"style-src \'self\'",');
+    expect(csp).not.toContain("'unsafe-inline' ?");
+    // the comment must keep the reasoning (CSSOM vs markup, evidence-first)
+    expect(csp).toMatch(/F13/);
+    expect(csp).toMatch(/CSSOM/);
   });
 
   it('keeps the other strict directives', () => {

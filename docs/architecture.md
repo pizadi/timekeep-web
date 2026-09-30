@@ -194,8 +194,19 @@ notified via `ctx.waitUntil`).
   and FR-A9 (TOTP), both unimplemented — see
   [requirement-coverage](requirement-coverage.md). Don't read them as
   evidence of a partially shipped feature.
-- **Headers/CSP**: strict headers on every response; CSP carries
-  `style-src 'unsafe-inline'` for React inline styles (documented trade-off).
+- **2FA / passkeys deliberately deferred (audit F18, owner decision D3)**:
+  TOTP, OAuth and magic links are unimplemented; a single password protects
+  each account, with the lockout keys (F6), the step-up re-auth on
+  destructive actions (F7) and the fail-closed token links (F9) as the
+  compensating controls. **Revisit before onboarding external users** — the
+  plan when that time comes: TOTP against the reserved `users.totp_secret`
+  column, enforced at least for admin accounts, with `admin:create` /
+  the admin panel refusing to finalize a setup that skips it. Schema
+  placeholders stay reserved; nothing else in the codebase depends on 2FA.
+- **Headers/CSP**: strict headers on every response; CSP carries NO
+  `unsafe-inline` (F13) — `style-src 'self'`, `style-src-attr 'none'`,
+  `style-src-elem 'self'`; React's `style={{…}}` prop mutates CSSOM, which CSP
+  does not govern, so the SPA needs no inline-style exception.
 
 ## Social layer (friends → groups)
 

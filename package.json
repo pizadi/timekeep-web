@@ -1,6 +1,6 @@
 {
   "name": "timekeep-web",
-  "version": "0.6.1.dev7",
+  "version": "0.6.1.dev8",
   "private": true,
   "engines": {
     "node": ">=22.12.0"

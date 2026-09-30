@@ -19,3 +19,6 @@ Quick paths:
 - **Deploy your own instance** → [deployment.md](deployment.md)
 - **You admin one and forgot the password** → [deployment.md — admin recovery](deployment.md#admin-account-recovery)
 - **Wondering why the timer can't race** → [architecture.md](architecture.md)
+- **About 2FA/passkeys** → deliberately deferred; the plan and its trigger are in
+  [architecture.md — security model](architecture.md#security-model) and
+  [admin-guide.md](admin-guide.md#account-security-2fa--deliberately-deferred)

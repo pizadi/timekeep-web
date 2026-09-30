@@ -31,6 +31,18 @@ Usernames are the login identifier. Email is optional — it's only a target
 for verification/reset mail (without a `RESEND_API_KEY` no mail is sent; the
 admin resets passwords from the panel instead).
 
+## Account security (2FA — deliberately deferred)
+
+There is **no 2FA or passkey support** (audit F18) — a single password
+protects each account, including the admin's. This is a documented decision,
+not an oversight: TOTP is planned against the reserved `users.totp_secret`
+schema column, to be **enforced at least for admin accounts**, and the whole
+topic is to be revisited **before onboarding external users**. Until then the
+compensating controls are the login lockout keys (per-IP, per-(identifier,
+ip) pair, identifier-wide ceiling), optional Turnstile on the login form, and
+a password step-up on every destructive action. See
+[architecture.md](architecture.md#security-model).
+
 ## Groups & permissions
 
 Groups are created by any user; the **creator is the owner** and is the only

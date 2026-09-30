@@ -20,16 +20,21 @@ const CSP_BODY = (turnstileOn: boolean) =>
   [
     "default-src 'self'",
     "script-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),
-    // 'unsafe-inline' is a documented trade-off: React inline styles need it
-    // (~200 `style={{…}}` sites), and a CSS custom property set through the
-    // style attribute is still an inline style, so it buys nothing.
-    // `style-src-elem 'self'` is the cheap containment: an injected <style>
-    // block is refused while inline style attributes keep working. Browsers
-    // without CSP3's style-src-elem (pre-2022 Safari) ignore it and fall back
-    // to style-src, i.e. today's behavior — it can only tighten, never break.
-    // Dropping 'unsafe-inline' entirely means extracting every inline style
-    // (audit #5); test/csp.test.ts locks the "no HTML sinks" half of it.
-    "style-src 'self' 'unsafe-inline'",
+    // No 'unsafe-inline' (audit F13, owner decision D2): React's style={{…}}
+    // prop mutates CSSOM (element.style), which CSP does NOT block — the ~250
+    // inline-style sites in the SPA never needed the exception. Evidence-first
+    // flip: the tightened policy first shipped as
+    // Content-Security-Policy-Report-Only and the whole SPA was browser-driven
+    // (every screen + modal) with zero violation reports; greps also confirm
+    // the real style sinks don't exist (no setAttribute('style', …), no
+    // <style> blocks, no style= attributes — index.html's theme boot goes
+    // through data-theme attributes).
+    // style-src-attr 'none' refuses style ATTRIBUTES outright; style-src-elem
+    // 'self' refuses injected <style> blocks. Browsers without CSP3's
+    // style-src-elem/-attr (pre-2022 Safari) ignore those two and fall back to
+    // style-src — they can only tighten, never break.
+    "style-src 'self'",
+    "style-src-attr 'none'",
     "style-src-elem 'self'",
     "img-src 'self' data:",
     "connect-src 'self'" + (turnstileOn ? ' https://challenges.cloudflare.com' : ''),

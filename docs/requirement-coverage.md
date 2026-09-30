@@ -56,17 +56,17 @@ this codebase.
 
 Items from the repo audit, re-verified against the current tree and closed:
 
-| Area                    | Now                                                                                                                                                              |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Write rate limiting     | `limitWrites` / `write_user` (`RL_WRITE_USER`) on every mutating route                                                                                           |
-| Capacity caps           | enforced inside the INSERT/UPDATE, not by a prior `SELECT COUNT(*)`                                                                                              |
-| Reset-request timing    | email send on `waitUntil`; skip branches burn equivalent work                                                                                                    |
-| Seeded admin credential | removed — no usable credential ships (0002's hash nulled by 0012; `npm run admin:create` bootstraps; cron logs `SECURITY_admin_unusable` while the hash is NULL) |
-| CSP                     | `style-src-elem 'self'` containment + `test/csp.test.ts` guards the no-sinks rule                                                                                |
-| Lint/format             | ESLint + Prettier, both blocking in CI                                                                                                                           |
-| Chained PBKDF2          | documented (no change needed)                                                                                                                                    |
-| Reserved schema         | `oauth_accounts` / `users.totp_secret` documented as unused placeholders                                                                                         |
-| Chat newlines           | `white-space: pre-wrap` on message bodies                                                                                                                        |
+| Area                    | Now                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Write rate limiting     | `limitWrites` / `write_user` (`RL_WRITE_USER`) on every mutating route                                                                                                |
+| Capacity caps           | enforced inside the INSERT/UPDATE, not by a prior `SELECT COUNT(*)`                                                                                                   |
+| Reset-request timing    | email send on `waitUntil`; skip branches burn equivalent work                                                                                                         |
+| Seeded admin credential | removed — no usable credential ships (0002's hash nulled by 0012; `npm run admin:create` bootstraps; cron logs `SECURITY_admin_unusable` while the hash is NULL)      |
+| CSP                     | no `'unsafe-inline'` — `style-src 'self'` + `style-src-attr 'none'` + `style-src-elem 'self'` (F13, evidence-first flip); `test/csp.test.ts` guards the no-sinks rule |
+| Lint/format             | ESLint + Prettier, both blocking in CI                                                                                                                                |
+| Chained PBKDF2          | documented (no change needed)                                                                                                                                         |
+| Reserved schema         | `oauth_accounts` / `users.totp_secret` documented as unused placeholders                                                                                              |
+| Chat newlines           | `white-space: pre-wrap` on message bodies                                                                                                                             |
 
 ## Known trade-offs
 
@@ -96,5 +96,7 @@ Items from the repo audit, re-verified against the current tree and closed:
   seeded hash is nulled by migration 0012 and a fresh install's admin cannot
   sign in until `npm run admin:create` sets the first password (generated,
   printed once). See docs/deployment.md → first deploy.
-- CSP carries `style-src 'unsafe-inline'` for React inline styles — a
-  documented trade-off (see `middleware.ts`).
+- CSP is strict — `style-src 'self'` with NO `'unsafe-inline'` (dropped in
+  0.6.1.dev8, audit F13: React's `style={{…}}` prop mutates CSSOM, which CSP
+  does not govern; the flip was evidence-first — Report-Only + a full browser
+  drive with zero violations).
