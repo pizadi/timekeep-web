@@ -18,7 +18,7 @@
 # Logs and the throwaway D1 state live in .work/ (gitignored — AGENTS.md
 # "Temp files and scratch state go in .work/", not /tmp).
 #
-# With CI=true the local D1/KV state (.wrangler/state) is wiped first so every
+# With CI=true the local D1 state (.wrangler/state) is wiped first so every
 # attempt starts from the deterministic seeded-admin database. Locally (no
 # CI=true) the existing dev database is left untouched.
 set -euo pipefail
@@ -47,7 +47,7 @@ SR_ROUNDS=15
 mkdir -p .work
 
 if [ "${CI:-}" = "true" ]; then
-	echo "CI: wiping local D1/KV state for a deterministic run"
+	echo "CI: wiping local D1 state for a deterministic run"
 	rm -rf .wrangler/state
 fi
 

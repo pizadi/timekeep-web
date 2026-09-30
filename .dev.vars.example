@@ -23,6 +23,12 @@ RL_LOGIN_USER_IP=1000
 RL_LOGIN_IDENTITY=1000
 RL_ADMIN_IP=1000
 RL_TOKEN_IP=1000
+# Dev-only: trust X-Forwarded-For for client-IP derivation (rate-limit bucket
+# keys) when cf-connecting-ip is absent. Under `wrangler dev` neither header
+# exists, so this is a no-op locally — it matters only behind a local proxy
+# that provides XFF. NEVER enable in production (audit F12: a rotatable
+# header must not mint fresh per-IP buckets).
+DEV_TRUST_XFF=1
 # Reset fan-out: 20/hour/IP by default, 5/hour per address. Not raised here —
 # reset-request is the one endpoint where a hammer is genuinely abusive
 # (every accepted address is an email), and no e2e script needs more.

@@ -278,7 +278,7 @@ export class UserHub extends DurableObject {
     if (url.pathname === '/ratelimit') {
       // Atomic per-user counters for the hot-path rate limits: the DO is a
       // single instance per user, so read-modify-write here is race-free and
-      // puts no writes on a shared KV key. Counters are in-memory (reset on
+      // puts no writes on a shared row. Counters are in-memory (reset on
       // eviction); the D1 rateLimitHit fallback in middleware is atomic anyway.
       //
       // A LIST of rules, charged in one round trip — a write spends both its

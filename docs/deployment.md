@@ -8,7 +8,6 @@ SPA; the Workers **free** plan is sufficient (see
 
 ```bash
 npx wrangler d1 create timekeep          # → database id
-npx wrangler kv namespace create KV      # → namespace id
 npx wrangler r2 bucket create timekeep-dumps   # optional: daily dumps
 ```
 
@@ -89,7 +88,7 @@ Limits that actually apply on free (raise only if an instance outgrows them):
 | D1 rows read / written                  | 5M/day, 100k/day                             |
 | D1 storage                              | 500 MB per database, 5 GB per account        |
 | D1 Time Travel (point-in-time recovery) | 7 days                                       |
-| Durable Objects, KV, cron, R2 dumps     | available on free (standard free allowances) |
+| Durable Objects, cron, R2 dumps         | available on free (standard free allowances) |
 
 An upgrade to Workers Paid removes the daily caps — that's its only role here.
 
@@ -185,13 +184,13 @@ changed shape — a restore you have never run is not a restore.
 One-time setup:
 
 1. **API token** — Cloudflare dashboard → My Profile → API Tokens → Create
-   (custom), scoped to the account with: _Workers Scripts: Edit_, _D1: Edit_,
-   _Workers KV Storage: Edit_ (plus _R2: Edit_ only if the R2 dump bucket is
-   used).
+   (custom), scoped to the account with: _Workers Scripts: Edit_, _D1: Edit_
+   (plus _R2: Edit_ only if the R2 dump bucket is used). No KV namespace is
+   needed — the code no longer binds one (rate limits are D1 + DO counters).
 2. **Repo secrets** (Settings → Secrets and variables → Actions → Secrets):
    `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
-3. **Repo variables** (same page → Variables): `CF_D1_DATABASE_ID`,
-   `CF_KV_NAMESPACE_ID`, and `CF_DEPLOY_URL` (e.g.
+3. **Repo variables** (same page → Variables): `CF_D1_DATABASE_ID` and
+   `CF_DEPLOY_URL` (e.g.
    `https://timekeep-web.parham-avia.workers.dev`) for the post-deploy check.
 4. **Repo variable `CF_APP_PUBLIC_URL`** — the canonical `https://` origin for
    password-reset and verification emails. Those links carry a bearer token, so

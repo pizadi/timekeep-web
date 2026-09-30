@@ -1,5 +1,5 @@
 // TimeKeep Web — Wrangler configuration
-// Create resources first (see README): D1 database, KV namespace, optional R2 bucket.
+// Create resources first (see README): D1 database, optional R2 bucket.
 // Replace REPLACE_ME ids below, then `wrangler d1 migrations apply timekeep --remote`.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -38,12 +38,6 @@
 			]
 		}
 	],
-	"kv_namespaces": [
-		{
-			"binding": "KV",
-			"id": "REPLACE_ME"
-		}
-	],
 	// Optional: daily logical dumps to R2 (FR-D3). Remove block if unused.
 	"r2_buckets": [
 	],
@@ -66,7 +60,7 @@
 		// CI sets the real deploy SHA; default keeps local dev honest
 		"__BUILD_SHA__": "\"dev\"",
 		// app semver — bump together with package.json "version" on release
-		"__APP_VERSION__": "\"0.6.1.dev5\""
+		"__APP_VERSION__": "\"0.6.1.dev6\""
 	},
 	"vars": {
 		// KDF iterations (NFR-3: >= 600_000). Workers caps a single PBKDF2 deriveBits

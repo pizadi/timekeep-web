@@ -71,7 +71,7 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   pattern (e.g. `[w]rangler`), `pkill -x`, or kill by PID. Never leave a background
   `wrangler dev` running between commands.
 - **Temp files and scratch state go in `.work/`** (gitignored, inside the project) — never `/tmp`.
-  Cookie jars, throwaway D1/KV state for a local `wrangler dev --persist-to`, ad-hoc verification
+  Cookie jars, throwaway D1 state for a local `wrangler dev --persist-to`, ad-hoc verification
   scripts, build logs. Same machine, same repo, and it survives a reboot's `/tmp` cleanup.
 
 ## Env
@@ -91,7 +91,7 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 
 ## Deploy & versioning
 
-- `wrangler.jsonc` (committed) is a template with `REPLACE_ME` resource ids — the real D1/KV ids
+- `wrangler.jsonc` (committed) is a template with `REPLACE_ME` resource ids — the real D1 id
   live in the gitignored `wrangler.local.jsonc`. Deploy with
   `npm run build && npx wrangler deploy -c wrangler.local.jsonc`; remote D1 migrations likewise
   need `-c wrangler.local.jsonc` (`npm run db:migrate:remote` alone reads the template).

@@ -1,6 +1,5 @@
 export interface Env {
   DB: D1Database;
-  KV: KVNamespace;
   USER_HUB: DurableObjectNamespace;
   R2?: R2Bucket; // optional (FR-D3 dumps)
   ASSETS: Fetcher;
@@ -33,6 +32,10 @@ export interface Env {
   RL_WRITE_USER?: string;
   RL_WRITE_USER_DAY?: string;
   RL_SOCIAL_WRITE?: string;
+  // dev-only: honour X-Forwarded-For for client-IP derivation when
+  // cf-connecting-ip is absent (rate-limit bucket keys). NEVER set this in
+  // production — a rotatable header must not mint fresh buckets (F12).
+  DEV_TRUST_XFF?: string;
 
   // secrets
   // NOTE: no SESSION_SECRET — session tokens are 256-bit random, hashed at rest.

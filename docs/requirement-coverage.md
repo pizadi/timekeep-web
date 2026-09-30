@@ -56,17 +56,17 @@ this codebase.
 
 Items from the repo audit, re-verified against the current tree and closed:
 
-| Area                    | Now                                                                               |
-| ----------------------- | --------------------------------------------------------------------------------- |
-| Write rate limiting     | `limitWrites` / `write_user` (`RL_WRITE_USER`) on every mutating route            |
-| Capacity caps           | enforced inside the INSERT/UPDATE, not by a prior `SELECT COUNT(*)`               |
-| Reset-request timing    | email send on `waitUntil`; skip branches burn equivalent work                     |
-| Seeded admin credential | the daily cron logs `SECURITY_admin_default_password` while it still works        |
-| CSP                     | `style-src-elem 'self'` containment + `test/csp.test.ts` guards the no-sinks rule |
-| Lint/format             | ESLint + Prettier, both blocking in CI                                            |
-| Chained PBKDF2          | documented (no change needed)                                                     |
-| Reserved schema         | `oauth_accounts` / `users.totp_secret` documented as unused placeholders          |
-| Chat newlines           | `white-space: pre-wrap` on message bodies                                         |
+| Area                    | Now                                                                                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Write rate limiting     | `limitWrites` / `write_user` (`RL_WRITE_USER`) on every mutating route                                                                                           |
+| Capacity caps           | enforced inside the INSERT/UPDATE, not by a prior `SELECT COUNT(*)`                                                                                              |
+| Reset-request timing    | email send on `waitUntil`; skip branches burn equivalent work                                                                                                    |
+| Seeded admin credential | removed — no usable credential ships (0002's hash nulled by 0012; `npm run admin:create` bootstraps; cron logs `SECURITY_admin_unusable` while the hash is NULL) |
+| CSP                     | `style-src-elem 'self'` containment + `test/csp.test.ts` guards the no-sinks rule                                                                                |
+| Lint/format             | ESLint + Prettier, both blocking in CI                                                                                                                           |
+| Chained PBKDF2          | documented (no change needed)                                                                                                                                    |
+| Reserved schema         | `oauth_accounts` / `users.totp_secret` documented as unused placeholders                                                                                         |
+| Chat newlines           | `white-space: pre-wrap` on message bodies                                                                                                                        |
 
 ## Known trade-offs
 
@@ -75,26 +75,22 @@ Items from the repo audit, re-verified against the current tree and closed:
 - Inline export caps at the practical Worker memory size (~100k sessions);
   larger accounts should use the R2 dump path — the Queues-based async export
   from FR-D1 is stubbed by the dump machinery.
-- KV rate counters are eventually consistent (documented in spec §2.4 as the
-  intended trade-off). The hot per-user `api_user` counter lives in the user's
-  UserHub DO (atomic, single-instance); KV remains the fallback and the
-  counter for cold per-IP/per-email limits. Swap in the Workers Rate Limiting
-  binding for stricter enforcement.
-- The map targets 300 nodes/30 fps with plain SVG; a canvas renderer would be
-  the next step if profiling demands it.
 - Password hashing chains 6 × 100k-round PBKDF2 calls (the Workers runtime caps
   one `deriveBits` call at 100k). This matches a single 600k call in work
-  factor only — a chained construction, not literally PBKDF2-600k; the stored
-  `pbkdf2$600000$…` prefix is a format label, not an interop claim.
+  factor only — a chained construction, not literally PBKDF2-600k; hashes are
+  labelled `pbkdf2-chain$<iterations>$…` to say so, and the bare `pbkdf2`
+  label is accepted ONLY for verifying rows written before the rename.
+- The map targets 300 nodes/30 fps with plain SVG; a canvas renderer would be
+  the next step if profiling demands it.
 - `users.email` doubles as the login identifier for users without a real
   mailbox (username stored there, `@`-free) — every email path must keep the
   `includes('@')` convention in mind.
 - `run_worker_first: true` routes every static-asset request through the Worker
   (uniform security headers on the SPA shell); a latency/cost tax worth
   re-measuring if asset traffic dominates.
-- The seeded admin's precomputed password hash is committed in
-  `migrations/0002_usernames_admin.sql` — the default credential is public
-  knowledge in the repo and forced to change at first login; rotate it
-  immediately after first sign-in on any real deployment.
+- No admin credential ships (since 0.6.1.dev4, audit F5): migration 0002's
+  seeded hash is nulled by migration 0012 and a fresh install's admin cannot
+  sign in until `npm run admin:create` sets the first password (generated,
+  printed once). See docs/deployment.md → first deploy.
 - CSP carries `style-src 'unsafe-inline'` for React inline styles — a
   documented trade-off (see `middleware.ts`).

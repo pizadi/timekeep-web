@@ -148,7 +148,7 @@ async function rotateIfNeeded(c: Ctx, session: SessionRow): Promise<boolean> {
     session,
     Date.now(),
     c.req.header('user-agent') ?? '',
-    clientIp(c) ?? '',
+    clientIp(c, c.env) ?? '',
   );
   if (outcome === 'revoked') return false;
   if (outcome !== 'skipped') setSessionCookie(c, outcome.token, outcome.expiresAt);
@@ -171,11 +171,21 @@ export function clearSessionCookie(c: Ctx): void {
   deleteCookie(c, SESSION_COOKIE, { path: '/', secure: https });
 }
 
-export function clientIp(c: Ctx): string | null {
-  // cf-connecting-ip is absent under `wrangler dev`; x-forwarded-for keeps
-  // per-client buckets distinct where a proxy provides one.
-  const fwd = c.req.header('x-forwarded-for');
-  return c.req.header('cf-connecting-ip') ?? (fwd ? fwd.split(',')[0]!.trim() : null) ?? null;
+export function clientIp(c: Ctx, env: Partial<Env>): string | null {
+  // cf-connecting-ip is what Cloudflare always provides in production.
+  // X-Forwarded-For is honoured ONLY under the dev-only DEV_TRUST_XFF flag:
+  // a header an attacker can rotate must never mint fresh rate-limit buckets
+  // if a deployment is ever reachable without cf-connecting-ip (F12). Under
+  // `wrangler dev` neither header exists → null → callers fall back to
+  // 'unknown' (one shared bucket); set DEV_TRUST_XFF=1 in .dev.vars to keep
+  // per-client buckets distinct behind a local proxy.
+  const cf = c.req.header('cf-connecting-ip');
+  if (cf) return cf;
+  if (env.DEV_TRUST_XFF === '1') {
+    const fwd = c.req.header('x-forwarded-for');
+    return fwd ? fwd.split(',')[0]!.trim() : null;
+  }
+  return null;
 }
 
 /**
@@ -267,17 +277,19 @@ export const csrfGuard = createMiddleware<WorkerType>(async (c, next) => {
     const allowed = allowedOrigins(c.env, url.origin);
     if (!allowed.includes(origin)) return jsonError(403, 'csrf', 'cross-origin request blocked');
   }
-  // Double-submit check — browsers always send Origin on state-changing
-  // requests, so the extra token check applies exactly to browser traffic.
-  // Non-browser API clients (curl, integrations) without an Origin header
-  // pass on cookie+SameSite alone.
+  // Double-submit check (F11): enforced whenever the CSRF cookie is present,
+  // NOT only when an Origin header accompanies it — a request that simply
+  // omits Origin (an older browser, a non-browser client that logged in and
+  // was handed the cookie) would otherwise pass on SameSite=Lax +
+  // Sec-Fetch-Site alone. Clients that never present the cookie (a curl that
+  // has not done an authenticated GET since login) still pass without the
+  // header; any authenticated GET re-issues it, so the header is expected
+  // from then on.
   const cookie = getCookie(c, CSRF_COOKIE);
   const header = c.req.header(CSRF_HEADER);
-  if (origin) {
-    if (cookie && !header) return jsonError(403, 'csrf', 'missing csrf token');
-    if (cookie && header && !timingSafeEqual(cookie, header)) {
-      return jsonError(403, 'csrf', 'csrf mismatch');
-    }
+  if (cookie && !header) return jsonError(403, 'csrf', 'missing csrf token');
+  if (cookie && header && !timingSafeEqual(cookie, header)) {
+    return jsonError(403, 'csrf', 'csrf mismatch');
   }
   await next();
 });
@@ -299,7 +311,7 @@ export function issueCsrfCookie(c: Ctx): string {
   return token;
 }
 
-// ---------- rate limiting (KV sliding-window-ish counters, NFR-3) ----------
+// ---------- rate limiting (D1 atomic counters + DO in-memory hot path, NFR-3) ----------
 
 export interface RateRule {
   name: string;
@@ -363,8 +375,8 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
  * Returns null when allowed, or a Retry-After in seconds when the budget is spent.
  *
  * The counter is ONE atomic D1 upsert … RETURNING — D1 serializes statements per
- * row, so the increment cannot race (the previous KV get→put implementation let
- * concurrent requests read the same count and exceed every limit). Known
+ * row, so the increment cannot race (a get→put counter would let concurrent
+ * requests read the same count and exceed every limit). Known
  * trade-off (documented, audit F6): per-account failure counters can lock a
  * victim out — mitigated by keying the tight counter on (identifier, ip) with
  * only a loose identifier-wide ceiling, and by Turnstile on the login form in

@@ -20,7 +20,7 @@ adminRoutes.use('/admin/*', requireAuth, requireAdmin);
 // Admin mutations pay a full PBKDF2 (600k iterations in prod) — IP-keyed
 // and env-overridable.
 async function limitAdmin(c: any): Promise<Response | null> {
-  const rl = await rateLimitHit(c.env, rateRules(c.env).adminIp, clientIp(c) ?? 'unknown');
+  const rl = await rateLimitHit(c.env, rateRules(c.env).adminIp, clientIp(c, c.env) ?? 'unknown');
   return rl ? tooMany(rl) : null;
 }
 

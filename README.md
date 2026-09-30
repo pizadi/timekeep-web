@@ -51,8 +51,8 @@ Runs on the Workers **free** plan (see
 [docs/deployment.md](docs/deployment.md#plan-requirements)).
 
 ```bash
-npx wrangler d1 create timekeep && npx wrangler kv namespace create KV
-# paste the ids into wrangler.local.jsonc (copy of wrangler.jsonc, gitignored)
+npx wrangler d1 create timekeep
+# paste the id into wrangler.local.jsonc (copy of wrangler.jsonc, gitignored)
 npm run db:migrate:remote
 npm run build && npx wrangler deploy -c wrangler.local.jsonc
 ```

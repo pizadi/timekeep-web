@@ -88,6 +88,8 @@ jobs:
           RL_LOGIN_USER_IP=1000
           RL_LOGIN_IDENTITY=1000
           RL_ADMIN_IP=1000
+          # dev-only XFF trust — keeps per-client rate buckets distinct behind a proxy
+          DEV_TRUST_XFF=1
           EOF
       - name: E2E — attempt 1
         run: bash scripts/run-e2e.sh

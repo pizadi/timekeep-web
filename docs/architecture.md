@@ -20,13 +20,12 @@ Route modules (`src/worker/routes/`): `auth`, `me`, `admin`, `projects`,
 `tasks`, `sessions`, `timer`, `reports`, `export`, `friends`, `groups`,
 `chat`, `misc` (bootstrap/settings/layout/sync/version).
 
-## Storage: D1, KV, and the UserHub Durable Object
+## Storage: D1 and the UserHub Durable Object
 
 | Store                                        | Used for                                                                                                                                                                             |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **D1** (SQLite)                              | all durable entities: users, sessions, projects, tasks, subtasks, dependencies, `time_sessions`, `sync_log`, email tokens, groups, chat, rate counters                               |
 | **R2** (optional)                            | the daily logical backup: every persistent table as NDJSON to `dumps/<date>/dump.jsonl`, 30-day retention (credential columns excluded — see [deployment.md](deployment.md#backups)) |
-| **KV**                                       | cold rate-limit counters (per-IP / per-email buckets), misc cache                                                                                                                    |
 | **UserHub DO** (`src/worker/do/user-hub.ts`) | one DO instance per user: WebSocket hub, timer authority, pomodoro state machine, the hot per-user API rate counter                                                                  |
 
 ## Single-timer invariant
@@ -153,16 +152,17 @@ notified via `ctx.waitUntil`).
 
 ## Security model
 
-- **Password hashing**: PBKDF2 via `pbkdf2Chain` in `src/worker/auth.ts` —
+- **Password hashing**: PBKDF2 via `pbkdf2Chain` in `src/worker/pbkdf2.ts` —
   600,000 iterations in production, chained as 6 × 100k rounds because the
   Workers runtime caps a single `deriveBits` call at 100k. This matches the
-  work factor of PBKDF2-600k but is a chained construction (see trade-offs).
+  work factor of PBKDF2-600k but is a chained construction, not standard
+  PBKDF2 — hashes are labelled `pbkdf2-chain` accordingly (see trade-offs).
 - **Sessions**: opaque tokens, stored hashed, rotation on privilege changes,
   list + revoke in the panel; deactivation/password-reset revokes everything.
 - **Rate limits**: bucketed (login per-IP/per-identifier, admin, token
   endpoints, heavy API, social actions, and **state-changing writes**). The hot
-  per-user `api_user` counter lives in the user's UserHub DO (atomic); KV is
-  the fallback and the counter for cold per-IP/per-email limits.
+  per-user `api_user` counter lives in the user's UserHub DO (atomic); every
+  other counter is an atomic D1 upsert (`rateLimitHit`).
   `limitWrites` covers the CRUD/task/session/timer/group routes — previously they
   had _no_ rate limit, only eventual entity-count caps. It charges TWO budgets in
   one round trip: `write_user` (300/min) and `write_user_day` (20k/day), the

@@ -40,7 +40,7 @@ authRoutes.post('/auth/signup', () => jsonError(404, 'not_found', 'unknown API r
 // ---------- verify email (FR-A1) ----------
 authRoutes.post('/auth/verify-email', async (c) => {
   // unauthenticated + does a DB read per call — IP-keyed limit
-  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c) ?? 'unknown');
+  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c, c.env) ?? 'unknown');
   if (rl) return tooMany(rl);
   const parsed = verifyEmailSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid token');
@@ -79,7 +79,7 @@ authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
   // is mail volume from a compromised session, not anonymous spraying; adding
   // a captcha widget here would cost a real user a click for no threat
   // reduction. The per-IP budget is what bounds the volume.
-  const rlIp = await rateLimitHit(c.env, rateRules(c.env).resetIp, clientIp(c) ?? 'unknown');
+  const rlIp = await rateLimitHit(c.env, rateRules(c.env).resetIp, clientIp(c, c.env) ?? 'unknown');
   if (rlIp) return tooMany(rlIp);
   const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
   if (rl) return tooMany(rl);
@@ -121,7 +121,7 @@ authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
 
 // ---------- login (FR-A2) ----------
 authRoutes.post('/auth/login', async (c) => {
-  const ip = clientIp(c) ?? 'unknown';
+  const ip = clientIp(c, c.env) ?? 'unknown';
   const parsed = loginSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   const identifier = parsed.data.identifier;
@@ -221,7 +221,7 @@ authRoutes.post('/auth/reset-request', async (c) => {
   // per-address or the caller's per-IP reset allowance for free.
   if (!parsed.success) return c.json({ ok: true });
   const email = parsed.data.email;
-  const ip = clientIp(c) ?? 'unknown';
+  const ip = clientIp(c, c.env) ?? 'unknown';
   // Order mirrors login: the coarse per-IP budget runs FIRST (it is the only
   // thing that bounds a fan-out over MANY addresses — the audit's #11), then the
   // bot challenge, then the per-address budget. A challenge failure must not
@@ -290,7 +290,7 @@ authRoutes.post('/auth/reset-request', async (c) => {
 
 authRoutes.post('/auth/reset-confirm', async (c) => {
   // unauthenticated + does a DB read per call — IP-keyed limit
-  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c) ?? 'unknown');
+  const rl = await rateLimitHit(c.env, rateRules(c.env).tokenIp, clientIp(c, c.env) ?? 'unknown');
   if (rl) return tooMany(rl);
   const parsed = resetConfirmSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');

@@ -276,6 +276,13 @@ async function main() {
     // header mismatch → 403
     r = await raw(victim, '/projects', { method: 'POST', body: { name: 'x' }, origin: BASE, csrf: 'wrong-value' });
     check('CSRF mismatched token → 403', r.status === 403, `got ${r.status}`);
+    // F11: the double-submit check no longer depends on an Origin header —
+    // a request that omits Origin but presents the CSRF cookie without the
+    // header is refused (pre-fix this passed on SameSite=Lax alone)
+    r = await raw(victim, '/projects', { method: 'POST', body: { name: 'x' }, csrf: null });
+    check('CSRF cookie without header and without Origin → 403 (F11)', r.status === 403, `got ${r.status}`);
+    r = await raw(victim, '/projects', { method: 'POST', body: { name: 'x' }, csrf: 'wrong-value' });
+    check('CSRF mismatched token without Origin → 403 (F11)', r.status === 403, `got ${r.status}`);
   }
 
   // ---------- 6. forced password change gate ----------

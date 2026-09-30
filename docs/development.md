@@ -5,7 +5,7 @@ Setting up and working on TimeKeep Web locally.
 ## Prerequisites
 
 - Node 22+ and npm (CI pins Node 22; local dev on newer Node is fine)
-- No database or services to install — D1, KV and the DO run locally inside
+- No database or services to install — D1 and the DO run locally inside
   `wrangler dev` (miniflare/workerd), state under `.wrangler/state/`
 
 ## First run
@@ -86,6 +86,7 @@ is optional in dev; the app degrades gracefully:
 | `TURNSTILE_SECRET_KEY` / `TURNSTILE_SITE_KEY`                                            | widget off when absent                                                                                                                                                                                                                       |
 | `RESEND_API_KEY`                                                                         | absent → password-reset mail unavailable                                                                                                                                                                                                     |
 | `RL_LOGIN_IP` / `RL_LOGIN_USER_IP` / `RL_LOGIN_IDENTITY` / `RL_ADMIN_IP` / `RL_TOKEN_IP` | rate-limit overrides for e2e hammering — set the first four high; leave `RL_TOKEN_IP` alone when running `regression-check.mjs` (it expects the 429). The login lockouts: per-IP, per-(identifier, ip) pair and identifier-wide ceiling (F6) |
+| `DEV_TRUST_XFF=1`                                                                        | dev-only: honour `X-Forwarded-For` for client-IP (rate-limit bucket keys) when `cf-connecting-ip` is absent. A no-op under plain `wrangler dev` (neither header exists); matters only behind a local proxy that provides XFF. **Never enable in production** (audit F12) |
 
 ## Migrations
 

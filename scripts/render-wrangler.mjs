@@ -8,8 +8,8 @@
 //   node scripts/render-wrangler.mjs <output-path>   (default: wrangler.ci.jsonc)
 //
 // Env:
-//   D1_DATABASE_ID, KV_NAMESPACE_ID   required — fail with a clear message
-//                                     if missing
+//   D1_DATABASE_ID                     required — fail with a clear message
+//                                      if missing
 //   APP_PUBLIC_URL                    optional — the canonical origin for
 //                                     password-reset / verification links. Left
 //                                     unset, the Worker falls back to the
@@ -38,7 +38,6 @@ const need = (name) => {
 };
 
 const d1Id = need('D1_DATABASE_ID');
-const kvId = need('KV_NAMESPACE_ID');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const appVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const buildSha = process.env.BUILD_SHA?.trim() || 'ci';
@@ -54,7 +53,6 @@ const replace = (regex, replacement, what) => {
 };
 
 replace(/"database_id":\s*"REPLACE_ME"/, `"database_id": "${d1Id}"`, 'D1 database_id placeholder');
-replace(/"id":\s*"REPLACE_ME"/, `"id": "${kvId}"`, 'KV namespace id placeholder');
 
 // define values are JSON-escaped JS literals: "\"0.4.0\"" means __APP_VERSION__
 // is replaced by the expression "0.4.0". Overriding both here means prod never

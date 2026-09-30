@@ -15,10 +15,10 @@
 # assuming it already passed.
 #
 # One-time setup (details in docs/deployment.md → "Deploying from GitHub"):
-#   Secrets:   CLOUDFLARE_API_TOKEN (scoped: Workers Scripts Edit, D1 Edit,
-#              Workers KV Storage Edit), CLOUDFLARE_ACCOUNT_ID
+#   Secrets:   CLOUDFLARE_API_TOKEN (scoped: Workers Scripts Edit, D1 Edit),
+#              CLOUDFLARE_ACCOUNT_ID
 #              (optionally TURNSTILE_SECRET_KEY / RESEND_API_KEY)
-#   Variables: CF_D1_DATABASE_ID, CF_KV_NAMESPACE_ID, CF_DEPLOY_URL,
+#   Variables: CF_D1_DATABASE_ID, CF_DEPLOY_URL,
 #              CF_APP_PUBLIC_URL (canonical origin for reset/verification links)
 #   Environment "production": add required reviewers for an approval gate.
 #
@@ -185,7 +185,6 @@ jobs:
         run: BUILD_SHA="${GITHUB_SHA::7}" node scripts/render-wrangler.mjs wrangler.ci.jsonc
         env:
           D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
-          KV_NAMESPACE_ID: ${{ vars.CF_KV_NAMESPACE_ID }}
           APP_PUBLIC_URL: ${{ vars.CF_APP_PUBLIC_URL }}
 
       - run: npm run build
