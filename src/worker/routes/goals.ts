@@ -50,8 +50,10 @@ function rowToGoal(r: any): Goal {
   };
 }
 
-/** Every scope ref must resolve to a live, accessible node — RuleError otherwise. */
-async function assertScopeAccessible(env: Env, userId: string, scope: string[]): Promise<void> {
+/** Every scope ref must resolve to a live, accessible node — RuleError otherwise.
+ *  Exported: the import path reuses it per goal row (a goal whose scope points
+ *  anywhere inaccessible is SKIPPED, never a 500). */
+export async function assertScopeAccessible(env: Env, userId: string, scope: string[]): Promise<void> {
   const kinds = scopeKinds({ scope });
   const checks: Array<{ table: string; ids: string[]; kind: GoalScopeKind }> = [
     { table: 'projects', ids: kinds.projects, kind: 'project' },

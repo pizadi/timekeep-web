@@ -14,13 +14,15 @@ import {
   importSubtaskRow,
   importDependencyRow,
   importSessionRow,
+  importGoalRow,
 } from '../validators';
 import { ulid, isUlid } from '../../shared/ids';
 import { EXPORT_SCHEMA_VERSION, LIMITS, SESSION_RULES } from '../../shared/constants';
 import { findCyclePath } from '../../shared/validation';
 import { appendEvents, notifyHub, EventDraft } from '../events';
 import { mergeSettings } from './misc';
-
+import { wroteOne, RuleError } from '../rules';
+import { assertScopeAccessible } from './goals';
 export const exportRoutes = new Hono<WorkerType>();
 exportRoutes.use('/export', requireAuth);
 exportRoutes.use('/export/*', requireAuth);
@@ -37,7 +39,7 @@ exportRoutes.get('/export', async (c) => {
 
   // NOTE: all tables are buffered in memory before responding (bounded by the
   // per-account LIMITS). Chunked/streaming export is a future optimization.
-  const [user, settingsRow, projects, tasks, subtasks, deps, sessions] = await Promise.all([
+  const [user, settingsRow, projects, tasks, subtasks, deps, sessions, goals] = await Promise.all([
     c.env.DB.prepare(
       'SELECT id, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start, theme, created_at FROM users WHERE id = ?1',
     )
@@ -49,6 +51,13 @@ exportRoutes.get('/export', async (c) => {
     c.env.DB.prepare('SELECT * FROM subtasks WHERE user_id = ?1 ORDER BY position').bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM task_dependencies WHERE user_id = ?1').bind(userId).all(),
     c.env.DB.prepare('SELECT * FROM time_sessions WHERE user_id = ?1 ORDER BY started_at').bind(userId).all(),
+    // goals ride the export too (audit F19) — everything except user_id, which
+    // the server stamps on import
+    c.env.DB.prepare(
+      'SELECT id, name, period, direction, target_minutes, scope, ends_at, created_at, archived_at FROM goals WHERE user_id = ?1 ORDER BY created_at',
+    )
+      .bind(userId)
+      .all(),
   ]);
 
   if (format === 'csv') {
@@ -100,6 +109,7 @@ exportRoutes.get('/export', async (c) => {
     subtasks: subtasks.results,
     dependencies: deps.results,
     sessions: sessions.results,
+    goals: goals.results,
   };
   return new Response(JSON.stringify(payload, null, 2), {
     headers: {
@@ -149,6 +159,28 @@ async function existingIds(
   return out;
 }
 
+/** Ids of `table` rows that exist but belong to SOMEONE ELSE among `ids`
+ *  (audit F3 fix #1: rows whose own id is foreign are SKIPPED — the upserts'
+ *  `WHERE user_id = excluded.user_id` only stopped OVERWRITES, not inserts of
+ *  rows that reference foreign owners). */
+async function foreignIds(
+  env: WorkerType['Bindings'],
+  userId: string,
+  table: string,
+  ids: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const part of chunk(ids, 90)) {
+    if (part.length === 0) continue;
+    const marks = part.map((_, k) => `?${k + 2}`).join(',');
+    const rows = await env.DB.prepare(`SELECT id FROM ${table} WHERE user_id <> ?1 AND id IN (${marks})`)
+      .bind(userId, ...part)
+      .all<{ id: string }>();
+    for (const r of rows.results) out.add(r.id);
+  }
+  return out;
+}
+
 /** Count rows in a user-scoped table. */
 async function countFor(env: WorkerType['Bindings'], userId: string, table: string): Promise<number> {
   const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?1`)
@@ -175,12 +207,13 @@ exportRoutes.post('/import', async (c) => {
     subtasks: { created: 0, updated: 0, skipped: 0 },
     dependencies: { created: 0, updated: 0, skipped: 0 },
     sessions: { created: 0, updated: 0, skipped: 0 },
+    goals: { created: 0, updated: 0, skipped: 0 },
   };
 
-  // duplicate mode: remap every id to a fresh one (project → task → subtask → dep → session)
+  // duplicate mode: remap every id to a fresh one (project → task → subtask → dep → session → goal)
   const map = new Map<string, string>();
   if (mode === 'duplicate') {
-    for (const coll of [data.projects, data.tasks, data.subtasks, data.sessions]) {
+    for (const coll of [data.projects, data.tasks, data.subtasks, data.sessions, data.goals]) {
       for (const row of coll) if (row?.id && typeof row.id === 'string') map.set(row.id, ulid(now + map.size));
     }
   }
@@ -312,16 +345,94 @@ exportRoutes.post('/import', async (c) => {
   // sequential round-trips (~110 s); now it's collections/200 batches (audit: perf).
   const IMPORT_CHUNK = 200;
 
-  const projectBatches = chunk(projects, IMPORT_CHUNK);
   {
-    const allIds = projects.map(({ p }) => idOf(p!.id));
+    // audit F3 fix #1: a row whose OWN id belongs to another user is skipped
+    // (merge mode only — duplicate mode remaps ids, so a foreign own-id cannot
+    // occur; references are checked separately below)
+    let kept = projects;
+    if (mode === 'merge') {
+      const foreign = await foreignIds(
+        c.env,
+        userId,
+        'projects',
+        projects.map(({ p }) => p!.id),
+      );
+      if (foreign.size > 0) {
+        kept = projects.filter(({ p }) => {
+          if (foreign.has(p!.id)) {
+            summary.projects.skipped++;
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
+    // project names: the table keeps its inline UNIQUE(user_id, name), so a
+    // duplicate-mode import (same names, new ids) would 500 on every row whose
+    // name the account already holds. Per row: the name fits as-is when the
+    // only holder is the row ITSELF (a merge re-import updates in place) or
+    // the name is free; a DIFFERENT live row holding it → the incoming project
+    // is renamed `X (imported)`, `X (imported 2)`, … (deterministic, keeps the
+    // whole subtree); a name held by a TOMBSTONE (not being resurrected by an
+    // id match) is yielded exactly like the CRUD create route — the tombstone
+    // is renamed out of the way.
+    const liveHolders = (
+      await c.env.DB.prepare('SELECT id, name FROM projects WHERE user_id = ?1 AND deleted_at IS NULL')
+        .bind(userId)
+        .all<{
+          id: string;
+          name: string;
+        }>()
+    ).results;
+    const liveByName = new Map(liveHolders.map((h) => [h.name.toUpperCase(), h]));
+    const taken = new Set(liveHolders.map((h) => h.name.toUpperCase()));
+    const finalNames = new Map<string, string>(); // idOf(row.id) → overridden name
+    const keptIds = new Set<string>();
+    for (const { p } of kept) {
+      const id = idOf(p!.id);
+      keptIds.add(id);
+      const name = String(p!.name ?? 'Imported');
+      const holder = liveByName.get(name.toUpperCase());
+      if (holder && holder.id === id) continue; // own row — the upsert keeps the name
+      if (!holder && !taken.has(name.toUpperCase())) {
+        taken.add(name.toUpperCase()); // free name — first claimant wins it
+        continue;
+      }
+      let candidate = `${name} (imported)`;
+      for (let n = 2; taken.has(candidate.toUpperCase()); n++) candidate = `${name} (imported ${n})`;
+      finalNames.set(id, candidate.slice(0, LIMITS.nameMax));
+      taken.add(candidate.toUpperCase());
+    }
+    // contested tombstones: rename away in their own batch (same convention as
+    // routes/projects.ts create) so the insert fits
+    {
+      const tombstoneHolders = await c.env.DB.prepare(
+        `SELECT id, name FROM projects WHERE user_id = ?1 AND deleted_at IS NOT NULL
+         AND name COLLATE NOCASE IN (SELECT value FROM json_each(?2))`,
+      )
+        .bind(userId, JSON.stringify([...new Set(kept.map(({ p }) => String(p!.name ?? 'Imported')))]))
+        .all<{ id: string; name: string }>();
+      const yieldStmts = tombstoneHolders.results
+        .filter((h) => !keptIds.has(h.id)) // an id match resurrects the row itself — the upsert restores its name
+        .map((h) =>
+          c.env.DB.prepare(
+            `UPDATE projects SET name = name || ' (deleted ' || ?2 || ')', updated_at = ?3
+             WHERE user_id = ?1 AND id = ?4 AND deleted_at IS NOT NULL`,
+          ).bind(userId, new Date(now).toISOString().slice(0, 10), now, h.id),
+        );
+      if (yieldStmts.length) await c.env.DB.batch(yieldStmts);
+    }
+
+    const allIds = kept.map(({ p }) => idOf(p!.id));
     const exist = await existingIds(c.env, userId, 'projects', allIds);
-    for (const batch of projectBatches) {
+    for (const batch of chunk(kept, IMPORT_CHUNK)) {
       const stmts = batch.map(({ p }) => {
         const id = idOf(p!.id);
         const isUpdate = exist.has(id);
         if (isUpdate) summary.projects.updated++;
         else summary.projects.created++;
+        const name = finalNames.get(id) ?? String(p!.name ?? 'Imported');
         return c.env.DB.prepare(
           `INSERT INTO projects (id, user_id, name, color, archived, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -332,7 +443,7 @@ exportRoutes.post('/import', async (c) => {
         ).bind(
           id,
           userId,
-          String(p!.name ?? 'Imported').slice(0, LIMITS.nameMax),
+          name.slice(0, LIMITS.nameMax),
           /^#[0-9a-fA-F]{6}$/.test(p!.color ?? '') ? p!.color : '#4f8cff',
           p!.archived,
           p!.position,
@@ -344,13 +455,34 @@ exportRoutes.post('/import', async (c) => {
     }
   }
 
+  // tasks that survive planning — subtasks, dependency edges and sessions are
+  // only allowed to reference these (a skipped task must not gain dangling
+  // children: their FKs would 500 the batch)
+  const acceptedTaskIds = new Set<string>();
   {
     // hierarchy pre-pass (audit S3.2/S3.3): a parent must be IN-FILE, ROOT
     // (itself parentless) and in the SAME project — the same two-level rule the
     // task routes enforce (FR-T3)
+    //
+    // audit F3 fix #2: a task's project must be one that will exist for THIS
+    // user afterwards — an in-file project that survived the foreign-id skip,
+    // or any project already owned by the caller. (Pre-fix the check was
+    // "project_id appears in the file", so a task slid into someone else's
+    // project: the project upsert no-oped on the WHERE user_id clause while
+    // the task still inserted pointing at it.)
+    const referencedProjects = [...new Set(tasks.filter(({ t }) => t).map(({ t }) => idOf(t!.project_id)))];
+    const ownedReferencedProjects = await existingIds(c.env, userId, 'projects', referencedProjects);
+    const inFileProjectIds = new Set(projects.map(({ p }) => idOf(p!.id)));
+    const foreignProjectOwnIds =
+      mode === 'merge' ? await foreignIds(c.env, userId, 'projects', [...inFileProjectIds]) : new Set<string>();
+    const acceptedProjectIds = new Set<string>([
+      ...ownedReferencedProjects,
+      ...[...inFileProjectIds].filter((id) => !foreignProjectOwnIds.has(id)),
+    ]);
+
     const plannedTasks = tasks.filter(({ t }) => {
       if (!t) return false;
-      if (!data.projects.some((x: any) => x?.id === t.project_id)) {
+      if (!acceptedProjectIds.has(idOf(t.project_id))) {
         summary.tasks.skipped++;
         return false;
       }
@@ -371,6 +503,7 @@ exportRoutes.post('/import', async (c) => {
       }
       return true;
     });
+    for (const { t } of acceptedTasks) acceptedTaskIds.add(idOf(t!.id));
     const exist = await existingIds(
       c.env,
       userId,
@@ -409,8 +542,9 @@ exportRoutes.post('/import', async (c) => {
 
   {
     const plannedSubs = subtasks.filter((s) => {
-      // task must be in the file (it will exist after the tasks pass above)
-      if (!tasks.some((x) => x.t?.id === s.task_id)) {
+      // the task must be an ACCEPTED task (it will exist after the tasks pass
+      // above) — a subtask on a skipped task would dangle its FK
+      if (!acceptedTaskIds.has(idOf(s.task_id))) {
         summary.subtasks.skipped++;
         return false;
       }
@@ -464,6 +598,12 @@ exportRoutes.post('/import', async (c) => {
       }))
       .filter((e) => {
         if (!acceptedEdges.has(`${e.task_id}>${e.depends_on_id}`)) return false; // counted above
+        // both endpoints must have SURVIVED planning — an edge on a skipped
+        // task would violate the FK (a pre-fix import could 500 here)
+        if (!acceptedTaskIds.has(e.task_id) || !acceptedTaskIds.has(e.depends_on_id)) {
+          summary.dependencies.skipped++;
+          return false;
+        }
         return true;
       });
     for (const batch of chunk(depRows, IMPORT_CHUNK)) {
@@ -497,16 +637,80 @@ exportRoutes.post('/import', async (c) => {
         }
         return true;
       });
+
+    // audit F3 fix #1: a row whose own id belongs to another user is skipped
+    // (merge mode; duplicate mode remaps ids)
+    let candidateSessions = plannedSessions;
+    if (mode === 'merge') {
+      const foreign = await foreignIds(
+        c.env,
+        userId,
+        'time_sessions',
+        plannedSessions.map(({ s }) => s.id),
+      );
+      if (foreign.size > 0) {
+        candidateSessions = plannedSessions.filter(({ s }) => {
+          if (foreign.has(s.id)) {
+            summary.sessions.skipped++;
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
+    // audit F3 fix #3: every session's task must be one this user may track on
+    // — the same rule POST /sessions enforces (routes/sessions.ts:128-137):
+    // the caller's own task (any tombstone state — an import may restore one's
+    // own history; the upsert clears deleted_at) or a LIVE task of a group
+    // project the caller is a member of. Set-based: one query per 90 refs.
+    // (The create path's archived gate is deliberately absent: archived
+    // history must round-trip — that gate is timer UX, not ownership.)
+    // audit F3 fix #3: every session's task must be one this user may track on
+    // — the same rule POST /sessions enforces (routes/sessions.ts:128-137):
+    // the caller's own task (any tombstone state — an import may restore one's
+    // own history; the upsert clears deleted_at) or a LIVE task of a group
+    // project the caller is a member of. Set-based: one query per 90 refs.
+    // (The create path's archived gate is deliberately absent: archived
+    // history must round-trip — that gate is timer UX, not ownership.)
+    const outOfFileRefs = [
+      ...new Set(candidateSessions.map(({ s }) => idOf(s.task_id)).filter((id) => !acceptedTaskIds.has(id))),
+    ];
+    const accessibleTasks = new Set<string>();
+    for (const part of chunk(outOfFileRefs, 90)) {
+      if (part.length === 0) continue;
+      const marks = part.map((_, k) => `?${k + 2}`).join(',');
+      const rows = await c.env.DB.prepare(
+        `SELECT id FROM tasks WHERE id IN (${marks}) AND user_id = ?1
+         UNION
+         SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
+         WHERE t.id IN (${marks}) AND t.deleted_at IS NULL AND p.deleted_at IS NULL
+           AND p.group_id IS NOT NULL
+           AND p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)`,
+      )
+        .bind(userId, ...part)
+        .all<{ id: string }>();
+      for (const r of rows.results) accessibleTasks.add(r.id);
+    }
+    // a session's task is acceptable when it is in-file-accepted or resolved
+    // accessible above; the rest are counted here — pre-fix they inserted and
+    // leaked the task name
+    const planned = candidateSessions.filter(({ s }) => {
+      const ref = idOf(s.task_id);
+      return acceptedTaskIds.has(ref) || accessibleTasks.has(ref);
+    });
+    summary.sessions.skipped += candidateSessions.length - planned.length;
+
     const exist = await existingIds(
       c.env,
       userId,
       'time_sessions',
-      plannedSessions.map(({ s }) => idOf(s.id)),
+      planned.map(({ s }) => idOf(s.id)),
     );
     // subtask links survive import only when the subtask exists AND belongs to
     // the session's task (subtasks import first; a skipped row → link drops,
     // the session's time still imports)
-    const importSubIds = plannedSessions.filter(({ s }) => s.subtask_id).map(({ s }) => s.subtask_id!);
+    const importSubIds = planned.filter(({ s }) => s.subtask_id).map(({ s }) => s.subtask_id!);
     const importSubs = new Map<string, string>();
     for (const batch of chunk(importSubIds, 90)) {
       const marks = batch.map((_, k) => `?${k + 2}`).join(',');
@@ -515,16 +719,34 @@ exportRoutes.post('/import', async (c) => {
         .all<{ id: string; task_id: string }>();
       for (const r of rows.results) importSubs.set(r.id, r.task_id);
     }
-    for (const batch of chunk(plannedSessions, IMPORT_CHUNK)) {
-      const stmts = batch.map(({ s, started, ended }) => {
+    for (const batch of chunk(planned, IMPORT_CHUNK)) {
+      // audit F3 fix #4, scoped to what import must actually prevent: a
+      // repeated merge/duplicate re-importing the same ranges under fresh ids
+      // (the double-count scenario) — an EXACT same-task/same-range row is
+      // skipped. The full sessions.ts overlap predicate deliberately NOT used:
+      // /timer/start (the DO) enforces only the single-RUNNING invariant, so
+      // production data legitimately contains PARTIAL and even CONTAINED
+      // overlaps (a timer started and stopped inside a future-dated manual
+      // entry — e2e/roundtrip-test.mjs holds exactly that fixture), and a
+      // restore must never silently drop that time (FR-D1: import is
+      // identity-preserving). Overlaps beyond the exact signature are
+      // self-inflicted (import is user-scoped) and restore faithfully.
+      // `id <> ?1` lets a row update itself; a guard-blocked row reports
+      // changes 0 and is counted as skipped below (wroteOne discipline —
+      // never trust the planned count).
+      const pairs = batch.map(({ s, started, ended }) => {
         const id = idOf(s.id);
-        if (exist.has(id)) summary.sessions.updated++;
-        else summary.sessions.created++;
         const sub = s.subtask_id && importSubs.get(s.subtask_id) === idOf(s.task_id) ? s.subtask_id : null;
-        return c.env.DB.prepare(
-          // task_name keeps the historical name in step with the task (INV-06)
+        const stmt = c.env.DB.prepare(
+          // task_name keeps the historical name in step with the task (INV-06);
+          // post-ownership-check it can only copy from an own/accessible task
           `INSERT INTO time_sessions (id, user_id, task_id, started_at, ended_at, source, note, created_at, updated_at, subtask_id, task_name)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, (SELECT name FROM tasks WHERE id = ?3))
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, (SELECT name FROM tasks WHERE id = ?3)
+           WHERE NOT EXISTS (
+             SELECT 1 FROM time_sessions
+             WHERE task_id = ?3 AND user_id = ?2 AND id <> ?1
+               AND started_at = ?4 AND ended_at IS ?5
+           )
            ON CONFLICT (id) DO UPDATE SET task_id = excluded.task_id, started_at = excluded.started_at,
              ended_at = excluded.ended_at, note = excluded.note, updated_at = excluded.updated_at,
              task_name = excluded.task_name
@@ -540,8 +762,127 @@ exportRoutes.post('/import', async (c) => {
           clampTs(s.created_at),
           sub,
         );
+        return { id, stmt };
       });
-      if (stmts.length) await c.env.DB.batch(stmts);
+      if (pairs.length) {
+        const results = await c.env.DB.batch(pairs.map(({ stmt }) => stmt));
+        for (let i = 0; i < pairs.length; i++) {
+          if (!wroteOne(results[i])) {
+            summary.sessions.skipped++; // overlap-blocked (or raced away) — never counted as written
+            continue;
+          }
+          if (exist.has(pairs[i]!.id)) summary.sessions.updated++;
+          else summary.sessions.created++;
+        }
+      }
+    }
+  }
+
+  // ---------- goals (audit F19) ----------
+  {
+    const parsedGoals = (data.goals as any[])
+      .map((g) => importGoalRow.safeParse(g))
+      .filter(({ success }) => {
+        if (!success) summary.goals.skipped++;
+        return success;
+      })
+      .map(({ data: g }) => g!);
+
+    // audit F3 fix #1 for goals: a row whose own id belongs to another user is
+    // skipped (merge mode; duplicate mode remaps ids)
+    let candidates = parsedGoals;
+    if (mode === 'merge') {
+      const foreign = await foreignIds(
+        c.env,
+        userId,
+        'goals',
+        parsedGoals.map((g) => g.id),
+      );
+      if (foreign.size > 0) {
+        candidates = parsedGoals.filter((g) => {
+          if (foreign.has(g.id)) {
+            summary.goals.skipped++;
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
+    // duplicate mode: remap the goal's own id AND its scope refs onto the
+    // duplicated entities (a ref to an id outside the file stays as-is — it
+    // either points at an owned node or is caught by the scope check below)
+    const prepared = candidates.map((g) => {
+      if (mode === 'duplicate') {
+        return {
+          ...g,
+          id: idOf(g.id),
+          scope: g.scope.map((ref) => {
+            const idx = ref.indexOf(':');
+            return `${ref.slice(0, idx + 1)}${idOf(ref.slice(idx + 1))}`;
+          }),
+        };
+      }
+      return g;
+    });
+
+    // every scope ref must resolve to a live, accessible node (the same rule
+    // POST /goals enforces, goals.ts assertScopeAccessible) — the goals pass
+    // runs AFTER the tasks pass, so refs to in-file tasks see their upserted
+    // (resurrected) rows; an unreachable ref skips the whole goal
+    const acceptedGoals: typeof prepared = [];
+    for (const g of prepared) {
+      try {
+        await assertScopeAccessible(c.env, userId, g.scope);
+        acceptedGoals.push(g);
+      } catch (e) {
+        if (!(e instanceof RuleError)) throw e;
+        summary.goals.skipped++;
+      }
+    }
+
+    const exist = await existingIds(
+      c.env,
+      userId,
+      'goals',
+      acceptedGoals.map((g) => g.id),
+    );
+    for (const batch of chunk(acceptedGoals, IMPORT_CHUNK)) {
+      // the per-user cap lives INSIDE the statement (audit 🟡2 rule) — but an
+      // own-id row bypasses the cap: it is an update of an existing goal
+      const stmts = batch.map((g) =>
+        c.env.DB.prepare(
+          `INSERT INTO goals (id, user_id, name, period, direction, target_minutes, scope, ends_at, created_at, archived_at)
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+           WHERE (SELECT COUNT(*) FROM goals WHERE user_id = ?2) < ?11
+              OR EXISTS (SELECT 1 FROM goals WHERE id = ?1 AND user_id = ?2)
+           ON CONFLICT (id) DO UPDATE SET name = excluded.name, period = excluded.period,
+             direction = excluded.direction, target_minutes = excluded.target_minutes,
+             scope = excluded.scope, ends_at = excluded.ends_at, archived_at = excluded.archived_at
+           WHERE goals.user_id = excluded.user_id`,
+        ).bind(
+          g.id,
+          userId,
+          g.name.slice(0, LIMITS.goalNameMax),
+          g.period,
+          g.direction,
+          g.target_minutes,
+          JSON.stringify(g.scope),
+          g.ends_at,
+          clampTs(g.created_at),
+          g.archived_at === null ? null : clampTs(g.archived_at),
+          LIMITS.goalsPerUser,
+        ),
+      );
+      const results = await c.env.DB.batch(stmts);
+      for (let i = 0; i < batch.length; i++) {
+        if (!wroteOne(results[i])) {
+          summary.goals.skipped++; // at the per-user cap (or a raced foreign id)
+          continue;
+        }
+        if (exist.has(batch[i]!.id)) summary.goals.updated++;
+        else summary.goals.created++;
+      }
     }
   }
 

@@ -206,6 +206,17 @@ const boolInt = z
   .catch(0);
 const finiteInt = (d: number) => z.number().int().finite().catch(d);
 
+/** A JSON-encoded array, or null when it doesn't parse (the row is then
+ *  skipped by the schema that uses this — never a 500). */
+function safeJsonArray(s: string): unknown {
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export const importProjectRow = z.object({
   id: z.string().min(1).max(64),
   name: z.string().catch('Imported'),
@@ -238,6 +249,35 @@ export const importSubtaskRow = z.object({
 export const importDependencyRow = z.object({
   task_id: ulidish,
   depends_on_id: ulidish,
+  created_at: finiteInt(0),
+});
+
+// A goal ROW inside an import file. The value fields reuse goalCreateSchema's
+// shapes (the CHECK constraints in 0011 are the ceiling); unlike the create
+// route there are no silent defaults for period/direction/target — a row that
+// fails them is SKIPPED, not silently re-pointed at a different goal. Scope
+// refs keep goalScopeRef's looseness (ids are not ULID-restricted); each ref
+// must still resolve to an accessible node, checked in routes/export.ts.
+// scope accepts BOTH shapes an import file can carry: the array the goals API
+// returns, and the raw JSON string the DB column (and therefore the export
+// payload) stores — a malformed string fails the array check → row skipped.
+export const importGoalRow = z.object({
+  id: ulidish,
+  name: z.string().max(LIMITS.goalNameMax).catch(''),
+  period: z.enum(GOAL_PERIODS),
+  direction: z.enum(GOAL_DIRECTIONS),
+  target_minutes: z.number().int().min(1).max(20160),
+  scope: z.union([z.array(goalScopeRef), z.string()]).transform((v, ctx) => {
+    const arr = typeof v === 'string' ? safeJsonArray(v) : v;
+    const parsed = z.array(goalScopeRef).min(1).max(LIMITS.goalScopeMax).safeParse(arr);
+    if (!parsed.success) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'invalid goal scope' });
+      return z.NEVER;
+    }
+    return parsed.data;
+  }),
+  ends_at: z.number().int().min(0).max(4_102_444_800_000).nullable().catch(null),
+  archived_at: z.number().int().finite().nullable().catch(null),
   created_at: finiteInt(0),
 });
 
@@ -294,6 +334,10 @@ export const importSchema = z.object({
       .max(LIMITS.tasksPerUser * 2)
       .default([]),
     sessions: z.array(z.any()).max(LIMITS.sessionsPerUser).default([]),
+    goals: z
+      .array(z.any())
+      .max(LIMITS.goalsPerUser * 2)
+      .default([]),
     settings: z.record(z.any()).optional(),
   }),
 });
