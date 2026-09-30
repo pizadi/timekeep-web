@@ -21,6 +21,12 @@ export const passwordChangeSchema = z.object({
   password: z.string().min(10).max(200),
 });
 
+// F7 (step-up): the destructive-account route requires the CURRENT password —
+// a stolen/left-open session alone must not be able to hard-delete an account.
+export const deleteAccountSchema = z.object({
+  current_password: z.string().min(1).max(200),
+});
+
 // Admin user management (no self-signup anywhere — admin creates accounts).
 export const adminCreateSchema = z.object({
   username: z
@@ -36,6 +42,10 @@ export const adminPatchSchema = z.object({
   active: z.union([z.literal(0), z.literal(1)]),
 });
 export const adminResetSchema = z.object({
+  // F7 (step-up): the ACTING admin must present their own current password —
+  // resetting someone's password revokes all their sessions and hands over the
+  // account, so a stolen admin session alone must not suffice.
+  admin_current_password: z.string().min(1).max(200),
   password: z.string().min(10).max(200),
 });
 

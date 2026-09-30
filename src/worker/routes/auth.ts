@@ -45,20 +45,21 @@ authRoutes.post('/auth/verify-email', async (c) => {
   const parsed = verifyEmailSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid token');
   const hash = await sha256Hex(parsed.data.token);
-  const row = await c.env.DB.prepare(
-    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'verify'`,
+  // F14: consume-then-act — the token is claimed ATOMICALLY (D1 serializes
+  // writes per row), so two concurrent uses of one link cannot both pass a
+  // check-then-delete. Only a returned, unexpired row authorizes the change;
+  // an expired one is consumed too (it is worthless either way) and answered
+  // identically to today.
+  const claimed = await c.env.DB.prepare(
+    `DELETE FROM email_tokens WHERE token_hash = ?1 AND purpose = 'verify' RETURNING user_id, expires_at`,
   )
     .bind(hash)
     .first<{ user_id: string; expires_at: number }>();
-  if (!row || row.expires_at < Date.now())
+  if (!claimed || claimed.expires_at < Date.now())
     return jsonError(422, 'invalid_token', 'this verification link is invalid or has expired');
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2').bind(
-      Date.now(),
-      row.user_id,
-    ),
-    c.env.DB.prepare('DELETE FROM email_tokens WHERE token_hash = ?1').bind(hash),
-  ]);
+  await c.env.DB.prepare('UPDATE users SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2')
+    .bind(Date.now(), claimed.user_id)
+    .run();
   return c.json({ ok: true });
 });
 
@@ -297,30 +298,32 @@ authRoutes.post('/auth/reset-confirm', async (c) => {
   if (pwProblem) return jsonError(422, 'validation', pwProblem);
 
   const hash = await sha256Hex(parsed.data.token);
-  const row = await c.env.DB.prepare(
-    `SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ?1 AND purpose = 'reset'`,
+  // F14: consume-then-act (same as verify-email) — the DELETE claims the token
+  // atomically before anything else happens; a concurrent second use finds no
+  // row and gets the same invalid_token as a replayed link.
+  const claimed = await c.env.DB.prepare(
+    `DELETE FROM email_tokens WHERE token_hash = ?1 AND purpose = 'reset' RETURNING user_id, expires_at`,
   )
     .bind(hash)
     .first<{ user_id: string; expires_at: number }>();
-  if (!row || row.expires_at < Date.now())
+  if (!claimed || claimed.expires_at < Date.now())
     return jsonError(422, 'invalid_token', 'this reset link is invalid or has expired');
 
   const now = Date.now();
   const password_hash = await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS));
-  // reset revokes ALL existing sessions (FR-A5)
+  // reset revokes ALL existing sessions (FR-A5). The claimed token is already
+  // consumed — the cleanup now sweeps the user's OTHER reset tokens, so any
+  // sibling link minted before this one dies with it.
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3').bind(
       password_hash,
       now,
-      row.user_id,
+      claimed.user_id,
     ),
-    c.env.DB.prepare("DELETE FROM email_tokens WHERE token_hash = ?1 OR user_id = ?2 AND purpose = 'reset'").bind(
-      hash,
-      row.user_id,
-    ),
-    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(row.user_id),
+    c.env.DB.prepare("DELETE FROM email_tokens WHERE user_id = ?1 AND purpose = 'reset'").bind(claimed.user_id),
+    c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?1').bind(claimed.user_id),
   ]);
-  revokeHub(c.env, row.user_id);
+  revokeHub(c.env, claimed.user_id);
   clearSessionCookie(c);
   return c.json({ ok: true });
 });

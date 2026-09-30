@@ -3,6 +3,9 @@
 // authn matrix, cross-account authz (IDOR), CSRF, forced-change gate, session
 // revocation, response whitelists, rate limits, WS upgrade, info disclosure.
 // Usage: node e2e/security-probes.mjs   (env: ADMIN_USERNAME, ADMIN_PASSWORD)
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash, randomBytes } from 'node:crypto';
 import { withProxyRetry } from './support/proxy-retry.mjs';
 
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787';
@@ -83,6 +86,9 @@ async function adminSession() {
       `admin login failed (${r.status}) — run smoke-test.sh first (it bootstraps the admin credential via admin:create)`,
     );
   }
+  // section 7's admin-reset probe needs the ACTING admin's password for the
+  // step-up field (F7)
+  s.adminPassword = adminPw;
   return s;
 }
 
@@ -353,10 +359,176 @@ async function main() {
     await raw(admin, `/admin/users/${uid}/password`, {
       method: 'POST',
       origin: BASE,
-      body: { password: `${revPw}-np` },
+      body: { admin_current_password: admin.adminPassword, password: `${revPw}-np` },
     });
     const old = await raw(s1, '/me');
     check('admin reset revokes old sessions', old.status === 401, `got ${old.status}`);
+  }
+
+  // ---------- 7b. destructive actions require the current password (F7) ----------
+  {
+    // A stolen/left-open session (30-day cookie, silent rotation) must not be
+    // able to delete an account or take over other accounts without knowing a
+    // password. Mirror of /me/password's own step-up.
+    const mk = async (n) => {
+      const u = `aud_step_${n}_${stamp}`;
+      const cr = await raw(admin, '/admin/users', {
+        method: 'POST',
+        origin: BASE,
+        body: { username: u, password: `stepup-${n}-pass-42` },
+      });
+      if (cr.status !== 201) throw new Error(`create ${u}: ${JSON.stringify(cr.data)}`);
+      const s = jar();
+      const li = await login(s, u, `stepup-${n}-pass-42`);
+      const ch = await raw(s, '/me/password', {
+        method: 'POST',
+        origin: BASE,
+        body: { current_password: `stepup-${n}-pass-42`, password: `stepup-${n}-done-pass-42` },
+      });
+      if (li.status !== 200 || ch.status !== 200) throw new Error(`bootstrap ${u} failed`);
+      return { username: u, session: s, pw: `stepup-${n}-done-pass-42` };
+    };
+
+    // two throwaway accounts: pre-fix, a bodyless DELETE /me SUCCEEDS (the
+    // route never reads the body) and destroys the account — the red run
+    // deletes it; a separate account proves the wrong-password case.
+    const s1 = await mk('a');
+    const del1 = await raw(s1.session, '/me', { method: 'DELETE', origin: BASE });
+    check(
+      'DELETE /me without the current password → 422/403 (step-up)',
+      del1.status === 422 || del1.status === 403,
+      `got ${del1.status}`,
+    );
+
+    const s2 = await mk('b');
+    const del2 = await raw(s2.session, '/me', {
+      method: 'DELETE',
+      origin: BASE,
+      body: { current_password: 'definitely-not-the-password-42' },
+    });
+    check(
+      'DELETE /me with a WRONG current password → 403 bad_password',
+      del2.status === 403 && del2.data?.error?.code === 'bad_password',
+      `got ${del2.status}`,
+    );
+    // the account must still exist after the refused delete
+    const still = await raw(s2.session, '/me');
+    check('a refused delete left the account intact', still.status === 200, `got ${still.status}`);
+
+    // happy path: the correct password deletes (uses s2 — its session stays
+    // valid because the refused delete never touched it)
+    const del3 = await raw(s2.session, '/me', {
+      method: 'DELETE',
+      origin: BASE,
+      body: { current_password: s2.pw },
+    });
+    check('DELETE /me with the CORRECT password still works', del3.status === 200, `got ${del3.status}`);
+
+    // admin password reset: the ACTING admin must present their own password
+    const target = await mk('c');
+    const resetNoPw = await raw(admin, `/admin/users/${(await raw(target.session, '/me')).data.user.id}/password`, {
+      method: 'POST',
+      origin: BASE,
+      body: { password: 'stepup-reset-temp-42' },
+    });
+    check(
+      'admin reset WITHOUT the acting admin password → 422/403 (step-up)',
+      resetNoPw.status === 422 || resetNoPw.status === 403,
+      `got ${resetNoPw.status}`,
+    );
+    const resetWrongPw = await raw(admin, `/admin/users/${(await raw(target.session, '/me')).data.user.id}/password`, {
+      method: 'POST',
+      origin: BASE,
+      body: { admin_current_password: 'not-the-admin-password-42', password: 'stepup-reset-temp-42' },
+    });
+    check(
+      'admin reset with a WRONG acting-admin password → 403 bad_password',
+      resetWrongPw.status === 403 && resetWrongPw.data?.error?.code === 'bad_password',
+      `got ${resetWrongPw.status}`,
+    );
+    const resetOk = await raw(admin, `/admin/users/${(await raw(target.session, '/me')).data.user.id}/password`, {
+      method: 'POST',
+      origin: BASE,
+      body: { admin_current_password: admin.adminPassword, password: 'stepup-reset-temp-42' },
+    });
+    check('admin reset with the CORRECT acting-admin password works', resetOk.status === 200, `got ${resetOk.status}`);
+  }
+
+  // ---------- 7c. tokens are consumed atomically (F14) ----------
+  {
+    // Both token routes used to SELECT the row, act, and delete it LATER in a
+    // batch — two concurrent requests with the same token could both pass the
+    // check. The routes now consume the token FIRST (DELETE … RETURNING; D1
+    // serializes writes per row), so exactly ONE concurrent use can win.
+    //
+    // Tokens are minted directly in D1 (hashed like the worker does): token
+    // links never appear in API responses, so there is no other way for an
+    // e2e client to hold one. Targets the run-e2e main instance.
+    const pexec = promisify(execFile);
+    const mint = async (purpose, userId) => {
+      const token = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      await pexec(
+        'npx',
+        [
+          'wrangler',
+          'd1',
+          'execute',
+          'timekeep',
+          '--local',
+          '--command',
+          `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES ('${tokenHash}', '${userId}', '${purpose}', ${Date.now() + 3600_000})`,
+        ],
+        { stdio: 'ignore' },
+      );
+      return token;
+    };
+
+    // a throwaway user holds the tokens (reset-confirm REVOKES all of the
+    // user's sessions and rewrites their password — never aim it at a fixture)
+    const holder = `aud_tok_${stamp}`;
+    const cr = await raw(admin, '/admin/users', {
+      method: 'POST',
+      origin: BASE,
+      body: { username: holder, password: 'token-holder-pass-42' },
+    });
+    if (cr.status !== 201) throw new Error(`create ${holder}: ${JSON.stringify(cr.data)}`);
+    const holderId = cr.data.user.id;
+
+    // reset-confirm: 10 concurrent uses of ONE token — exactly one may win
+    const anon1 = jar();
+    const resetToken = await mint('reset', holderId);
+    const resetRes = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        raw(anon1, '/auth/reset-confirm', {
+          method: 'POST',
+          body: { token: resetToken, password: 'atomic-reset-pass-42' },
+        }),
+      ),
+    );
+    const resetWins = resetRes.filter((r) => r.status === 200);
+    const resetLosses = resetRes.filter((r) => r.status === 422 && r.data?.error?.code === 'invalid_token');
+    check(
+      'reset-confirm: concurrent uses of one token → exactly one 200 + nine invalid_token',
+      resetWins.length === 1 && resetLosses.length === 9,
+      `wins ${resetWins.length}, invalid ${resetLosses.length}, other ${resetRes.length - resetWins.length - resetLosses.length}`,
+    );
+
+    // verify-email: same property
+    const anon2 = jar();
+    const verifyToken = await mint('verify', holderId);
+    const verifyRes = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        raw(anon2, '/auth/verify-email', { method: 'POST', body: { token: verifyToken } }),
+      ),
+    );
+    const verifyWins = verifyRes.filter((r) => r.status === 200);
+    const verifyLosses = verifyRes.filter((r) => r.status === 422 && r.data?.error?.code === 'invalid_token');
+    check(
+      'verify-email: concurrent uses of one token → exactly one 200 + nine invalid_token',
+      verifyWins.length === 1 && verifyLosses.length === 9,
+      `wins ${verifyWins.length}, invalid ${verifyLosses.length}, other ${verifyRes.length - verifyWins.length - verifyLosses.length}`,
+    );
   }
 
   // ---------- 8. response field whitelists (sensitive data) ----------

@@ -37,7 +37,8 @@ async function main() {
   );
 
   // --- delete account A, then fresh account B (spec AC: export → delete → new account → import) ---
-  const del = await raw('/me', { method: 'DELETE' }, a);
+  // F7: the destructive route requires dana's CURRENT password
+  const del = await raw('/me', { method: 'DELETE', body: { current_password: 'purple-marmalade-tuesday' } }, a);
   console.log('delete account A:', del.status, JSON.stringify(del.body));
   const stamp = Date.now() % 100000;
 

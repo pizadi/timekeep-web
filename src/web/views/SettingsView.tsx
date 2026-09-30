@@ -37,6 +37,8 @@ export default function SettingsView({ onClose, currentTheme }: { onClose: () =>
   const settings = useStore((s) => s.settings);
   const [sessions, setSessions] = useState<AuthSessionRow[]>([]);
   const [confirmDelete, setConfirmDelete] = useState('');
+  // F7: the destructive route requires the CURRENT password (step-up)
+  const [deletePassword, setDeletePassword] = useState('');
   const [notifState, setNotifState] = useState<string>(
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
   );
@@ -151,7 +153,7 @@ export default function SettingsView({ onClose, currentTheme }: { onClose: () =>
 
   async function deleteAccount() {
     try {
-      await api('/me', { method: 'DELETE' });
+      await api('/me', { method: 'DELETE', body: { current_password: deletePassword } });
       location.href = '/';
     } catch (e: any) {
       pushToast('error', e.message);
@@ -389,7 +391,21 @@ export default function SettingsView({ onClose, currentTheme }: { onClose: () =>
             onChange={(e) => setConfirmDelete(e.target.value)}
             aria-label="Confirm account deletion"
           />
-          <button className="btn danger" disabled={confirmDelete !== 'DELETE'} onClick={deleteAccount}>
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 160 }}
+            type="password"
+            placeholder="Your current password"
+            value={deletePassword}
+            onChange={(e) => setDeletePassword(e.target.value)}
+            aria-label="Current password for account deletion"
+            autoComplete="current-password"
+          />
+          <button
+            className="btn danger"
+            disabled={confirmDelete !== 'DELETE' || !deletePassword}
+            onClick={deleteAccount}
+          >
             Delete account
           </button>
         </div>
@@ -428,6 +444,8 @@ function AdminPanel() {
   const [busy, setBusy] = useState(false);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState('');
+  // F7: the acting admin must present their OWN current password for a reset
+  const [adminPassword, setAdminPassword] = useState('');
 
   useEffect(() => {
     void api<{ users: AdminUserRow[] }>('/admin/users')
@@ -477,10 +495,14 @@ function AdminPanel() {
   async function resetPassword(u: AdminUserRow) {
     setBusy(true);
     try {
-      await api(`/admin/users/${u.id}/password`, { method: 'POST', body: { password: resetPw } });
+      await api(`/admin/users/${u.id}/password`, {
+        method: 'POST',
+        body: { admin_current_password: adminPassword, password: resetPw },
+      });
       setUsers((prev) => prev!.map((x) => (x.id === u.id ? { ...x, must_change_password: true } : x)));
       setResetFor(null);
       setResetPw('');
+      setAdminPassword('');
       pushToast('info', `Temporary password set for "${u.username}" — they must change it at next login`);
     } catch (e: any) {
       pushToast('error', e.message);
@@ -557,6 +579,16 @@ function AdminPanel() {
               className="input"
               style={{ flex: 1, minWidth: 160 }}
               type="password"
+              placeholder={`Your admin password`}
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              aria-label="Your admin password (confirms the reset)"
+              autoComplete="current-password"
+            />
+            <input
+              className="input"
+              style={{ flex: 1, minWidth: 160 }}
+              type="password"
               placeholder={`Temporary password (min ${MIN_PASSWORD} chars)`}
               value={resetPw}
               onChange={(e) => setResetPw(e.target.value)}
@@ -564,7 +596,7 @@ function AdminPanel() {
             />
             <button
               className="btn small"
-              disabled={busy || resetPw.length < MIN_PASSWORD}
+              disabled={busy || resetPw.length < MIN_PASSWORD || !adminPassword}
               onClick={() => {
                 const u = users!.find((x) => x.id === resetFor);
                 if (u) void resetPassword(u);

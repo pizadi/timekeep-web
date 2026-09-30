@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { WorkerType, UserInfo } from '../env';
 import { jsonError } from '../env';
 import { requireAuth, limitWrites, clearSessionCookie } from '../middleware';
-import { profilePatchSchema, passwordChangeSchema } from '../validators';
+import { deleteAccountSchema, profilePatchSchema, passwordChangeSchema } from '../validators';
 import { isValidTimezone } from '../../shared/time';
 import { passwordProblem } from '../../shared/validation';
 import { commitWithEvents, wipeHub, revokeHub, EventDraft } from '../events';
@@ -113,10 +113,21 @@ meRoutes.post('/me/password', async (c) => {
 
 /** Hard delete: FK cascades remove every user-owned row (FR-A8, NFR-4). */
 meRoutes.delete('/me', async (c) => {
+  // F7 (step-up): the current password is required — a stolen or left-open
+  // session (30-day cookie, silent rotation) must not be able to irreversibly
+  // delete the account without knowing anything. Mirrors /me/password's own
+  // check below.
+  const parsed = deleteAccountSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   // the admin account must not be deletable — with no self-signup, deleting it
   // would leave the installation permanently locked out
   if (c.get('user').role === 'admin') return jsonError(403, 'forbidden', 'the admin account cannot be deleted');
   const userId = c.get('user').id;
+  const row = await c.env.DB.prepare('SELECT password_hash FROM users WHERE id = ?1')
+    .bind(userId)
+    .first<{ password_hash: string | null }>();
+  if (!row?.password_hash || !(await verifyPassword(parsed.data.current_password, row.password_hash)))
+    return jsonError(403, 'bad_password', 'current password is incorrect');
   const now = Date.now();
   // deletion request log (route + user id only — NFR-3 log hygiene)
   console.log(JSON.stringify({ evt: 'account_delete_requested', user_id: userId, at: new Date().toISOString() }));

@@ -7,7 +7,7 @@ import { jsonError } from '../env';
 import { requireAuth, requireAdmin, rateLimitHit, rateRules, tooMany, clientIp } from '../middleware';
 import { adminCreateSchema, adminPatchSchema, adminResetSchema } from '../validators';
 import { isValidEmail, passwordProblem } from '../../shared/validation';
-import { hashPassword, isCommonPassword } from '../auth';
+import { hashPassword, verifyPassword, isCommonPassword } from '../auth';
 import { isUniqueConstraintError } from '../rules';
 import { revokeHub } from '../events';
 import { ulid } from '../../shared/ids';
@@ -102,6 +102,15 @@ adminRoutes.post('/admin/users/:id/password', async (c) => {
   const parsed = adminResetSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return jsonError(422, 'validation', 'invalid payload');
   if (id === c.get('user').id) return jsonError(422, 'validation', 'use change-password for your own account');
+
+  // F7 (step-up): the acting admin must present their OWN current password —
+  // this action revokes the target's sessions and hands over the account, so
+  // a stolen admin session alone must not be enough.
+  const acting = await c.env.DB.prepare('SELECT password_hash FROM users WHERE id = ?1')
+    .bind(c.get('user').id)
+    .first<{ password_hash: string | null }>();
+  if (!acting?.password_hash || !(await verifyPassword(parsed.data.admin_current_password, acting.password_hash)))
+    return jsonError(403, 'bad_password', 'your current password is incorrect');
 
   const pwProblem = passwordProblem(parsed.data.password, isCommonPassword);
   if (pwProblem) return jsonError(422, 'validation', pwProblem);

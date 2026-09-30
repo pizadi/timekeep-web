@@ -128,7 +128,9 @@ async function main() {
   const linkC = await call(c.jar, 'POST', `/groups/${gidC}/links`, {});
   check('invite link minted', linkC.status === 201, `status ${linkC.status}`);
 
-  const delC = await call(c.jar, 'DELETE', '/me');
+  // F7: account deletion now requires the CURRENT password (makeUser rotates
+  // each user's to `${PASS}-work`)
+  const delC = await call(c.jar, 'DELETE', '/me', { current_password: `${PASS}-work` });
   check(
     'account with goal/group/invite/link can be deleted (F1)',
     delC.status === 200,
@@ -235,7 +237,7 @@ async function main() {
   const beforeB2 = await minsFor(b.jar, tid2);
   check('B has time on the second shared task', beforeB2 > 0, `${beforeB2} min`);
 
-  const delA = await call(a.jar, 'DELETE', '/me');
+  const delA = await call(a.jar, 'DELETE', '/me', { current_password: `${PASS}-work` });
   check(
     'the creator (owner of a group with members) can delete the account (F1)',
     delA.status === 200,

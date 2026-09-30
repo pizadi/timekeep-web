@@ -9,6 +9,8 @@ import {
   importTaskRow,
   importProjectRow,
   importSessionRow,
+  deleteAccountSchema,
+  adminResetSchema,
 } from '../src/worker/validators';
 import { LIMITS } from '../src/shared/constants';
 
@@ -81,6 +83,23 @@ describe('manual session schemas', () => {
   it('patch schema rejects clearing ended_at back to null', () => {
     const r = sessionPatchSchema.safeParse({ ended_at: null });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('step-up schemas (audit F7)', () => {
+  it('account deletion requires the current password', () => {
+    expect(deleteAccountSchema.safeParse({}).success).toBe(false);
+    expect(deleteAccountSchema.safeParse({ current_password: '' }).success).toBe(false);
+    expect(deleteAccountSchema.safeParse({ current_password: 'whatever-123' }).success).toBe(true);
+  });
+  it('admin reset requires the acting admin password AND a real new one', () => {
+    const ok = { admin_current_password: 'admin-pass-123', password: 'new-temp-pass-123' };
+    expect(adminResetSchema.safeParse(ok).success).toBe(true);
+    // missing/wrong-shaped step-up field
+    expect(adminResetSchema.safeParse({ password: ok.password }).success).toBe(false);
+    expect(adminResetSchema.safeParse({ admin_current_password: '', password: ok.password }).success).toBe(false);
+    // the new password keeps the min-10 rule
+    expect(adminResetSchema.safeParse({ ...ok, password: 'short' }).success).toBe(false);
   });
 });
 

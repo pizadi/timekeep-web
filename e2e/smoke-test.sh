@@ -81,7 +81,7 @@ ensure_user() {
   if ! echo "$r" | grep -q '"username"'; then
     local uid
     uid=$(req $JAR_A $DEV_A GET /admin/users | python3 -c "import json,sys; print([u['id'] for u in json.load(sys.stdin)['users'] if u['username']=='$1'][0])")
-    req $JAR_A $DEV_A POST /admin/users/$uid/password "{\"password\":\"$3\"}" > /dev/null
+    req $JAR_A $DEV_A POST /admin/users/$uid/password "{\"admin_current_password\":\"$ADMIN_PASSWORD\",\"password\":\"$3\"}" > /dev/null
     r="{\"username\":\"$1\",\"reset\":true}"
   fi
   echo "$r"
@@ -216,7 +216,7 @@ req $JAR_A $DEV_A PATCH /admin/users/$MID '{"active":1}' > /dev/null
 
 echo "== admin resets dana's password → sessions revoked + forced change =="
 DID=$(req $JAR_A $DEV_A GET /admin/users | python3 -c "import json,sys; print([u['id'] for u in json.load(sys.stdin)['users'] if u['username']=='dana'][0])")
-req $JAR_A $DEV_A POST /admin/users/$DID/password '{"password":"temporary-dana-pass-7"}' > /dev/null
+req $JAR_A $DEV_A POST /admin/users/$DID/password "{\"admin_current_password\":\"$ADMIN_PASSWORD\",\"password\":\"temporary-dana-pass-7\"}" > /dev/null
 echo "-- dana's old session revoked:"
 curl -s -o /dev/null -w "%{http_code}\n" -b $JAR $BASE/me -H "x-device-id: $DEV"
 echo "-- temp password works, flag set, change it back:"
