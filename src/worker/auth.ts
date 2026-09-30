@@ -6,6 +6,7 @@
 
 import type { Env } from './env';
 export type { Env };
+import { isValidEmail } from '../shared/validation';
 
 const enc = new TextEncoder();
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -22,6 +23,26 @@ const COMMON = new Set(
     .filter((l) => l.length > 0),
 );
 export const isCommonPassword = (pw: string) => COMMON.has(pw);
+
+/**
+ * The user's real mailbox address, or null when they have none (F15).
+ *
+ * Users without a mailbox store their '@'-free username in the legacy `email`
+ * column (it doubles as the unique login identifier), so "is this a real
+ * address" used to be re-derived at every send site with `includes('@')` — a
+ * check that is easy to forget in new code (reset-request could fire mail at
+ * a pre-verified user's username string). `login_email` (migration 0013) is
+ * now the authoritative marker; the COALESCE-style fallback to `email` covers
+ * rows written before the backfill in a database that missed the migration.
+ * EVERY mail-sending path must go through this — never send to raw
+ * `user.email`.
+ */
+export function realEmail(
+  user: { login_email?: string | null; email?: string | null } | null | undefined,
+): string | null {
+  const e = (user?.login_email ?? user?.email ?? '').trim();
+  return e.includes('@') && isValidEmail(e) ? e : null;
+}
 
 export function randomToken(bytes = 32): string {
   const buf = new Uint8Array(bytes);

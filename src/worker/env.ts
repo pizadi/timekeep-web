@@ -52,6 +52,8 @@ export type WorkerType = {
       id: string;
       username: string;
       email: string;
+      /** the real mailbox, or null (F15) — `email` mirrors it or holds the username */
+      login_email: string | null;
       name: string;
       timezone: string;
       week_start: number;

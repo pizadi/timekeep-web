@@ -49,13 +49,24 @@ adminRoutes.post('/admin/users', async (c) => {
   const id = ulid(now);
   try {
     // users without a real email store their (unique, '@'-free) username in the
-    // email column — it doubles as the legacy unique login identifier
+    // email column — it doubles as the legacy unique login identifier. F15:
+    // `login_email` is the authoritative mailbox marker (null when there is
+    // none); the legacy `email` mirror is kept for the UNIQUE constraint,
+    // export payloads and the login identifier lookup.
     await c.env.DB.prepare(
-      `INSERT INTO users (id, email, username, password_hash, name, timezone, week_start, theme,
+      `INSERT INTO users (id, email, login_email, username, password_hash, name, timezone, week_start, theme,
                           role, active, must_change_password, email_verified_at, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, 'UTC', 1, 'system', 'user', 1, 1, ?6, ?6, ?6)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'UTC', 1, 'system', 'user', 1, 1, ?7, ?7, ?7)`,
     )
-      .bind(id, email ?? username, username, await hashPassword(password, Number(c.env.PBKDF2_ITERATIONS)), name, now)
+      .bind(
+        id,
+        email ?? username,
+        email ?? null,
+        username,
+        await hashPassword(password, Number(c.env.PBKDF2_ITERATIONS)),
+        name,
+        now,
+      )
       .run();
   } catch (e: any) {
     if (isUniqueConstraintError(e)) return jsonError(409, 'conflict', 'that username or email is already taken');

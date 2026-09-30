@@ -288,6 +288,35 @@ on the topbar/toasts/chat dock, `touch-action: manipulation` on controls
 (the map canvas keeps `touch-action: none` for pan/wiring), toasts lift above
 the chat launcher on phones.
 
+## Scale envelope
+
+Deliberate ceilings in the current design — none of these are bugs; each names
+the trigger for revisiting:
+
+- **`/bootstrap` returns the whole task tree in one shot.** Fast for up to a
+  few thousand tasks (one query, no waterfalls); an account whose tree grows
+  an order of magnitude beyond that should paginate the endpoint. Trigger:
+  cold-load p95 degrades on real accounts.
+- **Export/import buffer the whole payload in memory.** The practical Worker
+  limit is ~100k sessions per file; beyond that, exports should stream or
+  stage through the R2 dump path (the Queues-based async export of FR-D1 is
+  stubbed by the dump machinery). Trigger: an export/restore hitting the
+  Worker memory cap.
+- **The dependency map is plain SVG at ~300 nodes.** A canvas renderer is the
+  next step when profiling demands it (the layout engine is already
+  decoupled). Trigger: map interactions dropping below ~30 fps on a real
+  project.
+- **`run_worker_first: true` routes every asset request through the Worker.**
+  Kept deliberately (audit F17): the Worker applies the security-header set
+  (CSP, HSTS, framing/referrer policy) to the SPA shell and every SPA route —
+  with `not_found_handling: single-page-application`, arbitrary client-side
+  routes serve `index.html`, and a path-scoped `run_worker_first` glob cannot
+  enumerate them, so any missed route would serve the shell with no security
+  headers. The cost is one Worker invocation per asset request; the hashed
+  assets themselves are immutable and cached. Trigger: asset traffic
+  dominating the request bill (then revisit the glob for `/assets/*` ONLY,
+  accepting header-less static files as a documented trade-off).
+
 ## Project layout
 
 ```

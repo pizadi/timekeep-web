@@ -24,7 +24,7 @@ import type { Env } from './env';
  */
 export const DUMP_TABLES: Record<string, string> = {
   users:
-    'id, email, username, name, timezone, week_start, week_start_dow, theme, role, active, must_change_password, email_verified_at, created_at, updated_at',
+    'id, email, login_email, username, name, timezone, week_start, week_start_dow, theme, role, active, must_change_password, email_verified_at, created_at, updated_at',
   oauth_accounts: 'provider, provider_uid, user_id',
   projects: 'id, user_id, name, color, archived, position, created_at, updated_at, visibility, deleted_at, group_id',
   tasks: 'id, user_id, project_id, parent_id, name, notes, done, position, created_at, updated_at, deleted_at',

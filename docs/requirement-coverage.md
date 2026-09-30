@@ -82,9 +82,13 @@ Items from the repo audit, re-verified against the current tree and closed:
   label is accepted ONLY for verifying rows written before the rename.
 - The map targets 300 nodes/30 fps with plain SVG; a canvas renderer would be
   the next step if profiling demands it.
-- `users.email` doubles as the login identifier for users without a real
-  mailbox (username stored there, `@`-free) — every email path must keep the
-  `includes('@')` convention in mind.
+- `users.email` doubled as the login identifier for users without a real
+  mailbox (username stored there, `@`-free). Since migration 0013 (audit F15)
+  the nullable `users.login_email` is the authoritative mailbox marker — mail
+  paths derive the address via `realEmail()` (`src/worker/auth.ts`), never
+  from raw `user.email`. The legacy mirror is kept for the UNIQUE constraint,
+  the export payload and the login identifier lookup; a later release can
+  drop it.
 - `run_worker_first: true` routes every static-asset request through the Worker
   (uniform security headers on the SPA shell); a latency/cost tax worth
   re-measuring if asset traffic dominates.

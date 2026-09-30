@@ -245,7 +245,9 @@ function Shell({ route }: { route: string }) {
             You're offline — changes are blocked until the connection returns. The running timer keeps ticking.
           </div>
         )}
-        {/* legacy accounts only — admin-created users are pre-verified and have no mailbox */}
+        {/* legacy accounts only — admin-created users are pre-verified and have no mailbox.
+            (F15: `email` mirrors `login_email` for real addresses and holds the username
+            otherwise, so the '@' check stays correct even after migration 0013.) */}
         {user.email.includes('@') && user.email_verified_at === null && (
           <div className="banner" role="status">
             Please verify your email — check your inbox for the verification link.

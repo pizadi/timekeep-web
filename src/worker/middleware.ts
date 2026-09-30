@@ -221,7 +221,7 @@ export const requireAuth = createMiddleware<WorkerType>(async (c, next) => {
     await c.env.DB.prepare('UPDATE auth_sessions SET last_seen_at = ?1 WHERE id = ?2').bind(now, session.id).run();
   }
   const user = await c.env.DB.prepare(
-    `SELECT id, username, email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
+    `SELECT id, username, email, login_email, name, timezone, COALESCE(week_start_dow, week_start) AS week_start,
             theme, role, active, must_change_password, email_verified_at, created_at
      FROM users WHERE id = ?1`,
   )

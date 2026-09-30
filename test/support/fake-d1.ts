@@ -154,12 +154,14 @@ export function fakeD1(sessionRows: FakeSessionRow[] = [], userRows: FakeUserRow
         if (norm.includes('FROM users') && norm.includes('purpose')) {
           return null;
         }
-        if (norm.startsWith('SELECT id, email_verified_at, role, active FROM users')) {
+        if (norm.startsWith('SELECT id, email, login_email, email_verified_at, role, active FROM users')) {
           const [email] = stmt._args as string[];
           const row = [...users.values()].find((u) => u.email.toLowerCase() === String(email).toLowerCase());
           if (!row) return null;
           return {
             id: row.id,
+            email: row.email,
+            login_email: (row as any).login_email ?? (String(row.email).includes('@') ? row.email : null),
             email_verified_at: row.email_verified_at,
             role: row.role,
             active: row.active,

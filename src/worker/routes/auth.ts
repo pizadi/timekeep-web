@@ -5,7 +5,15 @@ import { Hono } from 'hono';
 import type { WorkerType, Env } from '../env';
 import { jsonError } from '../env';
 import { publicOriginStrict } from '../../shared/public-url';
-import { hashPassword, verifyPassword, randomToken, sha256Hex, getEmailSender, isCommonPassword } from '../auth';
+import {
+  hashPassword,
+  verifyPassword,
+  randomToken,
+  sha256Hex,
+  getEmailSender,
+  isCommonPassword,
+  realEmail,
+} from '../auth';
 import {
   requireAuth,
   setSessionCookie,
@@ -20,7 +28,7 @@ import {
 import { revokeHub } from '../events';
 
 import { loginSchema, verifyEmailSchema, resetRequestSchema, resetConfirmSchema } from '../validators';
-import { isValidEmail, passwordProblem } from '../../shared/validation';
+import { passwordProblem } from '../../shared/validation';
 import { SESSION_TTL_MS } from '../../shared/constants';
 
 export const authRoutes = new Hono<WorkerType>();
@@ -68,9 +76,10 @@ authRoutes.post('/auth/verify-email', async (c) => {
 // backs the app's verification banner for legacy accounts with a mailbox.
 authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
   const user = c.get('user');
-  const email = user.email ?? '';
-  if (!email.includes('@') || !isValidEmail(email))
-    return jsonError(422, 'no_email', 'this account has no email address to verify');
+  // F15: realEmail is the one address derivation — `user.email` may hold the
+  // user's '@'-free username (no mailbox)
+  const email = realEmail(user);
+  if (!email) return jsonError(422, 'no_email', 'this account has no email address to verify');
   if (user.email_verified_at) return c.json({ ok: true }); // already verified
 
   // Layered like reset-request: the per-IP fan-out budget first, then the
@@ -233,9 +242,22 @@ authRoutes.post('/auth/reset-request', async (c) => {
   const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
   if (rl) return tooMany(rl);
 
-  const user = await c.env.DB.prepare('SELECT id, email_verified_at, role, active FROM users WHERE email = ?1')
+  const user = await c.env.DB.prepare(
+    'SELECT id, email, login_email, email_verified_at, role, active FROM users WHERE email = ?1',
+  )
     .bind(email)
-    .first<{ id: string; email_verified_at: number | null; role: 'user' | 'admin'; active: 0 | 1 }>();
+    .first<{
+      id: string;
+      email: string;
+      login_email: string | null;
+      email_verified_at: number | null;
+      role: 'user' | 'admin';
+      active: 0 | 1;
+    }>();
+  // F15: the mailbox comes from realEmail — the input can be the user's
+  // '@'-free username (the legacy email mirror matches it), and a pre-verified
+  // user without a mailbox must take the skip branch, not receive mail
+  const mailTo = realEmail(user);
 
   // Identical response AND comparable wall-clock time whether or not the account
   // exists (FR-A5 AC, audit #3): the send moved onto waitUntil so the real path
@@ -243,7 +265,7 @@ authRoutes.post('/auth/reset-request', async (c) => {
   // the same token work the real path does — `POST /auth/login` already does
   // this for unknown users. Residual, stated rather than hidden: the real path
   // still performs one extra D1 insert (~1 ms).
-  if (!user || user.role === 'admin' || !user.active || !user.email_verified_at) {
+  if (!user || user.role === 'admin' || !user.active || !user.email_verified_at || !mailTo) {
     await sha256Hex(randomToken(32)); // admin has no mailbox; unverified is blocked (FR-A1)
     return c.json({ ok: true });
   }
@@ -275,7 +297,7 @@ authRoutes.post('/auth/reset-request', async (c) => {
   c.executionCtx.waitUntil(
     getEmailSender(c.env)
       .send(
-        email,
+        mailTo,
         'Reset your TimeKeep password',
         `Reset your password (valid 1 hour):\n${link}\n\nAll active sessions will be signed out.`,
       )
