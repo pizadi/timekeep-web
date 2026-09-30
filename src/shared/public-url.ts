@@ -36,3 +36,28 @@ export function publicOrigin(env: { APP_PUBLIC_URL?: string | null }, requestUrl
 export function secretLink(env: { APP_PUBLIC_URL?: string | null }, requestUrl: string, path: string, token: string) {
   return `${publicOrigin(env, requestUrl)}${path}?token=${encodeURIComponent(token)}`;
 }
+
+/**
+ * Fail-closed variant for the link-BUILDING call sites (audit F9): returns
+ * `null` instead of falling back to the request origin when `APP_PUBLIC_URL`
+ * is unset or invalid and `EMAIL_DEV_MODE !== '1'`. The caller must then send
+ * NO token link — log loudly, answer shape-identically, and move on. In dev
+ * mode the request-origin fallback stays: local dev needs no configuration and
+ * does not accept attacker-chosen Host headers.
+ */
+export function publicOriginStrict(
+  env: { APP_PUBLIC_URL?: string | null; EMAIL_DEV_MODE?: string },
+  requestUrl: string,
+): string | null {
+  const devMode = env.EMAIL_DEV_MODE === '1';
+  const fallback = () => new URL(requestUrl).origin;
+  const configured = (env.APP_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (!configured) return devMode ? fallback() : null;
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return devMode ? fallback() : null;
+    return parsed.origin;
+  } catch {
+    return devMode ? fallback() : null;
+  }
+}

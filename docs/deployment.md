@@ -43,26 +43,32 @@ npm run build && npx wrangler deploy -c wrangler.local.jsonc
 Live check: `GET /api/version` → `{name, version, build, now}` — `version`
 is the app semver, `build` the deploy SHA (`"dev"` for ad-hoc local builds).
 
-On first sign-in the seeded admin (`admin` / `changemeasap`) is forced to set
-a real password. Rotate it immediately on any real deployment — the default
-is public knowledge (see the [admin guide](admin-guide.md#admin-account-recovery)
-for recovery if it's ever lost). The daily cron verifies the seeded password
-against the admin hash and logs a `SECURITY_admin_default_password` warning
-while it still works, so check the logs after deploying.
+On first deploy the admin account has **no usable password** (migration 0012
+removed the once-shipped credential — it was public knowledge in the repo,
+audit F5). Set it with the bootstrap script:
+
+```bash
+proxychains npm run admin:create -- --remote   # prints the generated passphrase ONCE
+```
+
+The daily cron logs `SECURITY_admin_unusable` while the admin hash is NULL, so
+check the logs after deploying. See the
+[admin guide](admin-guide.md#admin-account-recovery) for recovery if the
+credential is ever lost.
 
 ## Configuration reference
 
 All of these are optional — the app degrades gracefully:
 
-| Name                   | Kind         | Effect                                                                                                                                 |
-| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `RESEND_API_KEY`       | secret       | verification/password-reset mail via Resend. Absent → mail simply unavailable (the admin can still reset passwords from the panel)     |
-| `TURNSTILE_SECRET_KEY` | secret       | bot defense on auth endpoints. Absent → off                                                                                            |
-| `TURNSTILE_SITE_KEY`   | var (public) | enables the widget in the UI + CSP additions                                                                                           |
-| `FROM_EMAIL`           | var          | mail sender address                                                                                                                    |
-| `PBKDF2_ITERATIONS`    | var          | KDF rounds; keep `600000` in prod, lower only for local dev                                                                            |
-| `ALLOWED_ORIGINS`      | var          | comma-separated origins allowed for state-changing requests (defaults to the request origin; set it when serving from a custom domain) |
-| `EMAIL_DEV_MODE`       | var          | dev only — logs mail links to the console instead of sending                                                                           |
+| Name                   | Kind         | Effect                                                                                                                                                                                                                                  |
+| ---------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`       | secret       | verification/password-reset mail via Resend. Absent → mail simply unavailable (the admin can still reset passwords from the panel)                                                                                                      |
+| `TURNSTILE_SECRET_KEY` | secret       | bot defense on auth endpoints. Absent → off. **Recommended in production** (the deploy workflow warns when absent): without it, the login lockout keys (per-IP, per-(identifier, ip), identifier-wide ceiling) are the only bot defense |
+| `TURNSTILE_SITE_KEY`   | var (public) | enables the widget in the UI + CSP additions                                                                                                                                                                                            |
+| `FROM_EMAIL`           | var          | mail sender address                                                                                                                                                                                                                     |
+| `PBKDF2_ITERATIONS`    | var          | KDF rounds; keep `600000` in prod, lower only for local dev                                                                                                                                                                             |
+| `ALLOWED_ORIGINS`      | var          | comma-separated origins allowed for state-changing requests (defaults to the request origin; set it when serving from a custom domain)                                                                                                  |
+| `EMAIL_DEV_MODE`       | var          | dev only — logs mail links to the console instead of sending                                                                                                                                                                            |
 
 ## Plan requirements
 
@@ -190,9 +196,13 @@ One-time setup:
 4. **Repo variable `CF_APP_PUBLIC_URL`** — the canonical `https://` origin for
    password-reset and verification emails. Those links carry a bearer token, so
    the origin is deployment configuration rather than something derived from the
-   request: unset, the Worker falls back to the request's origin and a Host
-   header the deployment accepts could aim the token at another domain. The
-   deploy run warns when it is empty.
+   request: unset, a Host header the deployment accepts could aim the token at
+   another domain. **Fail-closed since 0.6.1.dev4 (audit F9):** with it unset
+   and `EMAIL_DEV_MODE` off, the Worker REFUSES to send token mail entirely
+   (logged as `SECURITY_public_url_unset`) instead of falling back to the
+   request origin. The deploy run also warns when it is empty — the warning is
+   advisory; failing the deploy on it is not (decide by risk when serving from
+   a custom domain).
 5. **Environment** — Settings → Environments → create `production`, add the
    required reviewer(s).
 
@@ -228,18 +238,20 @@ code rollback never requires a DB rollback.
 
 ## Admin account recovery
 
-The admin username has no mailbox, so reset mail doesn't apply. To reset a
-lost admin password: delete the admin row, then re-run the seeded `INSERT`
-from `migrations/0002_usernames_admin.sql`:
+The admin username has no mailbox, so reset mail doesn't apply. If the admin
+password is ever lost, set a new one with the bootstrap script — `--force`
+replaces the existing credential:
 
 ```bash
-npx wrangler d1 execute timekeep --remote -c wrangler.local.jsonc \
-  --command "DELETE FROM users WHERE username='admin'"
-# re-apply the INSERT from migrations/0002_usernames_admin.sql the same way
+proxychains npm run admin:create -- --remote --force
 ```
 
-That restores the default password `changemeasap` (forced change at next
-login).
+It prints a generated passphrase once (or pipe a chosen one in with
+`--stdin`). There is no default password to look up — a fresh install's admin
+hash is NULL and cannot log in until this script runs. Only if the admin row
+itself was deleted: re-insert it with `password_hash = NULL` (copy the INSERT
+from `migrations/0002_usernames_admin.sql`, but use NULL for the hash), then
+run the script.
 
 ## Custom domain
 

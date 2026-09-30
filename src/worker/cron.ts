@@ -1,13 +1,9 @@
 // Cron Trigger (daily, FR-D3): logical dump → R2 (30-day retention), sync_log
 // prune (keeps 2 h of events per user for reconnect deltas, FR-N3), plus GC
 // of expired auth sessions, email tokens and rate-limit counters. Also warns
-// when the seeded admin password is still in use (audit #4).
+// when the admin account has no usable credential (audit F5).
 // Idempotent + resumable (NFR-2).
 import type { Env } from './env';
-import { verifyPassword } from './auth';
-
-/** The password `migrations/0002_usernames_admin.sql` seeds for `admin`. */
-const SEEDED_ADMIN_PASSWORD = 'changemeasap';
 
 /**
  * The dump manifest: every persistent table → its exact SELECT column list,
@@ -67,26 +63,26 @@ export function tableScan(cursor: number): { where: string; order: string; binds
 }
 
 /**
- * Loud warning if the seeded admin credential is still in place (audit #4).
+ * Loud warning while the admin account has NO usable credential (audit F5).
  *
- * The hash can't be compared to a fixed string — every account gets a random
- * salt — so this is a real `verifyPassword` of the known default, once a day
- * (6 chained 100k rounds). Cheap enough to run unconditionally, and it turns
- * "nobody noticed" into a log line. Not a lockout: the flag is set, the deploy
- * isn't blocked.
+ * Migration 0012 nulls the seeded password hash, and nothing else can log in
+ * with a NULL hash — so until `npm run admin:create` sets the first real
+ * credential, the instance has no administrator. Once a credential exists this
+ * check goes quiet: whether the hash is "still the seeded one" is no longer
+ * detectable (nor needs to be — 0012 removed that state permanently).
+ * Not a lockout: the flag is set, the deploy isn't blocked.
  */
-export async function warnOnDefaultAdminPassword(env: Env): Promise<boolean> {
+export async function warnAdminUnusable(env: Env): Promise<boolean> {
   const row = await env.DB.prepare(
     "SELECT password_hash FROM users WHERE username = 'admin' AND role = 'admin' LIMIT 1",
-  ).first<{ password_hash: string }>();
-  if (!row?.password_hash) return false;
-  if (!(await verifyPassword(SEEDED_ADMIN_PASSWORD, row.password_hash))) return false;
+  ).first<{ password_hash: string | null }>();
+  if (row?.password_hash) return false;
   console.warn(
     JSON.stringify({
-      evt: 'SECURITY_admin_default_password',
+      evt: 'SECURITY_admin_unusable',
       at: Date.now(),
       message:
-        'the admin account still uses the seeded default password — rotate it now (Settings → account, or the admin guide)',
+        'the admin account has NO usable password (migration 0012 removed the shipped credential) — run `npm run admin:create` to set one. Until then nobody can administer this instance.',
     }),
   );
   return true;
@@ -95,8 +91,8 @@ export async function warnOnDefaultAdminPassword(env: Env): Promise<boolean> {
 export async function runDailyCron(env: Env): Promise<void> {
   const now = Date.now();
 
-  // 0. operational signal: is the public default admin password still live?
-  await warnOnDefaultAdminPassword(env).catch(() => {
+  // 0. operational signal: does the admin account have a usable credential?
+  await warnAdminUnusable(env).catch(() => {
     /* never fail the cron for a check */
   });
 

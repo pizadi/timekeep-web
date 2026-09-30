@@ -77,17 +77,11 @@ async function adminSession() {
   const adminPw = process.env.ADMIN_PASSWORD ?? 'purple-marmalade-admin-42';
   let r = await login(s, process.env.ADMIN_USERNAME ?? 'admin', adminPw);
   if (r.status !== 200) {
-    // first run after a fresh seed: replace the default password
-    r = await login(s, 'admin', 'changemeasap');
-    if (r.status !== 200 || !r.data?.must_change_password)
-      throw new Error(`admin bootstrap failed: ${JSON.stringify(r.data)}`);
-    const ch = await raw(s, '/me/password', {
-      method: 'POST',
-      body: { current_password: 'changemeasap', password: adminPw },
-    });
-    if (ch.status !== 200) throw new Error('admin password change failed');
-    r = await login(s, 'admin', adminPw);
-    if (r.status !== 200) throw new Error('admin re-login failed');
+    // F5: the seeded default no longer exists (migration 0012 nulled it) —
+    // smoke-test.sh bootstraps the admin credential via `npm run admin:create`.
+    throw new Error(
+      `admin login failed (${r.status}) — run smoke-test.sh first (it bootstraps the admin credential via admin:create)`,
+    );
   }
   return s;
 }

@@ -1,6 +1,6 @@
 {
   "name": "timekeep-web",
-  "version": "0.6.1.dev3",
+  "version": "0.6.1.dev4",
   "private": true,
   "engines": {
     "node": ">=22.12.0"
@@ -19,6 +19,7 @@
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply timekeep --local",
     "db:migrate:remote": "wrangler d1 migrations apply timekeep --remote",
+    "admin:create": "node --experimental-strip-types scripts/create-admin.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

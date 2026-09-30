@@ -1,11 +1,12 @@
 #!/bin/bash
 # TimeKeep Web — end-to-end API smoke test against `wrangler dev` (local D1 + DO).
-# Accounts are admin-managed (no self-signup): the script logs in as the seeded
-# admin, creates two users, then exercises the API as a normal user.
+# Accounts are admin-managed (no self-signup): the script bootstraps the admin
+# credential via `npm run admin:create` (migration 0012 removed the shipped
+# one — audit F5), creates two users, then exercises the API as a normal user.
 #
 # Env overrides: ADMIN_USERNAME (default "admin"), ADMIN_PASSWORD (default
-# "purple-marmalade-admin-42"). On first run the script changes the seeded
-# default password ("changemeasap") to ADMIN_PASSWORD; later runs reuse it.
+# "purple-marmalade-admin-42"). On a fresh database the script sets the admin
+# password to ADMIN_PASSWORD via admin:create; later runs reuse it.
 set -e
 BASE=http://127.0.0.1:8787/api
 ORIGIN=http://127.0.0.1:8787
@@ -52,22 +53,21 @@ echo "== no self-signup: /auth/signup must 404 =="
 curl -s -o /dev/null -w "%{http_code}\n" -X POST $BASE/auth/signup -H "content-type: application/json" \
   -d '{"username":"x","password":"not-gonna-work-123"}'
 
-echo "== admin login (seeded account; first run replaces the default password) =="
+echo "== admin login (bootstrapped via admin:create — no shipped credential, audit F5) =="
 LOGIN=$(curl -s -c $JAR_A -X POST $BASE/auth/login -H "content-type: application/json" \
   -d "{\"identifier\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}")
 if ! echo "$LOGIN" | grep -q '"ok":true'; then
-  # first run: sign in with the seeded default ("changemeasap", forced change)
-  # and set ADMIN_PASSWORD for this and future runs
-  LOGIN=$(curl -s -c $JAR_A -X POST $BASE/auth/login -H "content-type: application/json" \
-    -d '{"identifier":"admin","password":"changemeasap"}')
-  echo "$LOGIN" | grep -q '"must_change_password":true' || { echo "FAIL admin login: $LOGIN"; exit 1; }
-  T=$(grep tk_csrf $JAR_A | awk '{print $NF}')
-  CH=$(curl -s -b $JAR_A -c $JAR_A -X POST $BASE/me/password -H "content-type: application/json" \
-    -H "x-csrf-token: $T" -d "{\"current_password\":\"changemeasap\",\"password\":\"$ADMIN_PASSWORD\"}")
-  echo "$CH" | grep -q '"ok":true' || { echo "FAIL admin password change: $CH"; exit 1; }
+  # No usable admin credential: on a fresh database migration 0012 has nulled
+  # the once-seeded hash (there IS no seeded default anymore), and on an old
+  # dev database the current password may simply not be $ADMIN_PASSWORD.
+  # Either way, establish the credential via scripts/create-admin.ts. --force
+  # is correct here by construction: this branch only runs after the login
+  # above FAILED, so overwriting is exactly the intent.
+  echo "admin login failed — bootstrapping via npm run admin:create (audit F5)"
+  printf '%s' "$ADMIN_PASSWORD" | npm run admin:create -- --local --stdin --force > /dev/null
   LOGIN=$(curl -s -c $JAR_A -X POST $BASE/auth/login -H "content-type: application/json" \
     -d "{\"identifier\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}")
-  echo "$LOGIN" | grep -q '"ok":true' || { echo "FAIL admin re-login: $LOGIN"; exit 1; }
+  echo "$LOGIN" | grep -q '"ok":true' || { echo "FAIL admin login: $LOGIN"; exit 1; }
 fi
 echo "admin ok: $(echo "$LOGIN" | head -c 140)"
 
@@ -229,7 +229,7 @@ curl -s -c $JAR -X POST $BASE/auth/login -H "content-type: application/json" \
 CH=$(req $JAR $DEV POST /me/password '{"current_password":"temporary-dana-pass-7","password":"purple-marmalade-tuesday"}')
 echo "$CH" | grep -q '"ok":true' || { echo "FAIL dana password change back: $CH"; exit 1; }
 
-echo "== rate limiting (login 10/15min per identifier) =="
+echo "== rate limiting (login lockouts exist; e2e runs with the RL_LOGIN_* overrides raised) =="
 for i in $(seq 1 11); do
   CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/auth/login -H "content-type: application/json" -d '{"identifier":"nobody@example.com","password":"wrong-password-123"}')
   printf "%s " "$CODE"

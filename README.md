@@ -35,13 +35,15 @@ Chart.js dashboards, [Vitest](https://vitest.dev) unit tests.
 ```bash
 npm install
 npm run db:migrate:local        # apply the D1 schema to the local database
+npm run admin:create            # set the admin credential (printed once — there is no default)
 npm run dev:worker              # wrangler dev on :8787 (API + SPA)
 ```
 
-Open **http://localhost:8787** and sign in as `admin` / `changemeasap`
-(forced password change on first login). Create users from
-**Settings → Admin — users**. Optionally run `npm run dev:web` for the Vite
-dev server with hot reload (proxies `/api` to :8787).
+Open **http://localhost:8787** and sign in as `admin` with the credential
+`admin:create` printed. There is no default password and no sign-up form —
+create users from **Settings → Admin — users**. Optionally run
+`npm run dev:web` for the Vite dev server with hot reload (proxies `/api` to
+:8787).
 
 ## Deploy to Cloudflare
 

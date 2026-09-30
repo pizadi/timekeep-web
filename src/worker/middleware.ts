@@ -312,7 +312,19 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
   const n = (v: string | undefined, d: number) => (Number(v) > 0 ? Number(v) : d);
   return {
     loginIp: { name: 'login_ip', limit: n(env.RL_LOGIN_IP, 10), windowMs: 15 * 60_000 },
-    loginEmail: { name: 'login_email', limit: n(env.RL_LOGIN_EMAIL, 10), windowMs: 15 * 60_000 },
+    // F6 (audit): the old per-identifier counter (login_email, 10/15min on the
+    // bare identifier) let anyone who KNEW a username keep that username locked
+    // out — usernames aren't secret, and a looping attacker didn't even need
+    // many IPs. Two counters now:
+    //  - login_user_ip: one source's failures against one identifier. A single
+    //    attacker exhausts only their own pair; the victim's usual network is
+    //    never charged for it.
+    //  - login_identity: an identifier-wide ceiling, 4× looser, bounding a
+    //    DISTRIBUTED attack's volume on one account. Some victim-lockout window
+    //    is inherent to any per-account failure counter; this shrinks the
+    //    blast radius while keeping brute force bounded.
+    loginUserIp: { name: 'login_user_ip', limit: n(env.RL_LOGIN_USER_IP, 10), windowMs: 15 * 60_000 },
+    loginIdentity: { name: 'login_identity', limit: n(env.RL_LOGIN_IDENTITY, 40), windowMs: 15 * 60_000 },
     resetEmail: { name: 'reset_email', limit: n(env.RL_RESET_EMAIL, 5), windowMs: 3600_000 },
     // Password-reset fan-out: the per-address rule above stops one mailbox being
     // spammed, but nothing stopped ONE source asking for many distinct
@@ -353,10 +365,10 @@ export const rateRules = (env: Partial<Env>): Record<string, RateRule> => {
  * The counter is ONE atomic D1 upsert … RETURNING — D1 serializes statements per
  * row, so the increment cannot race (the previous KV get→put implementation let
  * concurrent requests read the same count and exceed every limit). Known
- * trade-off (documented): the per-identifier login rule means 10 failed attempts
- * lock a known username out for 15 min — distributed lockout-DoS is inherent to
- * per-account failure counters; production mitigates with Turnstile on the login
- * form.
+ * trade-off (documented, audit F6): per-account failure counters can lock a
+ * victim out — mitigated by keying the tight counter on (identifier, ip) with
+ * only a loose identifier-wide ceiling, and by Turnstile on the login form in
+ * production.
  */
 export async function rateLimitHit(env: Env, rule: RateRule, subject: string): Promise<number | null> {
   const now = Date.now();

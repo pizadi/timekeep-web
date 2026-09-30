@@ -13,14 +13,14 @@ Setting up and working on TimeKeep Web locally.
 ```bash
 npm install
 npm run db:migrate:local        # apply the D1 schema to the local database
+npm run admin:create            # set the admin credential (printed once)
 npm run dev:worker              # wrangler dev on :8787 (API + SPA)
 ```
 
-Open **http://localhost:8787** and sign in with the seeded admin account:
-
-- username: `admin`
-- password: `changemeasap` — you are required to set your own password on
-  this first login
+Open **http://localhost:8787** and sign in as `admin` with the credential
+`admin:create` printed. There is no default password (migration 0012 removed
+the shipped one — audit F5): a fresh install's admin row has a NULL hash,
+which can never log in until `admin:create` runs.
 
 There is no sign-up form. Create users from **Settings → Admin — users** (see
 the [admin guide](admin-guide.md)).
@@ -78,14 +78,14 @@ build`. There is no lint/format tooling configured.
 Copy `.dev.vars.example` → `.dev.vars` (gitignored, never commit). Everything
 is optional in dev; the app degrades gracefully:
 
-| Var                                                              | Effect                                                                                                                                                |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PBKDF2_ITERATIONS=1000`                                         | fast hashing for local logins (prod uses 600000)                                                                                                      |
-| `EMAIL_DEV_MODE=1`                                               | prints verification/reset links to the Worker console — API responses never carry live token links                                                    |
-| `FROM_EMAIL`                                                     | sender address for dev mail output                                                                                                                    |
-| `TURNSTILE_SECRET_KEY` / `TURNSTILE_SITE_KEY`                    | widget off when absent                                                                                                                                |
-| `RESEND_API_KEY`                                                 | absent → password-reset mail unavailable                                                                                                              |
-| `RL_LOGIN_IP` / `RL_LOGIN_EMAIL` / `RL_ADMIN_IP` / `RL_TOKEN_IP` | rate-limit overrides for e2e hammering — set the first three high; leave `RL_TOKEN_IP` alone when running `regression-check.mjs` (it expects the 429) |
+| Var                                                                                      | Effect                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PBKDF2_ITERATIONS=1000`                                                                 | fast hashing for local logins (prod uses 600000)                                                                                                                                                                                             |
+| `EMAIL_DEV_MODE=1`                                                                       | prints verification/reset links to the Worker console — API responses never carry live token links                                                                                                                                           |
+| `FROM_EMAIL`                                                                             | sender address for dev mail output                                                                                                                                                                                                           |
+| `TURNSTILE_SECRET_KEY` / `TURNSTILE_SITE_KEY`                                            | widget off when absent                                                                                                                                                                                                                       |
+| `RESEND_API_KEY`                                                                         | absent → password-reset mail unavailable                                                                                                                                                                                                     |
+| `RL_LOGIN_IP` / `RL_LOGIN_USER_IP` / `RL_LOGIN_IDENTITY` / `RL_ADMIN_IP` / `RL_TOKEN_IP` | rate-limit overrides for e2e hammering — set the first four high; leave `RL_TOKEN_IP` alone when running `regression-check.mjs` (it expects the 429). The login lockouts: per-IP, per-(identifier, ip) pair and identifier-wide ceiling (F6) |
 
 ## Migrations
 

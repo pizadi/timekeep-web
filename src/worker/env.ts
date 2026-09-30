@@ -21,7 +21,9 @@ export interface Env {
   TURNSTILE_SITE_KEY?: string;
   // optional dev/test overrides for NFR-3 rate limits (see middleware.rateRules)
   RL_LOGIN_IP?: string;
-  RL_LOGIN_EMAIL?: string;
+  // login lockout keys (F6): per (identifier, ip) pair + identifier-wide ceiling
+  RL_LOGIN_USER_IP?: string;
+  RL_LOGIN_IDENTITY?: string;
   RL_RESET_EMAIL?: string;
   RL_RESET_IP?: string;
   RL_TOKEN_IP?: string;

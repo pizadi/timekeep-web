@@ -3,6 +3,8 @@
 --  - role ('user' | 'admin'), active (deactivation flag), must_change_password
 --  - seeds the initial admin: username 'admin', password 'changemeasap',
 --    forced to change it at first login (must_change_password = 1)
+--    (NOTE: 0012 later nulls this seeded hash — audit F5 stopped shipping a
+--    working credential; `npm run admin:create` sets the first real one)
 --
 -- The backfill is additive (no table rebuild) so FK children are untouched.
 -- Note for dev databases with messy test data: users whose email has no local

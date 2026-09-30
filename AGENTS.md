@@ -50,10 +50,11 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
 - E2E scripts (`e2e/smoke-test.sh`, `ws-test.mjs`, `roundtrip-test.mjs`, `undo-test.mjs`,
   `security-probes.mjs`, `regression-check.mjs`, `pomo-mode-test.mjs`) target `127.0.0.1:8787`
   and create their own accounts. They hammer the login endpoint — set `RL_LOGIN_IP`/
-  `RL_LOGIN_EMAIL`/`RL_ADMIN_IP` overrides from `.dev.vars.example` in `.dev.vars`
-  (but NOT `RL_TOKEN_IP` — `regression-check.mjs` expects the verify-email hammer to actually 429).
-  Run `smoke-test.sh` first — the other scripts reuse the users it creates; `roundtrip-test.mjs`
-  last (it deletes the `dana` account).
+  `RL_LOGIN_USER_IP`/`RL_LOGIN_IDENTITY`/`RL_ADMIN_IP` overrides from `.dev.vars.example` in
+  `.dev.vars` (but NOT `RL_TOKEN_IP` — `regression-check.mjs` expects the verify-email hammer to
+  actually 429). Run `smoke-test.sh` first — it bootstraps the admin credential via
+  `npm run admin:create` (no shipped default exists, audit F5); the other scripts reuse the users
+  it creates; `roundtrip-test.mjs` last (it deletes the `dana` account).
 - `wrangler dev`'s local proxy intermittently drops requests under rapid sequential e2e load
   (`Error: Network connection lost` → the script dies on a random step). Re-run before investigating.
 - **Killing a `wrangler dev` requires killing its SUPERVISOR, not the listener.** The process tree
@@ -147,9 +148,12 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   `WHERE user_id = ?`.
 - Subtasks are exactly two levels deep (enforced in validators and routes).
 - Admin-managed accounts: there is NO self-signup (`/auth/signup` returns 404 and no UI exists).
-  A single admin (`username: admin`) is seeded by `migrations/0002_usernames_admin.sql` with
-  password `changemeasap` + `must_change_password=1` (forced change at first login). Users are
-  created/deactivated via `/api/admin/*` (`routes/admin.ts`, `requireAdmin`).
+  A single admin (`username: admin`) is seeded by `migrations/0002_usernames_admin.sql`; since 0012
+  (audit F5) NO admin credential is shipped — 0012 nulls the once-seeded hash, a fresh install's
+  admin cannot log in until `npm run admin:create` sets the first one (generated, printed once;
+  `--stdin --force` variants used by the e2e suite), and the cron logs `SECURITY_admin_unusable`
+  while the hash is NULL. Users are created/deactivated via `/api/admin/*` (`routes/admin.ts`,
+  `requireAdmin`).
 - Login identifier is the `username` column (`users.email` is only an optional reset-mail address;
   users without one store their username there). The `must_change_password` gate in `requireAuth`
   blocks every endpoint except `GET /api/me`, `POST /api/me/password`, `POST /api/auth/logout`.

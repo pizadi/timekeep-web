@@ -85,7 +85,8 @@ jobs:
           EMAIL_DEV_MODE=1
           FROM_EMAIL=TimeKeep <dev@localhost>
           RL_LOGIN_IP=1000
-          RL_LOGIN_EMAIL=1000
+          RL_LOGIN_USER_IP=1000
+          RL_LOGIN_IDENTITY=1000
           RL_ADMIN_IP=1000
           EOF
       - name: E2E — attempt 1

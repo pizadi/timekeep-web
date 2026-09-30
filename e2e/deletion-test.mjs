@@ -21,7 +21,6 @@ const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787/api';
 const ORIGIN = new URL(BASE).origin;
 const WS_BASE = (process.env.TK_BASE ?? 'http://127.0.0.1:8787').replace(/^http/, 'ws');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'purple-marmalade-admin-42';
-const SEEDED_PASSWORD = 'changemeasap';
 const PASS = 'a-very-long-deletion-pass-1';
 
 let fail = 0;
@@ -88,20 +87,13 @@ async function minsFor(jar, taskId) {
 
 async function main() {
   const admin = { cookies: [] };
-  let li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
+  // F5: there is no seeded default anymore (migration 0012 nulled it) — the
+  // admin credential is bootstrapped by smoke-test.sh via `npm run admin:create`.
+  const li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
   if (li.status !== 200) {
-    li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
-    if (li.status === 200 && li.body?.must_change_password) {
-      const rot = await call(admin, 'POST', '/me/password', {
-        current_password: SEEDED_PASSWORD,
-        password: ADMIN_PASSWORD,
-      });
-      if (rot.status !== 200) throw new Error('admin password change failed');
-      li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
-    }
-  }
-  if (li.status !== 200) {
-    console.error(`deletion test: admin login failed (${li.status}) — run smoke-test.sh first`);
+    console.error(
+      `deletion test: admin login failed (${li.status}) — run smoke-test.sh first (it bootstraps the admin credential via admin:create)`,
+    );
     process.exit(1);
   }
 

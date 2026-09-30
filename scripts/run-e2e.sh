@@ -92,6 +92,10 @@ run_write_limit() {
 	echo "=== node e2e/write-limit-test.mjs (dedicated instance, RL_WRITE_USER=5, RL_WRITE_USER_DAY=5) ==="
 	rm -rf "$WL_STATE"
 	npx wrangler d1 migrations apply timekeep --local --persist-to "$WL_STATE" >/dev/null 2>&1
+	# F5: migration 0012 leaves the admin with NO usable credential — set the
+	# password the script expects, before this instance's wrangler dev starts.
+	printf '%s' 'a-very-long-admin-password-123' |
+		npm run admin:create -- --local --persist-to "$WL_STATE" --stdin --force >/dev/null
 	npx wrangler dev --port "$WL_PORT" --persist-to "$WL_STATE" \
 		--var RL_WRITE_USER:5 --var RL_WRITE_USER_DAY:5 >"$WL_LOG" 2>&1 &
 	local wl_pid=$!

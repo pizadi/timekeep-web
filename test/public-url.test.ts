@@ -10,7 +10,7 @@
 // domain routing accepting a spoofed Host; the fix removes the dependency
 // entirely, so the property is now unconditional.
 import { describe, it, expect } from 'vitest';
-import { publicOrigin, secretLink } from '../src/shared/public-url';
+import { publicOrigin, publicOriginStrict, secretLink } from '../src/shared/public-url';
 
 const CANONICAL = 'https://timekeep.example.com';
 const env = { APP_PUBLIC_URL: CANONICAL };
@@ -80,5 +80,46 @@ describe('secretLink (INV-09)', () => {
       expect(link.startsWith(`${CANONICAL}/reset?`)).toBe(true);
       expect(link).toContain('token=super-secret');
     }
+  });
+});
+
+// F9 — fail closed: `publicOrigin`'s request-origin fallback is the right dev
+// convenience but the wrong production default. A deployment that ever accepts
+// an attacker-chosen Host header turns a legitimate reset email into a link on
+// the attacker's domain, and the token is a bearer credential. So the
+// link-BUILDING sites (reset-request, resend-verification) use the strict
+// variant: without a valid APP_PUBLIC_URL and outside EMAIL_DEV_MODE, no
+// token link is built at all (the route logs SECURITY_public_url_unset and
+// answers shape-identically — no enumeration).
+describe('publicOriginStrict (F9 — fail closed)', () => {
+  it('the configured origin wins in production, hostile request or not', () => {
+    for (const url of HOSTILE) {
+      expect(publicOriginStrict(env, url)).toBe(CANONICAL);
+    }
+  });
+
+  it('unconfigured + production → null (no token link is built at all)', () => {
+    expect(publicOriginStrict({}, HOSTILE[0]!)).toBe(null);
+    expect(publicOriginStrict({ APP_PUBLIC_URL: '' }, HOSTILE[0]!)).toBe(null);
+    expect(publicOriginStrict({ APP_PUBLIC_URL: '   ' }, HOSTILE[0]!)).toBe(null);
+  });
+
+  it('a malformed configured value is null in production (fail closed), request origin in dev', () => {
+    expect(publicOriginStrict({ APP_PUBLIC_URL: 'not a url' }, 'http://localhost:8787/x')).toBe(null);
+    expect(publicOriginStrict({ APP_PUBLIC_URL: 'javascript:alert(1)' }, 'http://localhost:8787/x')).toBe(null);
+    expect(publicOriginStrict({ APP_PUBLIC_URL: 'not a url', EMAIL_DEV_MODE: '1' }, 'http://localhost:8787/x')).toBe(
+      'http://localhost:8787',
+    );
+  });
+
+  it('dev mode (EMAIL_DEV_MODE=1) keeps the request-origin fallback — local dev needs no setup', () => {
+    expect(publicOriginStrict({ EMAIL_DEV_MODE: '1' }, 'http://localhost:8787/api/x')).toBe('http://localhost:8787');
+    expect(publicOriginStrict({ APP_PUBLIC_URL: '', EMAIL_DEV_MODE: '1' }, 'http://localhost:8787/api/x')).toBe(
+      'http://localhost:8787',
+    );
+  });
+
+  it('a configured value always wins, dev mode or not', () => {
+    expect(publicOriginStrict({ ...env, EMAIL_DEV_MODE: '1' }, HOSTILE[0]!)).toBe(CANONICAL);
   });
 });

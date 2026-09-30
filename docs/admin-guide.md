@@ -5,9 +5,12 @@ Operating a TimeKeep Web instance as the admin. Setup/deployment is in
 
 ## Signing in
 
-- Username `admin`, initial password `changemeasap` — you're forced to set a
-  real password at first login. **Rotate it immediately on any real
-  deployment** (the default is public in the repo).
+- Username `admin`. There is **no default password**: migration 0012 removed
+  the once-shipped credential (it was public in the repo — audit F5). The
+  first credential is set on the server with `npm run admin:create`
+  (`--remote` for a deployed instance; see
+  [deployment.md](deployment.md#4-deploy)), which prints a generated
+  passphrase once.
 - If the password is ever lost, see
   [Admin account recovery](deployment.md#admin-account-recovery). The admin
   account can never be deactivated or self-deleted.

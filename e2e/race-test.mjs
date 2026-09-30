@@ -15,9 +15,8 @@ import { withProxyRetry } from './support/proxy-retry.mjs';
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
-/** What smoke-test.sh rotates the seeded admin password to (its own default). */
+/** What smoke-test.sh bootstraps the admin credential to (its own default). */
 const SUITE_ADMIN_PASSWORD = 'purple-marmalade-admin-42';
-const SEEDED_PASSWORD = 'changemeasap';
 const ROUNDS = Number(process.env.TK_ROUNDS ?? 12);
 const WIDTH = Number(process.env.TK_WIDTH ?? 6); // simultaneous creates per round
 
@@ -91,28 +90,19 @@ async function sessionsInWindow(jar, taskId, start, end) {
 
 async function main() {
   const admin = { cookies: [] };
-  // The admin password is 'changemeasap' on a fresh database and whatever
-  // smoke-test.sh rotated it to afterwards — this script runs AFTER smoke-test
-  // in the suite, so trying only the seeded password failed with a bare 401
-  // that read like a product bug. Try every known one, in order.
+  // F5: the seeded admin credential no longer exists (migration 0012 nulled
+  // it) — smoke-test.sh bootstraps the admin via `npm run admin:create`, so
+  // one of the two known suite passwords must work.
   let login = null;
-  for (const pw of [ADMIN_PASSWORD, SUITE_ADMIN_PASSWORD, SEEDED_PASSWORD].filter(Boolean)) {
+  for (const pw of [ADMIN_PASSWORD, SUITE_ADMIN_PASSWORD].filter(Boolean)) {
     login = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: pw });
     if (login.status === 200) break;
   }
   if (!login || login.status !== 200) {
-    console.error(`race test: admin login failed (${login?.status}) — run smoke-test.sh first`);
+    console.error(
+      `race test: admin login failed (${login?.status}) — run smoke-test.sh first (it bootstraps the admin credential via admin:create)`,
+    );
     process.exit(1);
-  }
-  // a freshly seeded admin is gated behind a forced password change, which
-  // blocks /admin/users
-  if (login.body?.must_change_password) {
-    const pw = ADMIN_PASSWORD || SUITE_ADMIN_PASSWORD;
-    const rotated = await call(admin, 'POST', '/me/password', { current_password: SEEDED_PASSWORD, password: pw });
-    if (rotated.status !== 200) {
-      console.error(`race test: could not rotate the seeded admin password (${rotated.status})`);
-      process.exit(1);
-    }
   }
 
   const stamp = Date.now().toString(36).slice(-6);

@@ -3,18 +3,17 @@
 //
 // Runs against a DEDICATED wrangler dev instance (own port, own D1 state) that
 // run-e2e.sh starts with a small RL_WRITE_USER. Two reasons:
-//  - the seeded admin is forced to rotate its password on first use, and that
-//    instance is disposable (the shared :8787 one is not — its admin password
-//    is already rotated by smoke-test.sh),
 //  - a burst big enough to trip the 300/min default would take minutes through
 //    the local dev proxy, which has a ~0.5 s/request baseline. The limit is a
 //    config value; what needs proving is the mechanism.
+//  - its D1 state is disposable: run-e2e.sh bootstraps THIS instance's admin
+//    credential via `npm run admin:create` before starting it (migration 0012
+//    leaves a fresh database's admin with no usable password — audit F5).
 import { withProxyRetry } from './support/proxy-retry.mjs';
 
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8788/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = 'a-very-long-admin-password-123';
-const SEEDED_PASSWORD = 'changemeasap'; // what a fresh migration seeds
 // 5, not the 300 default: the local dev proxy answers a write in ~1.2 s, so a
 // 300-write burst would take minutes AND straddle the 60 s window (neither
 // window exceeding the limit). At 5 the 6th write trips it within ~7 s — fast
@@ -75,14 +74,13 @@ async function call(jar, device, method, path, data) {
 
 const adm = { cookies: [] };
 const ui = { cookies: [] };
-console.log('== admin: sign in, clear the forced-rotate gate, create a throwaway user ==');
-let adminIn = await call(adm, 'wl-adm', 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
-check('admin login (seeded password)', adminIn.status === 200, `status ${adminIn.status}`);
-const rotated = await call(adm, 'wl-adm', 'POST', '/me/password', {
-  current_password: SEEDED_PASSWORD,
-  password: ADMIN_PASSWORD,
-});
-check('admin password rotated (unlocks the gate)', rotated.status === 200, `status ${rotated.status}`);
+console.log('== admin: sign in (credential bootstrapped by run-e2e.sh), create a throwaway user ==');
+const adminIn = await call(adm, 'wl-adm', 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
+check('admin login', adminIn.status === 200, `status ${adminIn.status}`);
+if (adminIn.status !== 200)
+  throw new Error(
+    `admin login failed (${adminIn.status}) — run via scripts/run-e2e.sh, which bootstraps this instance's admin (audit F5)`,
+  );
 const created = await call(adm, 'wl-adm', 'POST', '/admin/users', { username: USER, password: PASS });
 check('admin creates user', created.status === 201, `status ${created.status} ${JSON.stringify(created.body)}`);
 

@@ -17,7 +17,6 @@ import { withProxyRetry } from './support/proxy-retry.mjs';
 const BASE = process.env.TK_BASE ?? 'http://127.0.0.1:8787/api';
 const ORIGIN = new URL(BASE).origin;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'purple-marmalade-admin-42';
-const SEEDED_PASSWORD = 'changemeasap';
 const PASS = 'a-very-long-goals-pass-1';
 
 let fail = 0;
@@ -73,16 +72,13 @@ async function makeUser(admin, name) {
 
 async function main() {
   const admin = { cookies: [] };
-  let li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
+  // F5: there is no seeded default anymore (migration 0012 nulled it) — the
+  // admin credential is bootstrapped by smoke-test.sh via `npm run admin:create`.
+  const li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
   if (li.status !== 200) {
-    li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: SEEDED_PASSWORD });
-    if (li.status === 200 && li.body?.must_change_password) {
-      await call(admin, 'POST', '/me/password', { current_password: SEEDED_PASSWORD, password: ADMIN_PASSWORD });
-      li = await call(admin, 'POST', '/auth/login', { identifier: 'admin', password: ADMIN_PASSWORD });
-    }
-  }
-  if (li.status !== 200) {
-    console.error(`goals test: admin login failed (${li.status}) — run smoke-test.sh first`);
+    console.error(
+      `goals test: admin login failed (${li.status}) — run smoke-test.sh first (it bootstraps the admin credential via admin:create)`,
+    );
     process.exit(1);
   }
 

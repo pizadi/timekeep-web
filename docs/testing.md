@@ -36,19 +36,21 @@ npm run db:migrate:local
 npm run dev:worker          # in another terminal — http://127.0.0.1:8787
 ```
 
-Accounts are admin-managed (no self-signup): `smoke-test.sh` signs in as the
-seeded admin and replaces the default password (`changemeasap`) with
-`purple-marmalade-admin-42` on first run — override with `ADMIN_USERNAME` /
-`ADMIN_PASSWORD`. It creates the test users (`dana`, `milan`); the other
-scripts reuse them. Rate-limit overrides (`RL_LOGIN_IP`, `RL_LOGIN_EMAIL`,
-`RL_ADMIN_IP` — **not** `RL_TOKEN_IP`) go in your `.dev.vars`, see
+Accounts are admin-managed (no self-signup): `smoke-test.sh` bootstraps the
+admin credential via `npm run admin:create` (migration 0012 removed the
+shipped default — audit F5), setting `purple-marmalade-admin-42` on first run
+— override with `ADMIN_USERNAME` / `ADMIN_PASSWORD`. It creates the test users
+(`dana`, `milan`); the other scripts reuse them and expect the admin
+credential to exist already. Rate-limit overrides (`RL_LOGIN_IP`,
+`RL_LOGIN_USER_IP`, `RL_LOGIN_IDENTITY`, `RL_ADMIN_IP` — **not**
+`RL_TOKEN_IP`) go in your `.dev.vars`, see
 [development.md](development.md#devvars-local-secrets--overrides).
 
 ### Scripts (in run order)
 
 | Order | Script                         | Verifies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ----- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1     | `e2e/smoke-test.sh`            | **run first** — full API walkthrough: no-signup (404), admin login + forced password change, user creation/deactivation/password reset, gate 403s, bootstrap, projects/tasks/subtasks, dependencies + cycle 422, timer start/409/switch/stop, manual sessions + overlap 409, Tehran-bucketed reports, sync events, export, authz isolation, CSRF, rate-limit 429. Creates `dana`/`milan`                                                                                                                                                                                                                           |
+| 1     | `e2e/smoke-test.sh`            | **run first** — full API walkthrough: no-signup (404), admin credential bootstrap (`admin:create` — no shipped default exists), user creation/deactivation/password reset, gate 403s, bootstrap, projects/tasks/subtasks, dependencies + cycle 422, timer start/409/switch/stop, manual sessions + overlap 409, Tehran-bucketed reports, sync events, export, authz isolation, CSRF, rate-limit 429. Creates `dana`/`milan`                                                                                                                                                                                        |
 | 2     | `e2e/subtask-sessions.sh`      | subtask attribution: starting on a subtask, switch splitting sessions, cross-task subtask link rejection, report subtask rows, delete-subtask keeps time                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 3     | `e2e/pomo-mode-test.mjs`       | pomodoro-as-timer mode: default off, plain start engages focus when on, switch re-anchors, skip/reset, legacy `/pomo/start`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4     | `e2e/ws-test.mjs`              | cross-device WebSocket fan-out via the UserHub DO, the **per-session connection ceiling** (12 simultaneous upgrades → 8 accepted), and a **revoked session cannot open a socket** (uses `dana`)                                                                                                                                                                                                                                                                                                                                                                                                                    |

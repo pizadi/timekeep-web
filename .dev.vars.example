@@ -15,9 +15,12 @@ FROM_EMAIL=TimeKeep <dev@localhost>
 # the deployment accepts could aim the token at another domain.
 # APP_PUBLIC_URL=https://timekeep.example.com
 # Optional local-only rate-limit overrides (tests hammer the login endpoint;
-# token endpoints default to 30/15min — remove RL_TOKEN_IP to test that limit):
+# token endpoints default to 30/15min — remove RL_TOKEN_IP to test that limit).
+# Login lockout keys (F6): the per-(identifier, ip) pair and the identifier-wide
+# ceiling:
 RL_LOGIN_IP=1000
-RL_LOGIN_EMAIL=1000
+RL_LOGIN_USER_IP=1000
+RL_LOGIN_IDENTITY=1000
 RL_ADMIN_IP=1000
 RL_TOKEN_IP=1000
 # Reset fan-out: 20/hour/IP by default, 5/hour per address. Not raised here —

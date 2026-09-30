@@ -178,11 +178,16 @@ notified via `ctx.waitUntil`).
   path.
 - **Accounts**: admin-managed — there is no self-signup (`/auth/signup`
   returns 404 and no UI exists). Login identifier is the `username` column;
-  `users.email` is only an optional reset-mail address. The seeded `admin`
-  credential (`changemeasap`) is public knowledge; the daily cron runs a real
-  `verifyPassword` against it and logs `SECURITY_admin_default_password`
-  while it still works, so "nobody rotated it" is visible in the logs
-  (audit #4). Rotate it on every deploy — see [deployment](deployment.md).
+  `users.email` is only an optional reset-mail address. No admin credential is
+  shipped (audit F5): migration 0012 nulls the once-seeded hash, a fresh
+  install's admin cannot log in until `npm run admin:create` sets the first
+  credential, and the daily cron logs `SECURITY_admin_unusable` while the
+  admin hash is NULL. See [deployment](deployment.md).
+- **Login lockout keys (F6)**: failures are bounded per-IP (10/15min), per
+  (identifier, ip) pair (10/15min — one attacker cannot lock a known username
+  out of the victim's own network), and by an identifier-wide ceiling
+  (40/15min — bounds a distributed attack's volume). Charged only after the
+  Turnstile challenge when one is configured.
 - **Reserved schema**: `oauth_accounts` and `users.totp_secret` exist from
   `0001_init.sql` but nothing reads or writes them (only the account-delete
   cascade touches `oauth_accounts`). They are placeholders for FR-A3 (OAuth)

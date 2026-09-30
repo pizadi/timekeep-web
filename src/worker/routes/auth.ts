@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import type { WorkerType, Env } from '../env';
 import { jsonError } from '../env';
-import { publicOrigin } from '../../shared/public-url';
+import { publicOriginStrict } from '../../shared/public-url';
 import { hashPassword, verifyPassword, randomToken, sha256Hex, getEmailSender, isCommonPassword } from '../auth';
 import {
   requireAuth,
@@ -28,8 +28,10 @@ export const authRoutes = new Hono<WorkerType>();
 // Reset/verification links carry a bearer token, so their origin comes from
 // deployment configuration (APP_PUBLIC_URL), not from the request — a Host
 // header the deployment accepts must never be able to aim the token at
-// somebody else's domain (INV-09). See src/shared/public-url.ts.
-const appUrl = (c: { env: Env; req: { url: string } }) => publicOrigin(c.env, c.req.url);
+// somebody else's domain (INV-09). F9: with no valid APP_PUBLIC_URL configured
+// and EMAIL_DEV_MODE off, NO token link is built at all — null means fail
+// closed (see src/shared/public-url.ts).
+const tokenOrigin = (c: { env: Env; req: { url: string } }) => publicOriginStrict(c.env, c.req.url);
 
 // Explicit 404 — self-signup does not exist (accounts are admin-created); the
 // explicit route keeps unmatched-path middleware from answering instead.
@@ -81,13 +83,29 @@ authRoutes.post('/auth/resend-verification', requireAuth, async (c) => {
   const rl = await rateLimitHit(c.env, rateRules(c.env).resetEmail, email);
   if (rl) return tooMany(rl);
 
+  // F9 fail-closed: no configured origin → no token link may be built. Unlike
+  // reset-request this route is authenticated (nothing to enumerate), so the
+  // caller gets the truth instead of a silent no-op.
+  const origin = tokenOrigin(c);
+  if (!origin) {
+    console.warn(
+      JSON.stringify({
+        evt: 'SECURITY_public_url_unset',
+        at: Date.now(),
+        message:
+          'APP_PUBLIC_URL is unset/invalid and EMAIL_DEV_MODE is off — verification mail is REFUSED (fail-closed, F9). Set APP_PUBLIC_URL so token links use the canonical origin.',
+      }),
+    );
+    return jsonError(503, 'mail_unconfigured', 'outbound mail is not configured on this deployment');
+  }
+
   const token = randomToken(32);
   await c.env.DB.prepare(
     `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'verify', ?3)`,
   )
     .bind(await sha256Hex(token), user.id, Date.now() + 48 * 3600_000)
     .run();
-  const link = `${appUrl(c)}/verify?token=${token}`;
+  const link = `${origin}/verify?token=${token}`;
   try {
     await getEmailSender(c.env).send(
       email,
@@ -108,17 +126,23 @@ authRoutes.post('/auth/login', async (c) => {
   const identifier = parsed.data.identifier;
 
   // Order matters (the audit's #2): the coarse per-IP limit runs FIRST, so
-  // obvious flood traffic is cheap to shed, but the per-identifier budget is
-  // only charged to requests that already solved the bot challenge. Charging it
-  // before Turnstile let an unauthenticated attacker lock any known username
-  // out of its 10/15min budget without ever passing the challenge — which is
+  // obvious flood traffic is cheap to shed, but the per-identifier budgets are
+  // only charged to requests that already solved the bot challenge. Charging
+  // them before Turnstile let an unauthenticated attacker lock any known
+  // username out of its budget without ever passing the challenge — which is
   // the one thing the challenge is there to stop.
   const rlIp = await rateLimitHit(c.env, rateRules(c.env).loginIp, ip);
   if (rlIp) return tooMany(rlIp);
   if (!(await verifyTurnstile(c.env, parsed.data.turnstile, ip)))
     return jsonError(422, 'turnstile', 'captcha verification failed');
-  const rlLogin = await rateLimitHit(c.env, rateRules(c.env).loginEmail, identifier);
-  if (rlLogin) return tooMany(rlLogin);
+  // F6: TWO identifier-keyed budgets, not one identifier-wide counter.
+  // The pair (identifier, ip) bounds one source; the identifier-wide ceiling
+  // bounds a distributed attack at 4× the pair. A single attacker can no
+  // longer lock a known username out of the victim's own network.
+  const rlUserIp = await rateLimitHit(c.env, rateRules(c.env).loginUserIp, `${identifier}:${ip}`);
+  if (rlUserIp) return tooMany(rlUserIp);
+  const rlIdentity = await rateLimitHit(c.env, rateRules(c.env).loginIdentity, identifier);
+  if (rlIdentity) return tooMany(rlIdentity);
 
   const user = await c.env.DB.prepare(
     `SELECT id, username, password_hash, role, active, must_change_password FROM users
@@ -138,7 +162,10 @@ authRoutes.post('/auth/login', async (c) => {
   if (user?.password_hash) {
     ok = await verifyPassword(parsed.data.password, user.password_hash);
   } else {
-    // burn comparable time so missing accounts aren't distinguishable by latency
+    // burn comparable time so missing accounts aren't distinguishable by latency.
+    // A NULL password_hash (migration 0012 removed the seeded admin credential —
+    // F5) lands here too: it must be indistinguishable from an unknown account,
+    // which is why there is no separate "credential not set up" error.
     await hashPassword(parsed.data.password, Number(c.env.PBKDF2_ITERATIONS));
   }
 
@@ -219,13 +246,31 @@ authRoutes.post('/auth/reset-request', async (c) => {
     await sha256Hex(randomToken(32)); // admin has no mailbox; unverified is blocked (FR-A1)
     return c.json({ ok: true });
   }
+  // F9 fail-closed: without a configured APP_PUBLIC_URL (and outside
+  // EMAIL_DEV_MODE) no token link may be built — a reset email is a bearer
+  // credential, and this route must not leak whether mail went out either.
+  // Same shape AND comparable token work as the sendable path; the
+  // misconfiguration is logged for the operator instead.
+  const origin = tokenOrigin(c);
+  if (!origin) {
+    await sha256Hex(randomToken(32));
+    console.warn(
+      JSON.stringify({
+        evt: 'SECURITY_public_url_unset',
+        at: Date.now(),
+        message:
+          'APP_PUBLIC_URL is unset/invalid and EMAIL_DEV_MODE is off — password-reset mail is REFUSED (fail-closed, F9). Set APP_PUBLIC_URL so token links use the canonical origin.',
+      }),
+    );
+    return c.json({ ok: true });
+  }
   const token = randomToken(32);
   await c.env.DB.prepare(
     `INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?1, ?2, 'reset', ?3)`,
   )
     .bind(await sha256Hex(token), user.id, Date.now() + 3600_000)
     .run();
-  const link = `${appUrl(c)}/reset?token=${token}`;
+  const link = `${origin}/reset?token=${token}`;
   c.executionCtx.waitUntil(
     getEmailSender(c.env)
       .send(
