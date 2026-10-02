@@ -41,3 +41,15 @@ export function recentFromBootstrap(b: any): RecentEntry[] {
   }
   return [];
 }
+
+/** Comparator factory for the Tasks (1) view: most recently worked first
+ *  (a project ranks by its most recently worked task), never-worked items
+ *  keep the fallback order (creation recency) after the worked ones. */
+export function workRecency<T>(workedAt: (x: T) => number, fallback: (a: T, b: T) => number): (a: T, b: T) => number {
+  return (a, b) => {
+    const wa = workedAt(a);
+    const wb = workedAt(b);
+    if (wa !== wb) return wb - wa;
+    return fallback(a, b);
+  };
+}

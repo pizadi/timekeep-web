@@ -9,7 +9,7 @@ import { SESSION_RULES } from '../../shared/constants';
 import { useModalA11y } from '../lib/modal';
 import { useHasHover } from '../lib/responsive';
 
-export default function TimerBar() {
+export default function TimerBar({ onStart }: { onStart: () => void }) {
   const running = useStore((s) => s.running);
   const tasks = useStore((s) => s.tasks);
   const recentEntries = useStore((s) => s.recentEntries);
@@ -140,6 +140,14 @@ export default function TimerBar() {
         ) : (
           <>No timer running — tap ▶ on a task</>
         )}
+        <button
+          className="btn small primary"
+          style={{ marginLeft: 10 }}
+          title="Start timer on a searched task (B)"
+          onClick={onStart}
+        >
+          ▶ Start {hasHover && <span className="kbd">B</span>}
+        </button>
         {lastTask && (
           <button
             className="btn small"

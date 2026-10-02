@@ -22,52 +22,53 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
   const limited = await limitHeavy(c);
   if (limited) return limited;
   const userId = c.get('user').id;
-  const [projects, tasks, subtasks, deps, settingsRow, recent, hubState, social, groups, goals] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
+  const [projects, tasks, subtasks, deps, settingsRow, recent, lastWorked, hubState, social, groups, goals] =
+    await Promise.all([
+      c.env.DB.prepare(
+        `SELECT id, user_id, name, color, archived, position, visibility, group_id, created_at, updated_at
        FROM projects
        WHERE deleted_at IS NULL
          AND (user_id = ?1 OR group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
        ORDER BY position, created_at`,
-    )
-      .bind(userId)
-      .all(),
-    c.env.DB.prepare(
-      `SELECT * FROM tasks
+      )
+        .bind(userId)
+        .all(),
+      c.env.DB.prepare(
+        `SELECT * FROM tasks
        WHERE deleted_at IS NULL
          AND (user_id = ?1
           OR project_id IN (SELECT id FROM projects WHERE group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)))
        ORDER BY position, created_at`,
-    )
-      .bind(userId)
-      .all(),
-    c.env.DB.prepare(
-      `SELECT * FROM subtasks
+      )
+        .bind(userId)
+        .all(),
+      c.env.DB.prepare(
+        `SELECT * FROM subtasks
        WHERE user_id = ?1
           OR task_id IN (SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
                          WHERE t.deleted_at IS NULL
                            AND p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))
        ORDER BY position, created_at`,
-    )
-      .bind(userId)
-      .all(),
-    c.env.DB.prepare(
-      `SELECT * FROM task_dependencies
+      )
+        .bind(userId)
+        .all(),
+      c.env.DB.prepare(
+        `SELECT * FROM task_dependencies
        WHERE user_id = ?1
           OR task_id IN (SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
                          WHERE p.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?1))`,
-    )
-      .bind(userId)
-      .all(),
-    c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
-    // "Jump back in" / Resume: tasks by recency of tracked work, not position —
-    // and each entry carries the subtask of that task's NEWEST session, so
-    // Resume restores the subtask you last tracked. A GROUP BY would drop the
-    // subtask column, hence the window function.
-    c.env.DB.prepare(
-      // a tombstoned task is not a place to resume (INV-06) — its time stays in
-      // the log and the reports, it just is not a "jump back in" destination
-      `SELECT task_id, subtask_id FROM (
+      )
+        .bind(userId)
+        .all(),
+      c.env.DB.prepare('SELECT data FROM settings WHERE user_id = ?1').bind(userId).first<{ data: string }>(),
+      // "Jump back in" / Resume: tasks by recency of tracked work, not position —
+      // and each entry carries the subtask of that task's NEWEST session, so
+      // Resume restores the subtask you last tracked. A GROUP BY would drop the
+      // subtask column, hence the window function.
+      c.env.DB.prepare(
+        // a tombstoned task is not a place to resume (INV-06) — its time stays in
+        // the log and the reports, it just is not a "jump back in" destination
+        `SELECT task_id, subtask_id FROM (
          SELECT s.task_id AS task_id, s.subtask_id AS subtask_id, s.started_at AS started_at,
                 ROW_NUMBER() OVER (PARTITION BY s.task_id ORDER BY s.started_at DESC) AS rn
          FROM time_sessions s JOIN tasks t ON t.id = s.task_id
@@ -75,27 +76,37 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
        ) WHERE rn = 1
        ORDER BY started_at DESC
        LIMIT 6`,
-    )
-      .bind(userId)
-      .all<{ task_id: string; subtask_id: string | null }>(),
-    (async () => {
-      try {
-        const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
-        const res = await stub.fetch(new Request('https://do/state', { headers: { 'x-internal': '1' } }));
-        return res.ok ? await res.json() : { session: null, pomo: null };
-      } catch {
-        return { session: null, pomo: null };
-      }
-    })(),
-    socialLists(c.env.DB, userId),
-    groupLists(c.env.DB, userId),
-    c.env.DB.prepare(
-      `SELECT id, user_id, name, period, direction, target_minutes, scope, ends_at, created_at, archived_at
+      )
+        .bind(userId)
+        .all<{ task_id: string; subtask_id: string | null }>(),
+      // Tasks (1) view sorts by work recency: the last-tracked instant per live
+      // task. Own sessions only — groupmates' work does not reorder your list.
+      c.env.DB.prepare(
+        `SELECT s.task_id AS task_id, MAX(s.started_at) AS last_at
+       FROM time_sessions s JOIN tasks t ON t.id = s.task_id
+       WHERE s.user_id = ?1 AND t.deleted_at IS NULL
+       GROUP BY s.task_id`,
+      )
+        .bind(userId)
+        .all<{ task_id: string; last_at: number }>(),
+      (async () => {
+        try {
+          const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(userId));
+          const res = await stub.fetch(new Request('https://do/state', { headers: { 'x-internal': '1' } }));
+          return res.ok ? await res.json() : { session: null, pomo: null };
+        } catch {
+          return { session: null, pomo: null };
+        }
+      })(),
+      socialLists(c.env.DB, userId),
+      groupLists(c.env.DB, userId),
+      c.env.DB.prepare(
+        `SELECT id, user_id, name, period, direction, target_minutes, scope, ends_at, created_at, archived_at
        FROM goals WHERE user_id = ?1 ORDER BY created_at`,
-    )
-      .bind(userId)
-      .all(),
-  ]);
+      )
+        .bind(userId)
+        .all(),
+    ]);
 
   return c.json({
     user: c.get('user'),
@@ -107,6 +118,7 @@ miscRoutes.get('/bootstrap', requireAuth, async (c) => {
     // scope arrives as a JSON string from D1 — parse it to match the API's Goal shape
     goals: goals.results.map((g: any) => ({ ...g, scope: JSON.parse(g.scope) })),
     recent: recent.results.map((r) => ({ task_id: r.task_id, subtask_id: r.subtask_id ?? null })),
+    last_worked: Object.fromEntries(lastWorked.results.map((r) => [r.task_id, r.last_at])),
     friends: social.friends,
     incoming_requests: social.incoming,
     outgoing_requests: social.outgoing,

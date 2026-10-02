@@ -166,6 +166,7 @@ export interface AppState {
   selectedTaskId: string | null;
   view: 'tree' | 'log' | 'map' | 'dashboard' | 'goals' | 'social';
   recentEntries: RecentEntry[]; // "Jump back in" / Resume — newest-first, one per task, with its last subtask
+  lastWorked: Record<string, number>; // task_id → last-tracked instant, from bootstrap + live marks
   reportsVersion: number; // bumped on relevant events → charts refetch (FR-R5)
   toasts: Toast[];
   lastEventId: number;
@@ -196,6 +197,7 @@ let state: AppState = {
   selectedTaskId: null,
   view: 'tree',
   recentEntries: [],
+  lastWorked: {}, // task_id → last-tracked instant (Tasks view work-recency sort)
   reportsVersion: 0,
   toasts: [],
   lastEventId: 0,
@@ -243,6 +245,7 @@ export const store = {
         deps: b.dependencies,
         goals: b.goals ?? [],
         recentEntries: recentFromBootstrap(b),
+        lastWorked: b.last_worked ?? {},
         running: b.running ?? null,
         pomo: b.pomo ?? null,
         lastEventId: b.last_event_id ?? 0,
@@ -399,6 +402,7 @@ export const store = {
       case 'timer.started':
         patch.running = d.session;
         patch.recentEntries = markRecent(d.session.task_id, d.session.subtask_id ?? null);
+        patch.lastWorked = { ...state.lastWorked, [d.session.task_id]: ev.at };
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       case 'timer.stopped':
@@ -408,6 +412,7 @@ export const store = {
       case 'timer.switched':
         patch.running = d.started;
         patch.recentEntries = markRecent(d.started.task_id, d.started.subtask_id ?? null);
+        patch.lastWorked = { ...state.lastWorked, [d.started.task_id]: ev.at };
         patch.reportsVersion = state.reportsVersion + 1;
         break;
       case 'timer.nudge':
@@ -602,7 +607,11 @@ export const store = {
     set({ running: session, reportsVersion: state.reportsVersion + 1 });
   },
   markRecentTask(id: string, subtaskId: string | null = null) {
-    set({ recentEntries: mergeRecent(state.recentEntries, id, subtaskId) });
+    set({
+      recentEntries: mergeRecent(state.recentEntries, id, subtaskId),
+      // live mark: the Tasks view's work-recency sort reorders without a refetch
+      lastWorked: { ...state.lastWorked, [id]: Date.now() },
+    });
   },
   setPomo(pomo: PomoState | null) {
     set({ pomo });
@@ -737,6 +746,7 @@ export async function refreshAll(): Promise<void> {
     deps: b.dependencies,
     goals: b.goals ?? [],
     recentEntries: recentFromBootstrap(b),
+    lastWorked: b.last_worked ?? {},
     friends: b.friends ?? [],
     incoming: b.incoming_requests ?? [],
     outgoing: b.outgoing_requests ?? [],

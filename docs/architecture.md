@@ -124,6 +124,12 @@ notified via `ctx.waitUntil`).
   `recentEntries` (`src/web/lib/recent.ts`, pure + unit-tested), so Resume,
   the `R` shortcut and the "Jump back in" chips all restart the _subtask_ that
   was last tracked — falling back to the whole task if that subtask is gone.
+  Bootstrap also returns `last_worked: { task_id: last_started_at }` (own
+  sessions on live tasks), which sorts the Tasks (1) view by work recency —
+  projects by their most recently worked task, tasks within each project the
+  same way; never-worked items keep creation recency at the bottom. Own starts
+  stamp the map live (`markRecentTask`), as do `timer.started`/`timer.switched`
+  events from other devices.
 
 ## Time handling
 

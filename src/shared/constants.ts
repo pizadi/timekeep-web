@@ -7,7 +7,7 @@ export const LIMITS = {
   sessionsPerUser: 200_000,
   nameMax: 120,
   noteMax: 2_000,
-  logPageSize: 200,
+  logPageSize: 50,
   // Social layer: hard caps per user.
   friendsMax: 200,
   pendingRequestsMax: 100,

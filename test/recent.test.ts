@@ -2,7 +2,7 @@
 // first, each carrying the subtask of that task's latest session. Resume must
 // restore the subtask — a task-id-only list loses it.
 import { describe, it, expect } from 'vitest';
-import { mergeRecent, recentFromBootstrap, RECENT_LIMIT, type RecentEntry } from '../src/web/lib/recent';
+import { mergeRecent, recentFromBootstrap, RECENT_LIMIT, workRecency, type RecentEntry } from '../src/web/lib/recent';
 
 const T = (task_id: string, subtask_id: string | null = null): RecentEntry => ({ task_id, subtask_id });
 
@@ -61,5 +61,32 @@ describe('recentFromBootstrap', () => {
     expect(recentFromBootstrap({})).toEqual([]);
     expect(recentFromBootstrap({ recent: [] })).toEqual([]);
     expect(recentFromBootstrap(null)).toEqual([]);
+  });
+});
+
+describe('workRecency', () => {
+  const byNew = (a: { created_at: number }, b: { created_at: number }) => b.created_at - a.created_at;
+  type Item = { id: string; created_at: number };
+
+  it('orders worked items by last-worked recency, never-worked last by creation recency', () => {
+    const items: Item[] = [
+      { id: 'fresh-unworked', created_at: 4 },
+      { id: 'worked-long-ago', created_at: 1 },
+      { id: 'old-unworked', created_at: 3 },
+    ];
+    const worked: Record<string, number> = { 'worked-long-ago': 100 };
+    const sorted = [...items].sort(workRecency((x) => worked[x.id] ?? 0, byNew));
+    expect(sorted.map((x) => x.id)).toEqual(['worked-long-ago', 'fresh-unworked', 'old-unworked']);
+  });
+
+  it('orders by recency among worked items, falling back to creation order on ties', () => {
+    const items: Item[] = [
+      { id: 'a', created_at: 1 },
+      { id: 'b', created_at: 2 },
+      { id: 'c', created_at: 0 },
+    ];
+    const worked: Record<string, number> = { a: 500, c: 1000 };
+    const sorted = [...items].sort(workRecency((x) => worked[x.id] ?? 0, byNew));
+    expect(sorted.map((x) => x.id)).toEqual(['c', 'a', 'b']);
   });
 });

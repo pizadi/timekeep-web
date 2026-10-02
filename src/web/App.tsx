@@ -20,6 +20,8 @@ import SettingsView from './views/SettingsView';
 import ChatDock from './components/ChatDock';
 import TimerBar from './components/TimerBar';
 import QuickFind from './components/QuickFind';
+import StartDialog from './components/StartDialog';
+import { workRecency } from './lib/recent';
 import HoverScrollText from './components/HoverScrollText';
 import {
   addProject,
@@ -129,6 +131,7 @@ function Shell({ route }: { route: string }) {
   const hasHover = useHasHover(); // keyboard-shortcut hints only make sense with a keyboard
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
+  const [startOpen, setStartOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(route === '/settings');
@@ -140,13 +143,13 @@ function Shell({ route }: { route: string }) {
     setSettingsOpen(route === '/settings');
   }, [route]);
 
-  // keyboard shortcuts (FR-U4): N, T, F2 handled in TreeSidebar scope; global: 1-4, Ctrl+K, ?, T.
+  // keyboard shortcuts (FR-U4): N, T, F2 handled in TreeSidebar scope; global: 1-6, B, Ctrl+K, ?.
   // Suppressed while a modal is open (audit: shortcuts fired through modals).
   const onKey = useCallback(
     (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, select, [contenteditable]')) return;
-      if (quickFindOpen || helpOpen || settingsOpen) return;
+      if (quickFindOpen || startOpen || helpOpen || settingsOpen) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setQuickFindOpen((v) => !v);
@@ -156,13 +159,19 @@ function Shell({ route }: { route: string }) {
         setHelpOpen((v) => !v);
         return;
       }
+      // B (begin): open the timer-start search dialog
+      if (e.key.toLowerCase() === 'b' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setStartOpen((v) => !v);
+        return;
+      }
       if (e.key >= '1' && e.key <= '6') {
         const views = ['tree', 'log', 'map', 'dashboard', 'goals', 'social'] as const;
         store.navigateToView(views[Number(e.key) - 1]!);
         return;
       }
     },
-    [quickFindOpen, helpOpen, settingsOpen],
+    [quickFindOpen, startOpen, helpOpen, settingsOpen],
   );
   useEffect(() => {
     window.addEventListener('keydown', onKey);
@@ -225,7 +234,7 @@ function Shell({ route }: { route: string }) {
           >
             ☰
           </button>
-          <TimerBar />
+          <TimerBar onStart={() => setStartOpen(true)} />
           <span
             className={`conn-dot ${connection}`}
             role="img"
@@ -299,6 +308,7 @@ function Shell({ route }: { route: string }) {
       </div>
 
       {quickFindOpen && <QuickFind onClose={() => setQuickFindOpen(false)} />}
+      {startOpen && <StartDialog onClose={() => setStartOpen(false)} />}
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutOverlay onClose={() => setAboutOpen(false)} />}
       {settingsOpen && (
@@ -352,12 +362,22 @@ async function signOutNow(): Promise<void> {
 // Map and log pickers; full editing (rename/move/delete) lives in the sidebar.
 function TreeMain() {
   const projects = useStore((s) => s.projects);
+  const tasks = useStore((s) => s.tasks);
   const groups = useStore((s) => s.groups);
   const selectedProjectId = useStore((s) => s.selectedProjectId);
+  const lastWorked = useStore((s) => s.lastWorked);
   const hasHover = useHasHover();
 
   const byNew = (a: { created_at: number }, b: { created_at: number }) => b.created_at - a.created_at;
-  const personal = projects.filter((p) => !p.group_id).sort(byNew);
+  // work recency (v0.6.2): a project ranks by its most recently worked task;
+  // never-worked items keep the creation-recency order after the worked ones
+  const projectWorked: Record<string, number> = {};
+  for (const t of tasks) {
+    const w = lastWorked[t.id];
+    if (w && w > (projectWorked[t.project_id] ?? 0)) projectWorked[t.project_id] = w;
+  }
+  const byWork = workRecency((p: Project) => projectWorked[p.id] ?? 0, byNew);
+  const personal = projects.filter((p) => !p.group_id).sort(byWork);
   const groupIds = [...new Set(projects.filter((p) => p.group_id).map((p) => p.group_id!))];
 
   /** My perms inside the group that owns this project (null = personal). */
@@ -374,7 +394,7 @@ function TreeMain() {
         <h3 style={{ flex: 1, marginBottom: 0 }}>
           Projects & tasks{' '}
           <span className="muted" style={{ fontWeight: 400 }}>
-            — newest first
+            — most recently worked first
           </span>
         </h3>
         <button className="btn small primary" onClick={() => void addProject()}>
@@ -412,7 +432,7 @@ function TreeMain() {
             </div>
             {projects
               .filter((p) => p.group_id === gid)
-              .sort(byNew)
+              .sort(byWork)
               .map((p) => (
                 <ProjectBlock key={p.id} project={p} canEditTasks={permsFor(p)?.includes('edit_tasks') ?? false} />
               ))}
@@ -436,10 +456,18 @@ function TreeMain() {
   );
 }
 
-/** One project card: header + its tasks, newest first. */
+/** One project card: header + its tasks, most recently worked first. */
 function ProjectBlock({ project, canEditTasks }: { project: Project; canEditTasks: boolean }) {
   const tasks = useStore((s) => s.tasks);
-  const list = tasks.filter((t) => t.project_id === project.id).sort((a, b) => b.created_at - a.created_at);
+  const lastWorked = useStore((s) => s.lastWorked);
+  const list = tasks
+    .filter((t) => t.project_id === project.id)
+    .sort(
+      workRecency(
+        (t) => lastWorked[t.id] ?? 0,
+        (a, b) => b.created_at - a.created_at,
+      ),
+    );
   return (
     <div className="card" style={{ padding: '8px 12px 10px' }}>
       <div
@@ -682,6 +710,12 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
                 <span className="kbd">R</span>
               </td>
               <td>Stop the timer, or resume tracking on the last task</td>
+            </tr>
+            <tr>
+              <td>
+                <span className="kbd">B</span>
+              </td>
+              <td>Start the timer — search tasks and subtasks</td>
             </tr>
             <tr>
               <td>
