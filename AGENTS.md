@@ -95,9 +95,6 @@ bash e2e/smoke-test.sh                    # e2e: requires `wrangler dev` in anot
   live in the gitignored `wrangler.local.jsonc`. Deploy with
   `npm run build && npx wrangler deploy -c wrangler.local.jsonc`; remote D1 migrations likewise
   need `-c wrangler.local.jsonc` (`npm run db:migrate:remote` alone reads the template).
-- **Route all Cloudflare access through `proxychains`** — `proxychains npx wrangler …`,
-  `proxychains curl https://…workers.dev…` (local proxy 127.0.0.1:2080, configured in
-  `/etc/proxychains.conf`).
 - Live check: `GET https://timekeep-web.parham-avia.workers.dev/api/version` →
   `{version: semver, build: deploy-sha}`.
 - Version source of truth is `package.json`; the SPA gets it via the Vite `define` (Settings
